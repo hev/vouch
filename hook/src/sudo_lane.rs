@@ -191,7 +191,9 @@ mod tests {
         lines.sort_unstable();
         let marker = format!("{REEXEC_MARKER}=1");
         let path = format!("PATH={PATH}");
-        assert_eq!(lines, [marker.as_str(), path.as_str()]);
+        let mut expected = [marker.as_str(), path.as_str()];
+        expected.sort_unstable();
+        assert_eq!(lines, expected);
         let received = lines.iter().map(|line| {
             let (name, value) = line.split_once('=').unwrap();
             (OsString::from(name), OsString::from(value))
