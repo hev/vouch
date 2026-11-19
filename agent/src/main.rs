@@ -520,6 +520,7 @@ fn show_panel(view: &vouch_panel::PanelView) -> Result<()> {
 }
 
 #[cfg(not(target_os = "macos"))]
+#[allow(clippy::unnecessary_wraps)] // Same signature as the macOS window version.
 fn show_panel(view: &vouch_panel::PanelView) -> Result<()> {
     // No window server: show the same content as text.
     print!("{}", view.text(now()));

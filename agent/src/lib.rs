@@ -8,8 +8,8 @@
 
 #![forbid(unsafe_code)]
 
-#[cfg(target_os = "macos")]
 pub mod approval_log;
+#[cfg(target_os = "macos")]
 pub mod panel_process;
 pub mod review;
 pub mod secret_store;
