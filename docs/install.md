@@ -8,7 +8,8 @@ The browser login helper can be used on its own; it does not require sudo setup.
 Apple Silicon packages are available through Homebrew:
 
 ```sh
-brew install epsalmond/oshioki/vouch
+# Vouch has no Homebrew tap yet; from a checkout:
+scripts/vouch-laptop-setup --local
 ```
 
 Next, choose [local sudo](local-sudo.md), [remote sudo](remote-sudo.md),
@@ -30,7 +31,7 @@ sudo apt install vouch
 ```
 
 For a one-time install without configuring the repository, download the amd64
-`.deb` from a [release](https://github.com/epsalmond/oshioki/releases), then:
+`.deb` built with `packaging/build-deb` (Vouch publishes no releases yet), then:
 
 ```sh
 sudo apt install ./vouch_X.Y.Z_amd64.deb

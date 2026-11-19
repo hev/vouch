@@ -2789,7 +2789,10 @@ mod tests {
         }
         .expect("context");
         let payload = String::from_utf8(context.payload).unwrap();
-        assert!(payload.contains("session.VOUCH_REASON=Reload hevd\n"), "{payload}");
+        assert!(
+            payload.contains("session.VOUCH_REASON=Reload hevd\n"),
+            "{payload}"
+        );
         assert!(!payload.contains("env.VOUCH_REASON"), "{payload}");
     }
 

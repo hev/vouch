@@ -116,20 +116,28 @@ These are binary defaults, not Compose test values:
 `/healthz` reports server and Web Push readiness; it cannot prove delivery to a
 phone. See [server requirements](requirements.md) for infrastructure.
 
-## Session labels
+## Session labels and reasons
 
 Set a label in the shell invoking sudo:
 
 ```sh
-export OSHIOKI_SESSION=maintenance
+export VOUCH_SESSION=maintenance
 # Or, inside tmux:
-export OSHIOKI_SESSION=$(tmux display-message -p '#S:#W')
+export VOUCH_SESSION=$(tmux display-message -p '#S')
 ```
 
-The plugin captures it before sudo's environment reset. Labels are limited to
-64 printable characters after trimming; invalid values are ignored.
-Over SSH, set the variable on the remote host or configure SSH's
-`SendEnv`/`AcceptEnv` pair. Vouch does not discover agent-session names itself.
+An agent can add its own reason for one command:
+
+```sh
+VOUCH_REASON="Reload hevd so the new gossip port takes effect" sudo launchctl kickstart -k system/com.hev.hevd
+```
+
+The plugin captures both before sudo's environment reset. Labels are limited
+to 64 printable characters after trimming, reasons to 500; invalid values are
+ignored. `OSHIOKI_SESSION` is still read for one release when `VOUCH_SESSION`
+is unset. Both are display text in the approval panel and never affect what is
+verified or run. Over SSH, set the variables on the remote host or configure
+SSH's `SendEnv`/`AcceptEnv` pair.
 
 ## Development and browser relay
 

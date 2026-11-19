@@ -1816,8 +1816,7 @@ mod tests {
 
     fn test_dir() -> std::path::PathBuf {
         let id = NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed);
-        let path =
-            std::env::temp_dir().join(format!("vouch-pam-test-{}-{id}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("vouch-pam-test-{}-{id}", std::process::id()));
         fs::create_dir(&path).expect("create test directory");
         path
     }

@@ -1,43 +1,56 @@
 # Vouch
 
-<p align="center"><img src="assets/vouch.svg" alt="Vouch logo" width="160"></p>
+<p align="center"><img src="assets/vouch.svg" alt="Vouch placeholder logo" width="160"></p>
 
-Vouch (お仕置き) means punishment.
+Adds Touch ID, WebAuthn, or native device approval to `sudo`. You vouch for
+a command with your fingerprint.
 
-Adds Touch ID, WebAuthn, or native device approval to `sudo`.
+Vouch is a fork of [Oshioki](https://github.com/epsalmond/oshioki) by
+epsalmond, dual-licensed MIT OR Apache-2.0 like the original (see
+[LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE)). The sudo
+plugin, Secure Enclave signing, the NATS lane and contextual PAM are
+upstream's work. This fork renames the tool and adds a review panel beside
+the Touch ID sheet that shows who is asking, why, and what will run. Wire
+formats, signing domains and NATS subjects still use the `oshioki` spelling,
+so a Vouch install talks to Oshioki 0.4.x hosts unchanged.
 
 WebAuthn runs in a WebAuthn-compatible browser. Native approvals use
 `vouch-agent`.
 
-The command and environment are entcrypted. Approvals are signed. 
-A local Unix socket is available for native approvals. 
+The command and environment are encrypted. Approvals are signed.
+A local Unix socket is available for native approvals.
 NATS with JetStream connects your servers, VMs, etc to your
 phone or laptop.
 
+## The review panel
+
+When a Mac agent raises the Touch ID sheet it also opens a small panel next
+to it. The panel has three sections, in this order:
+
+1. **Who's asking:** the session (`VOUCH_SESSION`, a tmux session or a
+   dispatch run name), with chips for how it runs, the harness, the host and
+   the folder.
+2. **Why:** the agent's own words from `VOUCH_REASON`, labelled as
+   unverified. "No reason given." when there is none.
+3. **What will run:** the exact argv, run-as user, cwd, tty and environment
+   from the signed request.
+
+The panel has no Approve button; Touch ID on the sheet is the approval. Esc
+or Deny cancels. Set `VOUCH_PANEL=0` in the agent's environment to turn it
+off. See [Mac approvals](docs/mac-approvals.md#the-review-panel).
+
 ## Install
 
-macOS (Apple Silicon):
+Vouch has no Homebrew tap or apt repository yet. Build it from source on an
+Apple Silicon Mac:
 
 ```sh
-brew install epsalmond/oshioki/vouch
-vouch-laptop-setup --local
+git clone https://github.com/hev/vouch && cd vouch
+scripts/vouch-laptop-setup --local   # builds, bundles Vouch.app, installs
 ```
 
-Debian or Ubuntu (amd64), configure the signed
-[apt repository](docs/apt-repository.md), then install:
-
-```sh
-sudo apt update
-sudo apt install vouch
-```
-
-For a one-time install without configuring the repository, download the amd64
-`.deb` from the [latest release](https://github.com/epsalmond/oshioki/releases)
-and run `sudo apt install ./vouch_X.Y.Z_amd64.deb`.
-
-The Mac setup creates a Touch ID identity and starts the agent; no server is
-needed. On Linux, install the package, then choose an approval device below.
-See [installation](docs/install.md) for source builds and host activation.
+See [installation](docs/install.md) for source builds, Linux hosts, and host
+activation.
 
 ## Choose your task
 

@@ -17,11 +17,6 @@ use std::{
 use anyhow::{Context as _, Result, bail, ensure};
 use clap::{Parser, Subcommand};
 use futures::StreamExt as _;
-use vouch_agent::BrowserRelaySigner;
-use vouch_browser_relay::{
-    Action, MAX_LIFETIME, Message, approval_challenge, google_callback_port, sign, verify,
-};
-use vouch_protocol::{decode_base64url, encode_base64url};
 use p256::ecdsa::{Signature, SigningKey, VerifyingKey, signature::Verifier as _};
 use p256::elliptic_curve::Generate as _;
 use serde::Deserialize;
@@ -31,6 +26,11 @@ use tokio::{
     process::{Child, Command},
     time::{Instant, timeout, timeout_at},
 };
+use vouch_agent::BrowserRelaySigner;
+use vouch_browser_relay::{
+    Action, MAX_LIFETIME, Message, approval_challenge, google_callback_port, sign, verify,
+};
+use vouch_protocol::{decode_base64url, encode_base64url};
 
 #[derive(Parser)]
 #[command(about = "Opt-in Google browser ceremony relay (separate from sudo approval)")]

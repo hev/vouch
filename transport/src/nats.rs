@@ -14,13 +14,13 @@ use async_nats::jetstream::{
     stream,
 };
 use futures::StreamExt as _;
+use tracing::{debug, info};
 use vouch_protocol::{
     ALLOW_PLAINTEXT_NATS_ENV, ActivationV1, ControlMessageOutcome, ControlMessageV1, DecisionV1,
     EnrollmentIntentV1, EnrollmentSubmissionV1, TOOL_APPROVAL_SUBJECT, ToolAcknowledgementV1,
     ToolApprovalDecisionV1, ToolDeliveryV1, allow_plaintext_nats, auth_v1::AuthDecisionV1,
     check_nats_url, nats_url_is_tls,
 };
-use tracing::{debug, info};
 
 use crate::{
     Ack, AckFuture, BoxFuture, DecisionStream, HookProgress, HookTransport, HookTransportFailure,

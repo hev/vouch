@@ -5,15 +5,15 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use rusqlite::{Connection, OptionalExtension as _, Transaction, TransactionBehavior, params};
+use serde::Serialize;
+use sha2::{Digest, Sha256};
+use url::Url;
 use vouch_protocol::{
     AuthDecisionV1, AuthEnvelopeV1, DecisionV1, DeliveryV1, DeviceKindV1, DevicePublicRecordV1,
     EnrollmentStatusV1, EnrollmentSubmissionV1, RequestEnvelopeV1, ToolApprovalDecisionV1,
     ToolApprovalEnvelopeV1, ToolDeliveryV1, native_credential_id,
 };
-use rusqlite::{Connection, OptionalExtension as _, Transaction, TransactionBehavior, params};
-use serde::Serialize;
-use sha2::{Digest, Sha256};
-use url::Url;
 
 /// The server keeps request state only briefly after its local receipt time.
 /// This bound is intentionally independent of timestamps supplied by a
@@ -2104,16 +2104,16 @@ COMMIT;
 mod tests {
     include!("db_push_tests.rs");
     use super::*;
+    use p256::ecdsa::SigningKey;
+    use std::{
+        path::{Path, PathBuf},
+        time::{SystemTime, UNIX_EPOCH},
+    };
     use vouch_protocol::{
         DenyV1, DeviceKindV1, EnrollmentSubmissionV1, NativeEnrollmentSubmissionV1,
         SealedDeviceBodyV1, ToolApprovalDecisionV1, ToolApprovalEnvelopeV1, ToolApprovalWebauthnV1,
         ToolSealedBodyV1, WebauthnEnrollmentSubmissionV1, native_credential_id,
         v1::{VERSION_V1, encode_base64url},
-    };
-    use p256::ecdsa::SigningKey;
-    use std::{
-        path::{Path, PathBuf},
-        time::{SystemTime, UNIX_EPOCH},
     };
 
     fn temporary_database() -> PathBuf {
@@ -3069,8 +3069,7 @@ mod tests {
             old.execute_batch(MIGRATION_V1).unwrap();
             old.execute_batch(MIGRATION_V2).unwrap();
             let device = device(b"corrupt-me");
-            let api_token_hash =
-                vouch_protocol::decode_base64url(&device.api_token_hash).unwrap();
+            let api_token_hash = vouch_protocol::decode_base64url(&device.api_token_hash).unwrap();
             old.execute(
                 "INSERT INTO devices(fingerprint, credential_id, api_token_hash, public_record_json, active, updated_at)
                  VALUES (?1, ?2, ?3, ?4, 1, unixepoch())",

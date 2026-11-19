@@ -2,11 +2,6 @@
 
 use anyhow::{Context as _, Result, bail};
 use clap::{Subcommand, ValueEnum};
-use vouch_protocol::{
-    DeviceKindV1, HookConfigV1, ToolApprovalDecisionV1, ToolApprovalRequestV1, ToolContextV1,
-    ToolDecisionActionV1, ToolHarnessV1, seal_tool_request_v1, verify_tool_decision_v1,
-};
-use vouch_transport::{HookProgress, HookTransport, NatsTransport};
 use rand::RngCore as _;
 use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
@@ -21,6 +16,11 @@ use std::time::Duration;
 use tokio::time::Instant;
 use url::Url;
 use uuid::Uuid;
+use vouch_protocol::{
+    DeviceKindV1, HookConfigV1, ToolApprovalDecisionV1, ToolApprovalRequestV1, ToolContextV1,
+    ToolDecisionActionV1, ToolHarnessV1, seal_tool_request_v1, verify_tool_decision_v1,
+};
+use vouch_transport::{HookProgress, HookTransport, NatsTransport};
 
 const PROFILE_ROOT_NAME: &str = "vouch/approvals";
 const ACTIVE_PROFILE_FILE: &str = "active-profile";

@@ -22,16 +22,17 @@ use anyhow::{Context as _, Result, bail};
 use clap::ValueEnum;
 use clap::{CommandFactory as _, Parser, Subcommand};
 use futures::StreamExt as _;
+use sha2::{Digest as _, Sha256};
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch};
+use tracing::{info, warn};
+use vouch_agent::review::{MAX_APPROVAL_REASON_CHARS, quote_argv, truncate_chars};
 use vouch_agent::{Identity, OpenedRequest, SignerKind, parse_enrollment_url, remaining_until};
 use vouch_protocol::{
     ALLOW_PLAINTEXT_NATS_ENV, AUTH_ENVELOPE_TYPE, ActivationV1, AliveV1, AuthDecisionV1,
     AuthEnvelopeV1, AuthInvocationV1, AuthRequestV1, DecisionV1, DeviceKindV1, OpenedAuthRequestV1,
     RequestEnvelopeV1, allow_plaintext_nats, check_nats_url, escape_for_terminal, nats_url_is_tls,
 };
-use sha2::{Digest as _, Sha256};
-use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch};
-use tracing::{info, warn};
 
 #[path = "../../cli/terminal_logo.rs"]
 mod terminal_logo;
@@ -336,6 +337,22 @@ enum Verb {
         #[arg(long)]
         force: bool,
     },
+    /// Show the review panel for a sample request, with nothing in flight.
+    ///
+    /// Fixtures: local-sudo, oven-headless, claude-edit, no-reason. The
+    /// panel closes on Esc, Deny, or when its countdown ends.
+    PreviewPanel {
+        /// Which sample request to show.
+        #[arg(long, value_name = "NAME")]
+        fixture: String,
+        /// Print the panel (and the sheet's text) instead of opening it.
+        #[arg(long)]
+        print: bool,
+    },
+    /// Draw one review panel read as JSON from stdin. The agent runs this
+    /// itself beside each Touch ID sheet.
+    #[command(hide = true)]
+    Panel,
     /// Print a public device record.
     ///
     /// This is read-only. It does not contact NATS or the server.
@@ -401,8 +418,14 @@ async fn main() -> Result<()> {
         .with_writer(io::stderr)
         .init();
     let cli = Cli::parse();
+    match &cli.verb {
+        Verb::PreviewPanel { fixture, print } => return cmd_preview_panel(fixture, *print),
+        Verb::Panel => return cmd_panel(),
+        _ => {}
+    }
     let identity_path = state_dir(cli.state)?.join("agent.json");
     match cli.verb {
+        Verb::PreviewPanel { .. } | Verb::Panel => unreachable!("handled above"),
         Verb::Pair {
             enrollment_url,
             label,
@@ -454,6 +477,43 @@ async fn main() -> Result<()> {
     }
 }
 
+fn cmd_preview_panel(fixture: &str, print: bool) -> Result<()> {
+    let now = now();
+    let Some(view) = vouch_agent::review::fixtures::view(fixture, now) else {
+        bail!(
+            "unknown fixture {fixture:?}; try one of: {}",
+            vouch_agent::review::fixtures::NAMES.join(", ")
+        );
+    };
+    if print {
+        print!("{}", view.text(now));
+        if let Some(sheet) = vouch_agent::review::fixtures::sheet(fixture, now) {
+            println!("\nTouch ID sheet: {sheet}");
+        }
+        return Ok(());
+    }
+    show_panel(&view)
+}
+
+fn cmd_panel() -> Result<()> {
+    let mut json = Vec::new();
+    io::Read::read_to_end(&mut io::stdin(), &mut json).context("read the panel from stdin")?;
+    let view: vouch_panel::PanelView = serde_json::from_slice(&json).context("decode the panel")?;
+    show_panel(&view)
+}
+
+#[cfg(target_os = "macos")]
+fn show_panel(view: &vouch_panel::PanelView) -> Result<()> {
+    vouch_panel::run_panel(view).map_err(|error| anyhow::anyhow!(error))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn show_panel(view: &vouch_panel::PanelView) -> Result<()> {
+    // No window server: show the same content as text.
+    print!("{}", view.text(now()));
+    Ok(())
+}
+
 fn state_dir(flag: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(dir) = flag {
         return Ok(dir);
@@ -462,7 +522,24 @@ fn state_dir(flag: Option<PathBuf>) -> Result<PathBuf> {
         return Ok(PathBuf::from(dir));
     }
     let home = std::env::var_os("HOME").context("HOME is not set")?;
-    Ok(PathBuf::from(home).join(".config").join("vouch"))
+    Ok(default_state_dir(&PathBuf::from(home).join(".config")))
+}
+
+/// `~/.config/vouch`, unless it holds no identity and the pre-rename
+/// `~/.config/oshioki` does: then the old directory, so an enrolled Mac keeps
+/// its fingerprint (and its host pins) across the rename. Kept for one
+/// release; `vouch-laptop-setup` copies the directory instead.
+fn default_state_dir(config: &std::path::Path) -> PathBuf {
+    let current = config.join("vouch");
+    let legacy = config.join("oshioki");
+    if !current.join("agent.json").exists() && legacy.join("agent.json").exists() {
+        info!(
+            legacy = %legacy.display(),
+            "using the identity in the pre-rename state directory"
+        );
+        return legacy;
+    }
+    current
 }
 
 /// Loads the identity, creating one on first use. One identity serves every
@@ -1353,12 +1430,10 @@ fn native_decider(identity: &Arc<Identity>) -> Option<Decider> {
         return None;
     }
     info!("approvals are the Touch ID sheet; nothing is read from stdin");
-    Some(Decider::TouchId(
-        vouch_agent::touchid::TouchIdPrompt::new(
-            Box::new(mac::Screen),
-            Arc::new(mac::Canceller(Arc::clone(identity))),
-        ),
-    ))
+    Some(Decider::TouchId(vouch_agent::touchid::TouchIdPrompt::new(
+        Box::new(mac::Screen),
+        Arc::new(mac::Canceller(Arc::clone(identity))),
+    )))
 }
 
 /// Only a Mac has a native prompt, and only for an enclave key.
@@ -1683,35 +1758,6 @@ async fn read_frame(reader: &mut tokio::net::unix::OwnedReadHalf) -> Result<Opti
     Ok(Some(payload))
 }
 
-/// Renders argv so the boundaries between arguments are visible.
-///
-/// Joined with plain spaces, `["/tmp/a b"]` and `["/tmp/a", "b"]` render
-/// identically, and the operator approves the wrong one of the two. Every
-/// argument that is not plainly printable, including the empty one, is
-/// wrapped in shell single quotes instead.
-fn quote_argv(argv: &[String]) -> String {
-    argv.iter()
-        .map(|argument| quote_argument(argument))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// Single-quotes one argument unless every byte of it is unambiguous.
-///
-/// The escape is the shell's own: a single quote ends the quoted run, adds a
-/// backslash-escaped quote, and opens the next run.
-fn quote_argument(argument: &str) -> String {
-    let plain = !argument.is_empty()
-        && argument
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || "@%+=:,./-_".contains(character));
-    if plain {
-        argument.to_owned()
-    } else {
-        format!("'{}'", argument.replace('\'', r"'\''"))
-    }
-}
-
 /// Names the account the command would run as.
 ///
 /// The target is what the approval actually grants, so the prompt always
@@ -1737,160 +1783,26 @@ enum Decider {
     TouchId(vouch_agent::touchid::TouchIdPrompt),
 }
 
-/// What the operator is being asked to allow, shown on the Touch ID sheet
-/// itself: the companion review dialog this text once deferred to is gone
-/// (#70), so the sheet is the only thing an operator reads before approving.
-/// A hash and a request ID told them nothing; host, user, and the command
-/// are what a person actually recognizes at a glance. Everything here still
-/// comes from the signed request, so a truncated or even fully dropped
-/// suffix cannot change what gets executed — the full bytes are verified
+/// What the Touch ID sheet says: `<session> wants sudo <argv…>`. The panel
+/// beside it carries the detail; see `vouch_agent::review`. Everything here
+/// comes from the signed request, and the full bytes are verified
 /// independently of this display string.
-///
-/// Format: `<session>: <user>@<host> sudo <argv...>`, with the `<session>: `
-/// prefix dropped when no session name resolves, and `sudo` omitted when
-/// `argv[0]` already names it. Host and user are never dropped; the argv
-/// tail is truncated with "…" to fit the cap, and the session prefix is the
-/// first thing dropped under pressure.
 fn approval_reason_for_raw(request: &vouch_protocol::RequestV1) -> String {
-    let target = format!(
-        "{}@{}",
-        escape_for_terminal(&request.user),
-        escape_for_terminal(&request.host)
-    );
-    let argv = quote_argv(&request.argv);
-    let wants_sudo_prefix = !matches!(request.argv.first(), Some(first) if first == "sudo");
-    let command = if argv.is_empty() {
-        escape_for_terminal(&request.command)
-    } else if wants_sudo_prefix {
-        format!("sudo {}", escape_for_terminal(&argv))
-    } else {
-        escape_for_terminal(&argv)
-    };
-    let session = session_name_for(request);
-
-    // The target (`<user>@<host>`) is never truncated or dropped. The
-    // session prefix is the first thing dropped under pressure: the command
-    // is more useful than the session label when space is tight, so the
-    // session is shown only when the full command fits alongside it too —
-    // never as a surviving label next to a chopped-up command.
-    let target_only_room = MAX_APPROVAL_REASON_CHARS.saturating_sub(target.chars().count() + 1);
-    if target_only_room == 0 {
-        // The target alone overflows the cap (an implausibly long
-        // user/host): show as much of it as fits rather than nothing.
-        return truncate_chars(&target, MAX_APPROVAL_REASON_CHARS);
-    }
-    if let Some(name) = &session {
-        let prefix = format!("{name}: ");
-        let fixed_len = prefix.chars().count() + target.chars().count() + 1;
-        if fixed_len + command.chars().count() <= MAX_APPROVAL_REASON_CHARS {
-            return format!("{prefix}{target} {command}");
-        }
-        // The session plus the full command does not fit: drop the session
-        // rather than show a truncated command next to an intact label.
-    }
-    format!("{target} {}", truncate_chars(&command, target_only_room))
+    vouch_agent::review::sheet_reason(request, &local_host())
 }
 
-/// Shrinks `value` to at most `max_chars` characters, replacing a dropped
-/// tail with "…" so the operator can tell the text was cut rather than
-/// reading a command that happens to end early.
-fn truncate_chars(value: &str, max_chars: usize) -> String {
-    if value.chars().count() <= max_chars {
-        return value.to_owned();
-    }
-    if max_chars == 0 {
-        return String::new();
-    }
-    let keep = max_chars.saturating_sub(1);
-    let mut truncated: String = value.chars().take(keep).collect();
-    truncated.push('…');
-    truncated
+/// This Mac's hostname, to tell a local request from a remote one.
+fn local_host() -> String {
+    nix::unistd::gethostname()
+        .ok()
+        .and_then(|name| name.into_string().ok())
+        .unwrap_or_default()
 }
 
-/// Names the session a request came from, using only fields carried on the
-/// request itself — the agent never reads the requesting host's live
-/// process table. First match wins:
-///
-/// 1. The request's `session` field, which the hook resolves on the host
-///    from an `OSHIOKI_SESSION` entry in the caller's original environment
-///    — see `session_label` in `hook/src/main.rs`. Absent when the hook
-///    predates this field (0.1.4 and earlier), in which case the remaining
-///    rules apply exactly as before.
-/// 2. An `OSHIOKI_SESSION` environment entry, which a user can export in a
-///    shell or terminal tab to label it (documented in `docs/configuration.md`).
-///    Kept as a fallback for an old hook that bound the environment but
-///    never resolved `session` itself.
-/// 3. The nearest "interesting" ancestor in `pid_chain` — entries are
-///    `"pid:comm"` pairs (see `pid_chain_darwin`/`pid_chain_linux` in
-///    `hook/src/main.rs`), so a process name like `claude`, `codex`, or
-///    `tmux` is usable directly; shells and `sudo` itself are skipped as
-///    uninteresting. Rendered as `comm[pid]` (e.g. `claude[44930]`) so two
-///    concurrent agent sessions on the same host are distinguishable, while
-///    staying short enough for the reason's character budget.
-/// 4. The tty's basename (e.g. `ttys004`), if the request carries one.
-///
-/// `None` when nothing resolves, in which case the reason drops the prefix
-/// entirely rather than show a blank label.
-fn session_name_for(request: &vouch_protocol::RequestV1) -> Option<String> {
-    if let Some(session) = request.session.as_ref().filter(|value| !value.is_empty()) {
-        return Some(escape_for_terminal(session));
-    }
-    if let Some(entry) = request
-        .env
-        .iter()
-        .rev()
-        .find(|entry| entry.name == "OSHIOKI_SESSION" && !entry.value.is_empty())
-    {
-        return Some(escape_for_terminal(&entry.value));
-    }
-    if let Some((pid, comm)) = request.pid_chain.iter().find_map(|entry| {
-        let (pid, comm) = entry.split_once(':')?;
-        is_interesting_session_process(comm).then_some((pid, comm))
-    }) {
-        return Some(escape_for_terminal(&format!("{comm}[{pid}]")));
-    }
-    if let Some(tty) = &request.tty
-        && let Some(basename) = tty.rsplit('/').next().filter(|value| !value.is_empty())
-    {
-        return Some(escape_for_terminal(basename));
-    }
-    None
-}
-
-/// Whether a `pid_chain` process name is worth naming a session after.
-/// Shells, `sudo` itself, and init/daemon wrappers say nothing a user would
-/// recognize as "their" session; an agent harness or multiplexer name does.
-fn is_interesting_session_process(comm: &str) -> bool {
-    !matches!(
-        comm,
-        "sudo"
-            | "sh"
-            | "bash"
-            | "zsh"
-            | "dash"
-            | "fish"
-            | "login"
-            | "sshd"
-            | "systemd"
-            | "launchd"
-            | "init"
-    )
-}
-
-/// The reason's cap for a system-owned biometric prompt. `LocalAuthentication`
-/// wraps a long reason across lines on the sheet rather than truncating it
-/// outright (confirmed on-device with a two-line reason under the previous,
-/// tighter cap), so this is set with headroom for host, user, and a short
-/// command rather than the bare id-and-hash the sheet used to show. Still
-/// conservative pending a longer on-device check of how many lines look
-/// reasonable.
-const MAX_APPROVAL_REASON_CHARS: usize = 160;
-
-/// Test helper for the short reason generated from a semantically valid
-/// request. Production paths use the exact retained bytes directly.
+/// Test helper: the sheet reason with the request's own host as this Mac.
 #[cfg(test)]
 fn approval_reason(request: &vouch_protocol::RequestV1) -> String {
-    approval_reason_for_raw(request)
+    vouch_agent::review::sheet_reason(request, &request.host)
 }
 
 /// The complete bound environment as approver-visible lines, empty when the
@@ -2111,15 +2023,17 @@ mod mac {
     use std::sync::Arc;
 
     use anyhow::Result;
+    use tracing::{error, info};
     use vouch_agent::{
         Identity, OpenedRequest,
         touchid::{AttemptError, Outcome, PromptCancel, ScreenLock, TouchIdPrompt},
     };
     use vouch_enclave::SignError;
     use vouch_protocol::{AuthDecisionV1, DecisionV1, OpenedAuthRequestV1, escape_for_terminal};
-    use tracing::{error, info};
 
-    use super::{approval_reason_for_raw, authentication_reason};
+    use super::{approval_reason_for_raw, local_host};
+    use vouch_agent::panel_process::{self, PanelProcess};
+    use vouch_agent::review;
 
     /// The login session's lock state, read fresh each time it is asked for.
     pub struct Screen;
@@ -2158,10 +2072,17 @@ mod mac {
             let (identity, opened, reason) = (Arc::clone(identity), opened.clone(), reason.clone());
             move || identity.approve(&opened, &reason).map_err(classify)
         };
-        match prompt
-            .ask(&request.request_id, request.expires_at, sign)
-            .await
-        {
+        let asked = if panel_process::panel_enabled() {
+            let panel = PanelProcess::new(review::sudo_view(request, &local_host()));
+            prompt
+                .ask_with_companion(&request.request_id, request.expires_at, &panel, sign)
+                .await
+        } else {
+            prompt
+                .ask(&request.request_id, request.expires_at, sign)
+                .await
+        };
+        match asked {
             Ok(Outcome::Approved(decision)) => Ok(Some(decision)),
             // Dismissal carries no signature, and an unsigned denial is
             // indistinguishable from a forgery: the hook fails closed at
@@ -2200,15 +2121,22 @@ mod mac {
         opened: &OpenedAuthRequestV1,
     ) -> Result<Option<AuthDecisionV1>> {
         let request = &opened.request;
-        let reason = authentication_reason(request);
+        let reason = vouch_agent::review::sheet_authentication_reason(request, &local_host());
         let sign = {
             let (identity, opened, reason) = (Arc::clone(identity), opened.clone(), reason.clone());
             move || identity.authenticate(&opened, &reason).map_err(classify)
         };
-        match prompt
-            .ask(&request.request_id, request.expires_at, sign)
-            .await
-        {
+        let asked = if panel_process::panel_enabled() {
+            let panel = PanelProcess::new(review::authentication_view(request, &local_host()));
+            prompt
+                .ask_with_companion(&request.request_id, request.expires_at, &panel, sign)
+                .await
+        } else {
+            prompt
+                .ask(&request.request_id, request.expires_at, sign)
+                .await
+        };
+        match asked {
             Ok(Outcome::Approved(decision)) => Ok(Some(decision)),
             Ok(Outcome::Denied) => Ok(None),
             Ok(Outcome::Expired) => {
@@ -2250,13 +2178,11 @@ mod tests {
         payload_hash, prompt_output, quote_argv, runas_label, socket_path,
     };
     use clap::Parser as _;
-    use vouch_agent::SignerKind;
-    use vouch_agent::secret_store::MemoryStore;
-    use vouch_protocol::{
-        EnvEntryV1, RequestEnvelopeV1, RequestV1, VERSION_V1, encode_base64url,
-    };
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     use tokio::sync::mpsc;
+    use vouch_agent::SignerKind;
+    use vouch_agent::secret_store::MemoryStore;
+    use vouch_protocol::{EnvEntryV1, RequestEnvelopeV1, RequestV1, VERSION_V1, encode_base64url};
 
     /// One test decision, distinct per request id so a relayed answer can be
     /// told apart from a freshly minted one.
@@ -2636,6 +2562,7 @@ mod tests {
             submitted: vouch_protocol::SubmittedAuthContextV1 {
                 session: None,
                 agent_label: None,
+                reason: None,
                 invocation: vouch_protocol::AuthInvocationV1::Truncated {
                     command: None,
                     argv: vec!["apt".into(), "upgrade".into()],
@@ -2869,7 +2796,7 @@ mod tests {
     fn reason_without_session_shows_user_host_and_command() {
         let request = request_for_reason();
         let reason = approval_reason(&request);
-        assert_eq!(reason, "eric@host.example sudo apt update");
+        assert_eq!(reason, "eric@host.example wants sudo apt update");
         assert!(reason.chars().count() <= MAX_APPROVAL_REASON_CHARS);
     }
 
@@ -2883,10 +2810,7 @@ mod tests {
             name: "OSHIOKI_SESSION".into(),
             value: "laptop-ghostty".into(),
         }];
-        assert_eq!(
-            approval_reason(&request),
-            "vouch-1b: eric@host.example sudo apt update"
-        );
+        assert_eq!(approval_reason(&request), "vouch-1b wants sudo apt update");
     }
 
     /// `OSHIOKI_SESSION` in the bound environment names the session, shown
@@ -2900,7 +2824,7 @@ mod tests {
         }];
         assert_eq!(
             approval_reason(&request),
-            "laptop-ghostty: eric@host.example sudo apt update"
+            "laptop-ghostty wants sudo apt update"
         );
     }
 
@@ -2919,7 +2843,7 @@ mod tests {
                 value: "second".into(),
             },
         ];
-        assert!(approval_reason(&request).starts_with("second: "));
+        assert!(approval_reason(&request).starts_with("second wants sudo "));
     }
 
     /// Without an `OSHIOKI_SESSION` entry, the nearest interesting
@@ -2935,7 +2859,7 @@ mod tests {
             "50:claude".into(),
             "1:launchd".into(),
         ];
-        assert!(approval_reason(&request).starts_with("claude[50]: "));
+        assert!(approval_reason(&request).starts_with("claude[50] wants sudo "));
     }
 
     /// With no session env and no interesting `pid_chain` entry, the tty
@@ -2945,7 +2869,7 @@ mod tests {
         let mut request = request_for_reason();
         request.pid_chain = vec!["99:zsh".into(), "1:launchd".into()];
         request.tty = Some("/dev/ttys004".into());
-        assert!(approval_reason(&request).starts_with("ttys004: "));
+        assert!(approval_reason(&request).starts_with("ttys004 wants sudo "));
     }
 
     /// No session env, no interesting `pid_chain` ancestor, and no tty: the
@@ -2957,7 +2881,7 @@ mod tests {
         request.tty = None;
         let reason = approval_reason(&request);
         assert!(!reason.contains(':') || reason.starts_with("eric@"));
-        assert_eq!(reason, "eric@host.example sudo apt update");
+        assert_eq!(reason, "eric@host.example wants sudo apt update");
     }
 
     /// `sudo` is not repeated when the caller's argv already names it.
@@ -2967,7 +2891,7 @@ mod tests {
         request.argv = vec!["sudo".into(), "apt".into(), "update".into()];
         assert_eq!(
             approval_reason(&request),
-            "eric@host.example sudo apt update"
+            "eric@host.example wants sudo apt update"
         );
     }
 
@@ -2992,15 +2916,15 @@ mod tests {
         ];
         let reason = approval_reason(&request);
         assert!(reason.chars().count() <= MAX_APPROVAL_REASON_CHARS);
-        assert!(reason.starts_with("eric@host.example sudo "));
+        assert!(reason.starts_with("eric@host.example wants sudo "));
         assert!(reason.ends_with('…'));
     }
 
-    /// Under the same pressure, a session-carrying request still shows the
-    /// full user@host and drops the session prefix entirely rather than
-    /// truncate it, since the command is more useful when space is tight.
+    /// Under the same pressure the session stays whole and the command's
+    /// tail is cut: the session is the one thing the sheet adds that the
+    /// command alone does not say, and the panel shows the full argv.
     #[test]
-    fn reason_truncation_prefers_command_over_session_name() {
+    fn reason_truncation_keeps_the_session_and_cuts_the_command() {
         let mut request = request_for_reason();
         request.env = vec![EnvEntryV1 {
             name: "OSHIOKI_SESSION".into(),
@@ -3015,10 +2939,11 @@ mod tests {
         ];
         let reason = approval_reason(&request);
         assert!(reason.chars().count() <= MAX_APPROVAL_REASON_CHARS);
-        assert!(reason.starts_with("eric@host.example sudo "));
         assert!(
-            !reason.contains("a-very-long-session-label"),
-            "the session prefix should be dropped, not truncated into noise: {reason}"
+            reason.starts_with(
+                "a-very-long-session-label-that-eats-the-budget wants sudo find / -name "
+            ),
+            "{reason}"
         );
         assert!(reason.ends_with('…'));
     }
@@ -3062,8 +2987,7 @@ mod tests {
 
     #[test]
     fn device_record_takes_a_label() {
-        let cli =
-            Cli::try_parse_from(["vouch-agent", "device-record", "--label", "mbp"]).unwrap();
+        let cli = Cli::try_parse_from(["vouch-agent", "device-record", "--label", "mbp"]).unwrap();
         assert!(matches!(cli.verb, Verb::DeviceRecord { .. }));
     }
 
@@ -3282,13 +3206,24 @@ mod tests {
     }
 
     fn socket_test_dir(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "vouch-agent-socket-{name}-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("vouch-agent-socket-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn the_pre_rename_identity_is_found_until_a_new_one_exists() {
+        let config = socket_test_dir("legacy-state");
+        assert_eq!(super::default_state_dir(&config), config.join("vouch"));
+        std::fs::create_dir_all(config.join("oshioki")).unwrap();
+        std::fs::write(config.join("oshioki/agent.json"), b"{}").unwrap();
+        assert_eq!(super::default_state_dir(&config), config.join("oshioki"));
+        std::fs::create_dir_all(config.join("vouch")).unwrap();
+        std::fs::write(config.join("vouch/agent.json"), b"{}").unwrap();
+        assert_eq!(super::default_state_dir(&config), config.join("vouch"));
+        let _ = std::fs::remove_dir_all(config);
     }
 
     #[test]
@@ -3404,8 +3339,7 @@ mod tests {
         hook_side.read_exact(&mut acknowledgement).await.unwrap();
         let acknowledgement: vouch_protocol::AliveV1 =
             serde_json::from_slice(&acknowledgement).unwrap();
-        let request: vouch_protocol::RequestEnvelopeV1 =
-            serde_json::from_slice(envelope).unwrap();
+        let request: vouch_protocol::RequestEnvelopeV1 = serde_json::from_slice(envelope).unwrap();
         acknowledgement.validate(&request.request_id).unwrap();
         hook_side.read_exact(&mut prefix).await.unwrap();
         let len = usize::try_from(u32::from_be_bytes(prefix)).unwrap();
@@ -3455,8 +3389,7 @@ mod tests {
                 assert_eq!(denial.request_id, request.request_id);
                 // Auto-deny signs like an explicit refusal: the hook
                 // verifies this against the pinned record.
-                vouch_protocol::verify_deny_v1(&denial, &identity.device_record("laptop"))
-                    .unwrap();
+                vouch_protocol::verify_deny_v1(&denial, &identity.device_record("laptop")).unwrap();
             }
             other => panic!("expected a denial, got {other:?}"),
         }
@@ -3703,8 +3636,8 @@ mod tests {
         let request = request_for_log_probe();
         let reason = approval_reason(&request);
         assert!(
-            reason.contains(&format!("user-{LOG_PROBE}")),
-            "the reason should show who asked: {reason}"
+            reason.contains(&format!("--token={LOG_PROBE}")),
+            "the reason should show the command: {reason}"
         );
 
         // Terminal prompt path: answer yes to the canned prompt.
@@ -3716,10 +3649,7 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            matches!(
-                decision,
-                Some(vouch_protocol::DecisionV1::ApproveNative(_))
-            ),
+            matches!(decision, Some(vouch_protocol::DecisionV1::ApproveNative(_))),
             "the canned yes should approve"
         );
 

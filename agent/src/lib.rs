@@ -8,6 +8,9 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(target_os = "macos")]
+pub mod panel_process;
+pub mod review;
 pub mod secret_store;
 pub mod touchid;
 
@@ -897,11 +900,11 @@ fn write_identity_file(path: &Path, file: &IdentityFileV1, create_new: bool) -> 
 mod tests {
     use super::*;
     use crate::secret_store::SecretStore as _;
+    use std::os::unix::fs::PermissionsExt as _;
     use vouch_protocol::{
         DeviceRegistryV1, seal_v1, verify_deny_v1, verify_native_approval_v1,
         verify_native_enrollment_v1, verify_software_native_enrollment_v1,
     };
-    use std::os::unix::fs::PermissionsExt as _;
 
     #[derive(Default)]
     struct RecordingStore {
@@ -1064,6 +1067,7 @@ mod tests {
             submitted: vouch_protocol::SubmittedAuthContextV1 {
                 session: None,
                 agent_label: None,
+                reason: None,
                 invocation: vouch_protocol::AuthInvocationV1::Truncated {
                     command: None,
                     argv: vec!["apt".into(), "upgrade".into()],

@@ -11,6 +11,7 @@ members = [
     "enclave",
     "pam",
     "relay",
+    "panel",
 ]
 
 # All version numbers and shared features live here. Member crates reference

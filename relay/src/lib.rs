@@ -4,13 +4,13 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Result, bail, ensure};
-use vouch_protocol::{decode_base64url, encode_base64url};
 use p256::ecdsa::{
     Signature, SigningKey, VerifyingKey,
     signature::{Signer as _, Verifier as _},
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
+use vouch_protocol::{decode_base64url, encode_base64url};
 
 pub const MAX_FRAME: usize = 16_384;
 pub const MAX_LIFETIME: u64 = 300;

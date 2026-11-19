@@ -5,12 +5,12 @@
 //! the commit message. ECDSA here is RFC 6979 deterministic, so the
 //! signatures are stable.
 
+use serde::{Deserialize, Serialize};
 use vouch_agent::Identity;
 use vouch_protocol::{
     DecisionV1, RequestV1, VERSION_V1, approve_challenge, encode_base64url,
     native_enrollment_proof, verify_native_approval_v1, verify_software_native_enrollment_v1,
 };
-use serde::{Deserialize, Serialize};
 
 const PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/vectors/native_v1.json");
 

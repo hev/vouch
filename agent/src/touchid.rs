@@ -50,6 +50,19 @@ pub trait PromptCancel: Send + Sync + 'static {
     fn cancel(&self, attempt: u64);
 }
 
+/// Something shown beside the Touch ID sheet for exactly as long as the
+/// sheet is up: the review panel on a Mac.
+///
+/// It opens after the permit is held and the screen is unlocked, just before
+/// the sheet is raised, so it obeys the same one-sheet-at-a-time rule; it
+/// closes when the returned guard drops, which happens as soon as the sheet
+/// resolves, expires or is cancelled. `deny` cancels this attempt's sheet and
+/// only this one: the same numbered cancellation the deadline uses, so a
+/// late deny from a closed panel cannot reach the next request.
+pub trait Companion: Send + Sync {
+    fn open(&self, deny: Box<dyn Fn() + Send + Sync>) -> Box<dyn Send>;
+}
+
 /// Why an attempt produced no signature.
 pub enum AttemptError {
     /// The sheet was dismissed, or nobody answered it.
@@ -151,7 +164,26 @@ impl TouchIdPrompt {
         let permit = PromptPermit {
             _sheet: self.sheet.lock().await,
         };
-        self.ask_with_permit(permit, request_id, expires_at, sign)
+        self.ask_inner(permit, request_id, expires_at, None, sign)
+            .await
+    }
+
+    /// [`Self::ask`], with `companion` open beside the sheet while it is up.
+    pub async fn ask_with_companion<T, F>(
+        &self,
+        request_id: &str,
+        expires_at: i64,
+        companion: &dyn Companion,
+        sign: F,
+    ) -> Result<Outcome<T>>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> Result<T, AttemptError> + Send + 'static,
+    {
+        let permit = PromptPermit {
+            _sheet: self.sheet.lock().await,
+        };
+        self.ask_inner(permit, request_id, expires_at, Some(companion), sign)
             .await
     }
 
@@ -160,9 +192,25 @@ impl TouchIdPrompt {
     /// interaction has completely returned.
     pub async fn ask_with_permit<T, F>(
         &self,
+        permit: PromptPermit<'_>,
+        request_id: &str,
+        expires_at: i64,
+        sign: F,
+    ) -> Result<Outcome<T>>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> Result<T, AttemptError> + Send + 'static,
+    {
+        self.ask_inner(permit, request_id, expires_at, None, sign)
+            .await
+    }
+
+    async fn ask_inner<T, F>(
+        &self,
         _permit: PromptPermit<'_>,
         request_id: &str,
         expires_at: i64,
+        companion: Option<&dyn Companion>,
         sign: F,
     ) -> Result<Outcome<T>>
     where
@@ -215,7 +263,14 @@ impl TouchIdPrompt {
                 canceller.cancel(attempt);
             }
         });
+        let panel = companion.map(|companion| {
+            let canceller = Arc::clone(&self.canceller);
+            companion.open(Box::new(move || canceller.cancel(attempt)))
+        });
         let signed = tokio::task::spawn_blocking(sign).await;
+        // The sheet is gone: answered, dismissed, denied or torn down by the
+        // deadline. The panel goes with it.
+        drop(panel);
         deadline.abort();
         prompt_attempt.finish();
 
@@ -514,6 +569,112 @@ mod tests {
             assert_eq!(sheet.await.unwrap(), Outcome::Approved(vec![0]));
         }
         assert_eq!(peak.load(Ordering::SeqCst), 1);
+    }
+
+    #[derive(Default)]
+    struct Panel {
+        opened: AtomicUsize,
+        closed: Arc<AtomicUsize>,
+        deny_on_open: bool,
+    }
+
+    struct PanelGuard(Arc<AtomicUsize>);
+
+    impl Drop for PanelGuard {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    impl super::Companion for Panel {
+        fn open(&self, deny: Box<dyn Fn() + Send + Sync>) -> Box<dyn Send> {
+            self.opened.fetch_add(1, Ordering::SeqCst);
+            if self.deny_on_open {
+                deny();
+            }
+            Box::new(PanelGuard(Arc::clone(&self.closed)))
+        }
+    }
+
+    /// The panel is up exactly while the sheet is: opened once, closed once
+    /// the signature returns, and the approval is the sheet's alone.
+    #[tokio::test]
+    async fn the_panel_opens_with_the_sheet_and_closes_with_it() {
+        let (screen, canceller) = (Arc::new(Screen::default()), Arc::new(Canceller::default()));
+        let panel = Panel::default();
+        let closed = Arc::clone(&panel.closed);
+        let outcome = prompt(&screen, &canceller)
+            .ask_with_companion("req-1", now() + 30, &panel, move || {
+                assert_eq!(
+                    closed.load(Ordering::SeqCst),
+                    0,
+                    "the panel closed under the sheet"
+                );
+                Ok(vec![1_u8])
+            })
+            .await
+            .unwrap();
+        assert_eq!(outcome, Outcome::Approved(vec![1]));
+        assert_eq!(panel.opened.load(Ordering::SeqCst), 1);
+        assert_eq!(panel.closed.load(Ordering::SeqCst), 1);
+    }
+
+    /// Esc or Deny in the panel cancels this attempt's sheet, which is a
+    /// denial: nothing signed, nothing published.
+    #[tokio::test]
+    async fn a_deny_from_the_panel_cancels_the_sheet() {
+        let (screen, canceller) = (Arc::new(Screen::default()), Arc::new(Canceller::default()));
+        let panel = Panel {
+            deny_on_open: true,
+            ..Panel::default()
+        };
+        let watcher = Arc::clone(&canceller);
+        let outcome: Outcome<Vec<u8>> = prompt(&screen, &canceller)
+            .ask_with_companion("req-1", now() + 30, &panel, move || {
+                if watcher.cancelled() {
+                    return Err(AttemptError::Canceled);
+                }
+                Ok(vec![1])
+            })
+            .await
+            .unwrap();
+        assert_eq!(outcome, Outcome::Denied);
+        assert_eq!(panel.closed.load(Ordering::SeqCst), 1);
+    }
+
+    /// A request that is already dead raises neither the sheet nor the
+    /// panel, and a locked screen holds the panel back with the sheet.
+    #[tokio::test]
+    async fn no_panel_without_a_sheet() {
+        let (screen, canceller) = (Screen::locked(), Arc::new(Canceller::default()));
+        let panel = Panel::default();
+        let outcome: Outcome<Vec<u8>> = prompt(&screen, &canceller)
+            .ask_with_companion("req-1", now() + 1, &panel, || {
+                panic!("the sheet must not appear")
+            })
+            .await
+            .unwrap();
+        assert_eq!(outcome, Outcome::Expired);
+        assert_eq!(panel.opened.load(Ordering::SeqCst), 0);
+    }
+
+    /// The deadline closes the panel along with the sheet it tears down.
+    #[tokio::test]
+    async fn the_deadline_closes_the_panel() {
+        let (screen, canceller) = (Arc::new(Screen::default()), Arc::new(Canceller::default()));
+        let panel = Panel::default();
+        let watcher = Arc::clone(&canceller);
+        let outcome: Outcome<Vec<u8>> = prompt(&screen, &canceller)
+            .ask_with_companion("req-1", now() + 1, &panel, move || {
+                while !watcher.cancelled() {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(AttemptError::Canceled)
+            })
+            .await
+            .unwrap();
+        assert_eq!(outcome, Outcome::Expired);
+        assert_eq!(panel.closed.load(Ordering::SeqCst), 1);
     }
 
     /// Native callers reserve the token before their review window. A second

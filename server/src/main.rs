@@ -20,14 +20,6 @@ use futures::StreamExt as _;
 use jwt_compact::{
     AlgorithmExt as _, Claims as JwtClaims, Header as JwtHeader, TimeOptions, alg::Es256,
 };
-use vouch_protocol::{
-    AUTH_ENVELOPE_TYPE, ActivationV1, AliveV1, ApproveV1, AuthApproveWebauthnV1, AuthDecisionV1,
-    AuthEnvelopeV1, DecisionV1, DenyV1, EnrollmentIntentV1, EnrollmentSubmissionV1,
-    RequestEnvelopeV1, SealedDeviceBodyV1, TOOL_APPROVAL_SUBJECT, TOOL_ENVELOPE_TYPE,
-    ToolAcknowledgementV1, ToolApprovalDecisionV1, ToolApprovalEnvelopeV1, ToolSealedBodyV1,
-    verify_tool_decision_v1,
-};
-use vouch_transport::{Ack, JetStreamMessage, NatsTransport, ServerTransport};
 use p256::{
     elliptic_curve::Generate as _,
     pkcs8::{DecodePrivateKey as _, EncodePrivateKey as _},
@@ -47,6 +39,14 @@ use std::{
 use tokio::sync::Semaphore;
 use tokio_util::io::ReaderStream;
 use tracing::{error, info, warn};
+use vouch_protocol::{
+    AUTH_ENVELOPE_TYPE, ActivationV1, AliveV1, ApproveV1, AuthApproveWebauthnV1, AuthDecisionV1,
+    AuthEnvelopeV1, DecisionV1, DenyV1, EnrollmentIntentV1, EnrollmentSubmissionV1,
+    RequestEnvelopeV1, SealedDeviceBodyV1, TOOL_APPROVAL_SUBJECT, TOOL_ENVELOPE_TYPE,
+    ToolAcknowledgementV1, ToolApprovalDecisionV1, ToolApprovalEnvelopeV1, ToolSealedBodyV1,
+    verify_tool_decision_v1,
+};
+use vouch_transport::{Ack, JetStreamMessage, NatsTransport, ServerTransport};
 use web_push_native::{Auth as WebPushAuth, WebPushBuilder};
 
 /// Every path the authentication lane serves. The router is built from this
@@ -1951,9 +1951,9 @@ fn now() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vouch_protocol::ToolApprovalRequestV1;
     use sha2::Digest as _;
     use tower::util::ServiceExt as _;
+    use vouch_protocol::ToolApprovalRequestV1;
 
     #[test]
     fn mapped_ipv4_addresses_follow_ipv4_public_address_policy() {
@@ -2027,8 +2027,7 @@ mod tests {
     }
 
     fn health_state(name: &str, consumer_age: i64, outbox_age: i64) -> (PathBuf, AppState) {
-        let dir =
-            std::env::temp_dir().join(format!("vouch-health-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vouch-health-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let store = Arc::new(Store::open(&dir.join("state.sqlite3")).unwrap());
@@ -2736,8 +2735,7 @@ mod tests {
     /// flipped.
     #[tokio::test]
     async fn mock_transport_drives_verdict_worker() {
-        let dir =
-            std::env::temp_dir().join(format!("vouch-server-verdict-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vouch-server-verdict-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let store = Arc::new(Store::open(&dir.join("state.sqlite3")).unwrap());
@@ -2809,8 +2807,7 @@ mod tests {
             "duplicate publish means commit-before-ack flipped"
         );
         assert_eq!(published[0].0, "oshioki.delivery.req-1");
-        let delivery: vouch_protocol::DeliveryV1 =
-            serde_json::from_slice(&published[0].1).unwrap();
+        let delivery: vouch_protocol::DeliveryV1 = serde_json::from_slice(&published[0].1).unwrap();
         delivery.validate("req-1").unwrap();
         assert_eq!(published[1].0, "oshioki.verdict.req-1");
         assert_eq!(published[1].1, serde_json::to_vec(&decision).unwrap());
@@ -2914,8 +2911,7 @@ mod tests {
     /// confirmation on `oshioki.device.revoked.<fingerprint>`.
     #[tokio::test]
     async fn mock_transport_drives_revocation() {
-        let dir =
-            std::env::temp_dir().join(format!("vouch-server-revoke-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vouch-server-revoke-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let store = Store::open(&dir.join("state.sqlite3")).unwrap();
@@ -2978,8 +2974,7 @@ mod tests {
             .await
             .unwrap_or_else(|_| panic!("{what} never fired"));
         }
-        let dir =
-            std::env::temp_dir().join(format!("vouch-server-consume-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vouch-server-consume-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let store = Arc::new(Store::open(&dir.join("state.sqlite3")).unwrap());
@@ -3068,11 +3063,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    fn auth_test_state(
-        name: &str,
-    ) -> (PathBuf, AppState, vouch_transport::MockTransport, String) {
-        let dir =
-            std::env::temp_dir().join(format!("vouch-server-{name}-{}", std::process::id()));
+    fn auth_test_state(name: &str) -> (PathBuf, AppState, vouch_transport::MockTransport, String) {
+        let dir = std::env::temp_dir().join(format!("vouch-server-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let store = Arc::new(Store::open(&dir.join("state.sqlite3")).unwrap());

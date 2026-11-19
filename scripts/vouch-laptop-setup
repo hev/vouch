@@ -2,7 +2,7 @@
 # shellcheck disable=SC2015,SC2034
 # One-command laptop setup for local sudo approvals.
 #
-# brew install epsalmond/oshioki/vouch && vouch-laptop-setup
+# From a checkout: scripts/vouch-laptop-setup --local
 #
 # Idempotent: re-running after a brew upgrade reinstalls the hook and plugin
 # from the new bottle and restarts the agent. Everything needing privilege
@@ -282,6 +282,22 @@ INSTALL_ENV="${VOUCH_INSTALL_ENV:-/etc/vouch/install.env}"
 AGENT_STATE="${VOUCH_AGENT_STATE:-$HOME/.config/vouch}"
 DEFAULT_SOCKET="$AGENT_STATE/agent.sock"
 LABEL="com.hev.vouch.agent"
+# The pre-rename install kept its identity in ~/.config/oshioki. Copy it
+# (never move it: rolling back to Homebrew Oshioki still needs it) so this
+# Mac keeps its fingerprint and every host's pin of it.
+LEGACY_AGENT_STATE="$HOME/.config/oshioki"
+if [ -z "${VOUCH_AGENT_STATE:-}" ] && [ ! -e "$AGENT_STATE/agent.json" ] \
+  && [ -f "$LEGACY_AGENT_STATE/agent.json" ]; then
+  mkdir -p "$AGENT_STATE"
+  chmod 700 "$AGENT_STATE"
+  for item in "$LEGACY_AGENT_STATE"/*; do
+    [ -e "$item" ] || continue
+    [ -S "$item" ] && continue
+    cp -Rp "$item" "$AGENT_STATE/"
+  done
+  printf 'vouch-laptop-setup: copied the existing identity from %s to %s\n' \
+    "$LEGACY_AGENT_STATE" "$AGENT_STATE" >&2
+fi
 # The agent's own NATS bus and role, kept apart from NATS_URL_V/NATS_USER_V/
 # NATS_PASS_V (the hook's) everywhere below. Writing the hook's credentials
 # into the agent's environment authenticates it as the wrong NATS user,

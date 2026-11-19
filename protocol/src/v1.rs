@@ -1146,7 +1146,10 @@ mod tests {
         assert_eq!(normalize_reason(&"x".repeat(MAX_REASON_CHARS + 1)), None);
         assert_eq!(normalize_reason("a\u{1b}[31m"), None);
         assert_eq!(normalize_session_label(&"x".repeat(65)), None);
-        assert_eq!(normalize_session_label(" foh-hev-4 "), Some("foh-hev-4".into()));
+        assert_eq!(
+            normalize_session_label(" foh-hev-4 "),
+            Some("foh-hev-4".into())
+        );
     }
 
     #[test]

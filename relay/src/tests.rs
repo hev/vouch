@@ -263,10 +263,7 @@ fn install_test_executable(path: &Path, contents: impl AsRef<[u8]>) {
 #[allow(clippy::too_many_lines)]
 async fn startup_transport_fault_is_bounded(stage: StartupStage) {
     let _port_guard = PORT_TEST_LOCK.lock().await;
-    let directory = PathBuf::from(format!(
-        "/tmp/vouch-relay-startup-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let directory = PathBuf::from(format!("/tmp/vouch-relay-startup-{}", uuid::Uuid::new_v4()));
     fs::create_dir(&directory).unwrap();
     let _cleanup = TempDir(directory.clone());
 
@@ -865,10 +862,7 @@ async fn ipv6_collision_does_not_leave_ipv4_listener() {
 
 #[tokio::test]
 async fn ssh_exit_does_not_wait_for_browser_write_half() {
-    let directory = PathBuf::from(format!(
-        "/tmp/vouch-relay-forward-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let directory = PathBuf::from(format!("/tmp/vouch-relay-forward-{}", uuid::Uuid::new_v4()));
     fs::create_dir(&directory).unwrap();
     let _cleanup = TempDir(directory.clone());
     let ssh = directory.join("ssh");
@@ -900,10 +894,7 @@ async fn ssh_exit_does_not_wait_for_browser_write_half() {
 
 #[tokio::test]
 async fn ssh_response_is_drained_before_success() {
-    let directory = PathBuf::from(format!(
-        "/tmp/vouch-relay-forward-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let directory = PathBuf::from(format!("/tmp/vouch-relay-forward-{}", uuid::Uuid::new_v4()));
     fs::create_dir(&directory).unwrap();
     let _cleanup = TempDir(directory.clone());
     let ssh = directory.join("ssh");

@@ -19,6 +19,7 @@ unattended = []
 
 [dependencies]
 vouch-protocol = { path = "../protocol" }
+vouch-panel = { path = "../panel" }
 tokio = { workspace = true }
 async-nats = { workspace = true }
 serde = { workspace = true }
@@ -33,6 +34,7 @@ p256 = { workspace = true }
 x25519-dalek = { workspace = true }
 sha2 = { workspace = true }
 futures = { workspace = true }
+nix = { workspace = true, features = ["hostname"] }
 time = { workspace = true }
 
 # The Secure Enclave backend and the Touch ID sheet. Linux builds, including

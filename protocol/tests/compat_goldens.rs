@@ -3,14 +3,14 @@
 
 use std::{fs, path::PathBuf};
 
+use p256::ecdsa::SigningKey;
+use serde::Deserialize;
 use vouch_protocol::{
     AUTH_ENVELOPE_TYPE, AUTH_REQUEST_TYPE, AUTH_WIRE_VERSION, AliveV1, AuthEnvelopeV1,
     AuthInvocationV1, AuthRequestV1, DecisionV1, DeliveryV1, DenyV1, DeviceKindV1,
     DevicePublicRecordV1, DeviceRegistryV1, RequestV1, SealedDeviceBodyV1, SubmittedAuthContextV1,
     TrustedAuthContextV1, VERSION_V1, decode_base64url, device_fingerprint, encode_base64url,
 };
-use p256::ecdsa::SigningKey;
-use serde::Deserialize;
 
 fn goldens_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/compat/goldens")
@@ -225,6 +225,7 @@ fn device_and_auth_goldens_round_trip() {
         submitted: SubmittedAuthContextV1 {
             session: None,
             agent_label: None,
+            reason: None,
             invocation: AuthInvocationV1::Available {
                 command: "/usr/bin/true".into(),
                 argv: vec!["true".into()],

@@ -9,11 +9,11 @@ use std::{
 };
 
 use futures::StreamExt as _;
-use vouch_browser_relay::{Action, Message, approval_challenge, sign, verify};
-use vouch_protocol::encode_base64url;
 use p256::ecdsa::{SigningKey, signature::Signer as _};
 use p256::elliptic_curve::Generate as _;
 use tokio::{process::Command, time::timeout};
+use vouch_browser_relay::{Action, Message, approval_challenge, sign, verify};
+use vouch_protocol::encode_base64url;
 
 struct Temp(PathBuf);
 impl Drop for Temp {

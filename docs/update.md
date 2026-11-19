@@ -18,7 +18,7 @@ Do not regenerate identities or enroll devices as a routine update step.
 
 ```sh
 brew update
-brew upgrade epsalmond/oshioki/vouch
+git pull && scripts/vouch-laptop-setup --local
 vouch-laptop-setup --local
 ```
 
@@ -33,7 +33,7 @@ If refresh fails or the upgrade runs outside your GUI login session, retry from
 a logged-in Terminal:
 
 ```sh
-brew postinstall epsalmond/oshioki/vouch
+scripts/vouch-laptop-setup --local
 ```
 
 Retry any approval interrupted by the restart.

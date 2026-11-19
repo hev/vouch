@@ -40,8 +40,8 @@ use vouch_protocol::{
     EnrollmentIntentV1, EnrollmentSubmissionV1, EnvEntryV1, HookConfigV1,
     PRIVATE_PLUGIN_HOOK_PROTOCOL_VERSION, RequestEnvelopeV1, RequestV1, VERSION_V1,
     escape_for_terminal, normalize_reason, normalize_session_label, verify_approval_v1,
-    verify_deny_v1, verify_enrollment_v1,
-    verify_native_approval_v1, verify_native_enrollment_v1, verify_software_native_enrollment_v1,
+    verify_deny_v1, verify_enrollment_v1, verify_native_approval_v1, verify_native_enrollment_v1,
+    verify_software_native_enrollment_v1,
 };
 use vouch_transport::{HookProgress, HookTransport, HookTransportFailure, NatsTransport};
 
@@ -2195,6 +2195,7 @@ fn build_auth_request(
             // trusted agent label of its own, so neither is claimed.
             session: None,
             agent_label: None,
+            reason: None,
             invocation: auth_invocation(&pam.submitted_argv),
         },
     };
@@ -4190,8 +4191,7 @@ mod tests {
     /// An unreadable /etc/pam.d must never read as "nothing is configured".
     #[test]
     fn status_reports_unknown_when_it_cannot_read_the_pam_files() {
-        let root =
-            std::env::temp_dir().join(format!("vouch-sudo-auth-denied-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("vouch-sudo-auth-denied-{}", Uuid::new_v4()));
         let pam_d = root.join("pam.d");
         fs::create_dir_all(&pam_d).unwrap();
         for service in PAM_SERVICES {
@@ -5244,10 +5244,8 @@ mod tests {
             let opened = vouch_protocol::unseal_v1(&received.sealed[0], &box_secret).unwrap();
             assert_eq!(opened, expected_raw);
             let alive = vouch_protocol::socket_v1::encode_frame(
-                &serde_json::to_vec(&vouch_protocol::AliveV1::for_request(
-                    &received.request_id,
-                ))
-                .unwrap(),
+                &serde_json::to_vec(&vouch_protocol::AliveV1::for_request(&received.request_id))
+                    .unwrap(),
             )
             .unwrap();
             stream.write_all(&alive).await.unwrap();
@@ -5862,11 +5860,10 @@ mod tests {
         let length = vouch_protocol::socket_v1::decode_frame_len(prefix).unwrap();
         let mut request = vec![0u8; length];
         stream.read_exact(&mut request).await.unwrap();
-        let request: vouch_protocol::RequestEnvelopeV1 =
-            serde_json::from_slice(&request).unwrap();
+        let request: vouch_protocol::RequestEnvelopeV1 = serde_json::from_slice(&request).unwrap();
         let alive = vouch_protocol::AliveV1::for_request(&request.request_id);
-        let frame = vouch_protocol::socket_v1::encode_frame(&serde_json::to_vec(&alive).unwrap())
-            .unwrap();
+        let frame =
+            vouch_protocol::socket_v1::encode_frame(&serde_json::to_vec(&alive).unwrap()).unwrap();
         stream.write_all(&frame).await.unwrap();
         stream.flush().await.unwrap();
     }
@@ -5892,11 +5889,10 @@ mod tests {
         let length = vouch_protocol::socket_v1::decode_frame_len(prefix).unwrap();
         let mut request = vec![0u8; length];
         stream.read_exact(&mut request).await.unwrap();
-        let request: vouch_protocol::RequestEnvelopeV1 =
-            serde_json::from_slice(&request).unwrap();
+        let request: vouch_protocol::RequestEnvelopeV1 = serde_json::from_slice(&request).unwrap();
         let alive = vouch_protocol::AliveV1::for_request(&request.request_id);
-        let frame = vouch_protocol::socket_v1::encode_frame(&serde_json::to_vec(&alive).unwrap())
-            .unwrap();
+        let frame =
+            vouch_protocol::socket_v1::encode_frame(&serde_json::to_vec(&alive).unwrap()).unwrap();
         stream.write_all(&frame).await.unwrap();
         if !after_ack.is_empty() {
             stream.write_all(&after_ack).await.unwrap();
@@ -6427,7 +6423,8 @@ mod tests {
             request
                 .env
                 .iter()
-                .any(|entry| entry.name == "VOUCH_REASON" && entry.value == "from the run environment")
+                .any(|entry| entry.name == "VOUCH_REASON"
+                    && entry.value == "from the run environment")
         );
 
         let without = build_request(&plugin_values_with(&[])).unwrap();
@@ -6437,7 +6434,10 @@ mod tests {
             "bell\u{0007}",
         )]))
         .unwrap();
-        assert_eq!(rejected.reason, None, "an invalid reason is dropped, not fatal");
+        assert_eq!(
+            rejected.reason, None,
+            "an invalid reason is dropped, not fatal"
+        );
     }
 
     /// A request in the 0.4.x shape (no `session`, no `reason`) is still
@@ -6466,7 +6466,11 @@ mod tests {
         for request in [legacy, with_reason] {
             let raw = request.raw_json().unwrap();
             let text = String::from_utf8(raw.clone()).unwrap();
-            assert_eq!(text.contains("\"reason\""), request.reason.is_some(), "{text}");
+            assert_eq!(
+                text.contains("\"reason\""),
+                request.reason.is_some(),
+                "{text}"
+            );
             let signature: p256::ecdsa::Signature =
                 signing.sign(&vouch_protocol::v1::approve_challenge(&raw));
             let approval = DecisionV1::ApproveNative(vouch_protocol::ApproveNativeV1 {
@@ -6515,8 +6519,8 @@ mod auth_tests {
     include!("revocation_tests.rs");
 
     use super::*;
-    use vouch_protocol::auth_v1::{AuthApproveNativeV1, auth_challenge};
     use p256::ecdsa::{SigningKey, signature::Signer as _};
+    use vouch_protocol::auth_v1::{AuthApproveNativeV1, auth_challenge};
 
     fn pam_json(overrides: &str) -> String {
         format!(
@@ -6790,8 +6794,8 @@ mod auth_tests {
         assert_eq!(pam_protocol_version, 2);
         assert_eq!(pam_liveness_fd, Some(7));
 
-        let cli = Cli::try_parse_from(["vouch", "authenticate", "--pam-protocol-version", "2"])
-            .unwrap();
+        let cli =
+            Cli::try_parse_from(["vouch", "authenticate", "--pam-protocol-version", "2"]).unwrap();
         let Verb::Authenticate {
             pam_liveness_fd, ..
         } = cli.verb
@@ -7427,8 +7431,8 @@ mod auth_tests {
         stream.read_exact(&mut request).await.unwrap();
         let envelope: vouch_protocol::AuthEnvelopeV1 = serde_json::from_slice(&request).unwrap();
         let alive = vouch_protocol::AliveV1::for_request(&envelope.request_id);
-        let frame = vouch_protocol::socket_v1::encode_frame(&serde_json::to_vec(&alive).unwrap())
-            .unwrap();
+        let frame =
+            vouch_protocol::socket_v1::encode_frame(&serde_json::to_vec(&alive).unwrap()).unwrap();
         stream.write_all(&frame).await.unwrap();
         if !after_ack.is_empty() {
             stream.write_all(&after_ack).await.unwrap();
@@ -7541,8 +7545,7 @@ mod auth_tests {
             signature: URL_SAFE_NO_PAD.encode(signature.to_der()),
         });
         let frame =
-            vouch_protocol::socket_v1::encode_frame(&serde_json::to_vec(&legacy).unwrap())
-                .unwrap();
+            vouch_protocol::socket_v1::encode_frame(&serde_json::to_vec(&legacy).unwrap()).unwrap();
         let listener = tokio::net::UnixListener::bind(directory.join("agent.sock")).unwrap();
         let serve = tokio::spawn(auth_ack_then(listener, frame));
         let error = execute_auth_request_at(request, Duration::from_secs(30), &directory, None)
@@ -7686,8 +7689,7 @@ mod auth_tests {
     /// Builds a config directory with an unreachable socket transport, so a
     /// test that must not reach a transport still has a valid config.
     fn auth_config_dir(name: &str) -> PathBuf {
-        let directory =
-            std::env::temp_dir().join(format!("vouch-auth-{name}-{}", Uuid::new_v4()));
+        let directory = std::env::temp_dir().join(format!("vouch-auth-{name}-{}", Uuid::new_v4()));
         let _ = std::fs::remove_dir_all(&directory);
         std::fs::create_dir_all(&directory).unwrap();
         std::fs::write(
@@ -7714,8 +7716,7 @@ mod auth_tests {
     /// everyone out of sudo over a missing file.
     #[tokio::test]
     async fn a_missing_transport_config_is_unavailable() {
-        let directory =
-            std::env::temp_dir().join(format!("vouch-auth-noconf-{}", Uuid::new_v4()));
+        let directory = std::env::temp_dir().join(format!("vouch-auth-noconf-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&directory).unwrap();
         let (device, _) = auth_test_device();
         seed_registry(&directory, vec![device]);
@@ -8266,8 +8267,8 @@ mod auth_tests {
         let mut request = vec![0u8; length];
         stream.read_exact(&mut request).await.unwrap();
         let alive = vouch_protocol::AliveV1::for_request(&ack_id);
-        let frame = vouch_protocol::socket_v1::encode_frame(&serde_json::to_vec(&alive).unwrap())
-            .unwrap();
+        let frame =
+            vouch_protocol::socket_v1::encode_frame(&serde_json::to_vec(&alive).unwrap()).unwrap();
         let _ = stream.write_all(&frame).await;
         if let Some(decision) = decision {
             let frame = vouch_protocol::socket_v1::encode_frame(&decision).unwrap();
