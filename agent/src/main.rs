@@ -2819,6 +2819,7 @@ mod tests {
             pid_chain: vec![],
             env: vec![],
             session: None,
+            reason: None,
             issued_at: 1_000,
             expires_at: 1_090,
         }
@@ -3499,6 +3500,7 @@ mod tests {
             pid_chain: vec![format!("{LOG_PROBE}:4242")],
             env: vec![],
             session: None,
+            reason: None,
             issued_at: now(),
             expires_at: now() + 60,
         }

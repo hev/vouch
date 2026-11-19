@@ -39,7 +39,8 @@ use vouch_protocol::{
     ActivationV1, DecisionV1, DenyV1, DeviceKindV1, DevicePublicRecordV1, DeviceRegistryV1,
     EnrollmentIntentV1, EnrollmentSubmissionV1, EnvEntryV1, HookConfigV1,
     PRIVATE_PLUGIN_HOOK_PROTOCOL_VERSION, RequestEnvelopeV1, RequestV1, VERSION_V1,
-    escape_for_terminal, verify_approval_v1, verify_deny_v1, verify_enrollment_v1,
+    escape_for_terminal, normalize_reason, normalize_session_label, verify_approval_v1,
+    verify_deny_v1, verify_enrollment_v1,
     verify_native_approval_v1, verify_native_enrollment_v1, verify_software_native_enrollment_v1,
 };
 use vouch_transport::{HookProgress, HookTransport, HookTransportFailure, NatsTransport};
@@ -3580,6 +3581,7 @@ fn build_request(values: &[(String, String)]) -> Result<RequestV1> {
         argv,
         pid_chain: pid_chain(),
         session: session_label(values),
+        reason: reason_label(values),
         env,
         issued_at,
         expires_at: issued_at + 90,
@@ -3590,39 +3592,46 @@ fn build_request(values: &[(String, String)]) -> Result<RequestV1> {
 
 /// Resolves the caller's session label from the bound request values.
 ///
-/// The one supported mechanism: an `OSHIOKI_SESSION` entry from the
-/// invoking user's original environment, bound by the plugin under the
-/// `session.` prefix (distinct from `env.*`, which is the post-`env_reset`
-/// environment the command actually executes with — see `gather_context`
-/// in `plugin/src/lib.rs`). Documented in `docs/configuration.md`, along
-/// with recipes for setting it from a coding agent, tmux, or an ssh client.
+/// The one supported mechanism: a `VOUCH_SESSION` entry from the invoking
+/// user's original environment, bound by the plugin under the `session.`
+/// prefix (distinct from `env.*`, which is the post-`env_reset` environment
+/// the command actually executes with — see `gather_context` in
+/// `plugin/src/lib.rs`). Documented in `docs/configuration.md`, along with
+/// recipes for setting it from a coding agent, tmux, or an ssh client.
+///
+/// `session.OSHIOKI_SESSION` is still accepted for one release, for a plugin
+/// built before the rename; a `VOUCH_SESSION` binding wins when both are
+/// present and valid.
 ///
 /// `None` when absent, empty, or invalid; the agent's own fallbacks
 /// (`pid_chain`, then tty) apply in that case — see `session_name_for` in
 /// `agent/src/main.rs`.
-///
-/// The label is bounded and trimmed to satisfy `RequestV1::validate`; an
-/// overlong or empty result after trimming is treated as no match.
 fn session_label(values: &[(String, String)]) -> Option<String> {
-    let last_value = |key: &str| {
-        values
-            .iter()
-            .rev()
-            .find_map(|(candidate, value)| (candidate == key).then_some(value.as_str()))
-    };
-    last_value("session.OSHIOKI_SESSION").and_then(normalize_session_label)
+    last_bound_value(values, "session.VOUCH_SESSION")
+        .and_then(normalize_session_label)
+        .or_else(|| {
+            last_bound_value(values, "session.OSHIOKI_SESSION").and_then(normalize_session_label)
+        })
 }
 
-/// Bounds and trims a candidate session label to the limits
-/// `RequestV1::validate` enforces: at most 64 characters, no control
-/// characters, non-empty after trimming. Returns `None` rather than a
-/// truncated value, since a clipped label could misrepresent the session.
-fn normalize_session_label(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() || trimmed.chars().count() > 64 || trimmed.chars().any(char::is_control) {
-        return None;
-    }
-    Some(trimmed.to_owned())
+/// Resolves the agent's own reason for the request from the bound values.
+///
+/// Read only from `session.VOUCH_REASON`, the plugin's binding of
+/// `VOUCH_REASON` from the invoking user's original environment, exactly
+/// like the session label. `env.VOUCH_REASON` is the environment the command
+/// executes with and is never read as a reason. The value is display text:
+/// it is shown in the approval panel as the agent's unverified words and has
+/// no bearing on what is verified or run. Overlong, empty, or control
+/// character values yield `None` rather than a clipped sentence.
+fn reason_label(values: &[(String, String)]) -> Option<String> {
+    last_bound_value(values, "session.VOUCH_REASON").and_then(normalize_reason)
+}
+
+fn last_bound_value<'a>(values: &'a [(String, String)], key: &str) -> Option<&'a str> {
+    values
+        .iter()
+        .rev()
+        .find_map(|(candidate, value)| (candidate == key).then_some(value.as_str()))
 }
 
 fn build_synthetic_request() -> RequestV1 {
@@ -3647,6 +3656,7 @@ fn build_synthetic_request() -> RequestV1 {
         pid_chain: pid_chain(),
         env: vec![],
         session: None,
+        reason: None,
         issued_at,
         expires_at: issued_at + 90,
     }
@@ -6311,6 +6321,173 @@ mod tests {
             ("session.OSHIOKI_SESSION".into(), "second".into()),
         ];
         assert_eq!(session_label(&values), Some("second".into()));
+    }
+
+    /// `session.VOUCH_SESSION` is the binding a current plugin writes.
+    #[test]
+    fn session_label_reads_vouch_session() {
+        let values = vec![("session.VOUCH_SESSION".into(), "foh-hev-4".into())];
+        assert_eq!(session_label(&values), Some("foh-hev-4".into()));
+    }
+
+    /// For one release a plugin built before the rename still labels the
+    /// session, and the new name wins when both are bound.
+    #[test]
+    fn session_label_falls_back_to_oshioki_session_for_one_release() {
+        let legacy = vec![("session.OSHIOKI_SESSION".into(), "legacy".into())];
+        assert_eq!(session_label(&legacy), Some("legacy".into()));
+        let both = vec![
+            ("session.VOUCH_SESSION".into(), "current".into()),
+            ("session.OSHIOKI_SESSION".into(), "legacy".into()),
+        ];
+        assert_eq!(session_label(&both), Some("current".into()));
+        let invalid_current = vec![
+            ("session.VOUCH_SESSION".into(), "bad\u{0007}".into()),
+            ("session.OSHIOKI_SESSION".into(), "legacy".into()),
+        ];
+        assert_eq!(session_label(&invalid_current), Some("legacy".into()));
+    }
+
+    /// The reason is bound from `session.VOUCH_REASON`, the plugin's copy of
+    /// the caller's pre-`env_reset` environment.
+    #[test]
+    fn reason_label_reads_bound_session_prefix() {
+        let values = vec![(
+            "session.VOUCH_REASON".into(),
+            "  Reload the hevd launch daemon.  ".into(),
+        )];
+        assert_eq!(
+            reason_label(&values),
+            Some("Reload the hevd launch daemon.".into())
+        );
+    }
+
+    /// `env.VOUCH_REASON` is the environment the command runs with. A
+    /// command that sets it (or an `env_keep` that keeps it) must not put
+    /// words in the agent's mouth.
+    #[test]
+    fn reason_label_ignores_env_prefixed_vouch_reason() {
+        let values = vec![("env.VOUCH_REASON".into(), "not a reason".into())];
+        assert_eq!(reason_label(&values), None);
+    }
+
+    /// Overlong, empty, and control-character reasons are dropped whole,
+    /// never clipped or passed through.
+    #[test]
+    fn reason_label_rejects_overlong_and_control_characters() {
+        let bound = |value: String| vec![("session.VOUCH_REASON".to_owned(), value)];
+        assert_eq!(reason_label(&bound(String::new())), None);
+        assert_eq!(reason_label(&bound("   ".into())), None);
+        assert_eq!(
+            reason_label(&bound("x".repeat(vouch_protocol::MAX_REASON_CHARS + 1))),
+            None
+        );
+        assert_eq!(
+            reason_label(&bound("x".repeat(vouch_protocol::MAX_REASON_CHARS))),
+            Some("x".repeat(vouch_protocol::MAX_REASON_CHARS))
+        );
+        assert_eq!(reason_label(&bound("line one\nline two".into())), None);
+        assert_eq!(reason_label(&bound("\u{1b}[2Jclear".into())), None);
+    }
+
+    fn plugin_values_with(extra: &[(&str, &str)]) -> Vec<(String, String)> {
+        let mut values: Vec<(String, String)> = vec![
+            ("info.command".into(), "/bin/launchctl".into()),
+            ("argv.1".into(), "launchctl".into()),
+            ("argv.2".into(), "kickstart".into()),
+            ("env.PATH".into(), "/usr/bin".into()),
+            ("env.VOUCH_REASON".into(), "from the run environment".into()),
+            (
+                "meta.protocol_version".into(),
+                PRIVATE_PLUGIN_HOOK_PROTOCOL_VERSION.to_string(),
+            ),
+            ("meta.env_complete".into(), "1".into()),
+            ("meta.env_count".into(), "2".into()),
+        ];
+        values.extend(
+            extra
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned())),
+        );
+        values
+    }
+
+    /// The bound reason reaches the request, and `env.VOUCH_REASON` stays
+    /// where it was: in the signed execution environment, not the reason.
+    #[test]
+    fn build_request_carries_the_bound_reason_only() {
+        let request = build_request(&plugin_values_with(&[
+            ("session.VOUCH_SESSION", "foh-hev-4"),
+            ("session.VOUCH_REASON", "Reload hevd"),
+        ]))
+        .unwrap();
+        assert_eq!(request.session.as_deref(), Some("foh-hev-4"));
+        assert_eq!(request.reason.as_deref(), Some("Reload hevd"));
+        assert!(
+            request
+                .env
+                .iter()
+                .any(|entry| entry.name == "VOUCH_REASON" && entry.value == "from the run environment")
+        );
+
+        let without = build_request(&plugin_values_with(&[])).unwrap();
+        assert_eq!(without.reason, None);
+        let rejected = build_request(&plugin_values_with(&[(
+            "session.VOUCH_REASON",
+            "bell\u{0007}",
+        )]))
+        .unwrap();
+        assert_eq!(rejected.reason, None, "an invalid reason is dropped, not fatal");
+    }
+
+    /// A request in the 0.4.x shape (no `session`, no `reason`) is still
+    /// approved by a device signature over its exact bytes, and so is one
+    /// carrying a reason: the reason never enters the verification decision
+    /// beyond being part of the signed bytes.
+    #[tokio::test]
+    async fn requests_with_and_without_a_reason_verify() {
+        use p256::ecdsa::signature::Signer as _;
+        let (device, signing) = deny_test_device();
+        let directory = std::env::temp_dir().join(format!("vouch-reason-{}", Uuid::new_v4()));
+        write_registry_to(
+            &directory,
+            &DeviceRegistryV1 {
+                version: VERSION_V1,
+                devices: vec![device.clone()],
+            },
+        )
+        .unwrap();
+        let mut legacy = build_synthetic_request();
+        legacy.session = None;
+        legacy.reason = None;
+        let mut with_reason = legacy.clone();
+        with_reason.request_id = Uuid::new_v4().to_string();
+        with_reason.reason = Some("Install the libssl headers".into());
+        for request in [legacy, with_reason] {
+            let raw = request.raw_json().unwrap();
+            let text = String::from_utf8(raw.clone()).unwrap();
+            assert_eq!(text.contains("\"reason\""), request.reason.is_some(), "{text}");
+            let signature: p256::ecdsa::Signature =
+                signing.sign(&vouch_protocol::v1::approve_challenge(&raw));
+            let approval = DecisionV1::ApproveNative(vouch_protocol::ApproveNativeV1 {
+                version: VERSION_V1,
+                request_id: request.request_id.clone(),
+                device_fingerprint: device.fingerprint.clone(),
+                signature: URL_SAFE_NO_PAD.encode(signature.to_der().as_bytes()),
+            });
+            apply_decision(
+                approval,
+                DecisionLane::Nats,
+                &request,
+                &raw,
+                std::slice::from_ref(&device),
+                0,
+                &directory,
+            )
+            .await
+            .expect("a signed approval verifies with or without a reason");
+        }
+        fs::remove_dir_all(directory).unwrap();
     }
 
     /// `normalize_session_label` trims whitespace, rejects control

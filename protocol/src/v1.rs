@@ -28,6 +28,40 @@ pub const MAX_ENVELOPE_BYTES: usize = 3 * 1024 * 1024;
 /// shells can expose substantially more than the old 64-entry cap; the total
 /// request byte bound and per-entry bounds remain the limiting factors.
 pub const MAX_ENV_ENTRIES: usize = 4096;
+/// Longest session label a request may carry, in characters.
+pub const MAX_SESSION_CHARS: usize = 64;
+/// Longest display-only reason a request may carry, in characters. Long
+/// enough for a Claude Code Bash `description` or a short paragraph; the
+/// panel wraps it, and the Touch ID sheet never shows it.
+pub const MAX_REASON_CHARS: usize = 500;
+
+/// Trims a candidate session label and returns it when it fits
+/// [`RequestV1::validate`]: non-empty, at most [`MAX_SESSION_CHARS`]
+/// characters, no control characters. `None` rather than a clipped value,
+/// since a clipped label could name a different session.
+pub fn normalize_session_label(value: &str) -> Option<String> {
+    normalize_display_text(value, MAX_SESSION_CHARS)
+}
+
+/// Trims a candidate reason and returns it when it fits
+/// [`RequestV1::validate`]: non-empty, at most [`MAX_REASON_CHARS`]
+/// characters, no control characters (a newline included). `None` rather
+/// than a clipped value: an agent's sentence cut short can say something
+/// it did not.
+pub fn normalize_reason(value: &str) -> Option<String> {
+    normalize_display_text(value, MAX_REASON_CHARS)
+}
+
+fn normalize_display_text(value: &str, max_chars: usize) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty()
+        || trimmed.chars().count() > max_chars
+        || trimmed.chars().any(char::is_control)
+    {
+        return None;
+    }
+    Some(trimmed.to_owned())
+}
 /// The longest a request may be valid after it was issued. This is a
 /// receiver policy rather than part of structural decoding, so old callers
 /// that only need to inspect a request can keep using [`RequestV1::validate`].
@@ -130,6 +164,17 @@ pub struct RequestV1 {
     /// this protocol).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
+    /// The agent's own description of why it is asking, bound by the hook
+    /// from `VOUCH_REASON` in the invoking user's original environment (the
+    /// sudo plugin carries it as `session.VOUCH_REASON`, beside the session
+    /// label). Display only: it is shown in the approval panel, labelled as
+    /// the agent's unverified words, and it never decides what is verified
+    /// or executed. At most [`MAX_REASON_CHARS`] characters, no control
+    /// characters. Absent serializes to nothing, so a request from a 0.4.x
+    /// hook that never sets it is byte-identical to before and still
+    /// verifies; a decoder that predates it ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
     pub issued_at: i64,
     pub expires_at: i64,
 }
@@ -163,6 +208,9 @@ impl RequestV1 {
                 .session
                 .as_ref()
                 .is_some_and(|session| session.is_empty() || session.chars().count() > 64)
+            || self.reason.as_ref().is_some_and(|reason| {
+                reason.is_empty() || reason.chars().count() > MAX_REASON_CHARS
+            })
         {
             return Err(Error::InvalidRequest("invalid request field size".into()));
         }
@@ -173,6 +221,15 @@ impl RequestV1 {
         {
             return Err(Error::InvalidRequest(
                 "session label contains control characters".into(),
+            ));
+        }
+        if self
+            .reason
+            .as_ref()
+            .is_some_and(|reason| reason.chars().any(char::is_control))
+        {
+            return Err(Error::InvalidRequest(
+                "reason contains control characters".into(),
             ));
         }
         Ok(())
@@ -923,6 +980,7 @@ mod tests {
             pid_chain: vec![],
             env: vec![],
             session: None,
+            reason: None,
             issued_at: 1_000,
             expires_at: 1_090,
         }
@@ -1045,6 +1103,50 @@ mod tests {
         let decoded: PreSessionRequestV1 = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.version, VERSION_V1);
         assert_eq!(decoded.request_id, "req-1");
+    }
+
+    /// `reason` is optional in both directions: a request from a 0.4.x hook
+    /// has none and its bytes are unchanged, and a present reason
+    /// round-trips exactly.
+    #[test]
+    fn reason_round_trips_and_is_absent_by_default() {
+        let mut request = minimal_request();
+        let without = serde_json::to_string(&request).unwrap();
+        assert!(!without.contains("\"reason\""), "{without}");
+        request.reason = Some("Reload the hevd daemon".into());
+        let with_reason = serde_json::to_string(&request).unwrap();
+        let loaded: RequestV1 = serde_json::from_str(&with_reason).unwrap();
+        assert_eq!(loaded.reason, request.reason);
+        loaded.validate().unwrap();
+        // A decoder that predates the field drops it and still validates.
+        let mut value: serde_json::Value = serde_json::from_str(&with_reason).unwrap();
+        value.as_object_mut().unwrap().remove("reason");
+        assert_eq!(serde_json::to_string(&value).unwrap().len(), without.len());
+    }
+
+    #[test]
+    fn reason_has_bounds() {
+        let mut request = minimal_request();
+        request.reason = Some(String::new());
+        assert!(request.validate().is_err());
+        request.reason = Some("x".repeat(MAX_REASON_CHARS + 1));
+        assert!(request.validate().is_err());
+        request.reason = Some("x".repeat(MAX_REASON_CHARS));
+        request.validate().unwrap();
+        request.reason = Some("two\nlines".into());
+        assert!(request.validate().is_err());
+        request.reason = Some("bell\u{0007}".into());
+        assert!(request.validate().is_err());
+    }
+
+    #[test]
+    fn display_text_normalizers_trim_and_refuse() {
+        assert_eq!(normalize_reason("  why  "), Some("why".into()));
+        assert_eq!(normalize_reason("   "), None);
+        assert_eq!(normalize_reason(&"x".repeat(MAX_REASON_CHARS + 1)), None);
+        assert_eq!(normalize_reason("a\u{1b}[31m"), None);
+        assert_eq!(normalize_session_label(&"x".repeat(65)), None);
+        assert_eq!(normalize_session_label(" foh-hev-4 "), Some("foh-hev-4".into()));
     }
 
     #[test]

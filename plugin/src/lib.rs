@@ -194,13 +194,20 @@ struct OpenState {
     /// runs with" — it is a label, sourced from bytes the executed command
     /// never sees.
     session_env: Option<String>,
+    /// The agent's own reason, from `VOUCH_REASON` in the same `submit_envp`
+    /// and for the same reason kept apart from `env.*`: it is display text,
+    /// never part of the environment the command runs with.
+    reason_env: Option<String>,
 }
 
-/// The one environment variable this plugin reads out of the invoking
-/// user's original environment to label a session. Kept as a single-item
-/// list (rather than a bare constant) so a future label source can be added
-/// here without reshaping the extraction helper.
-const SESSION_ENV_VARS: &[&str] = &["OSHIOKI_SESSION"];
+/// The environment variables this plugin reads out of the invoking user's
+/// original environment to label a session, in order of preference.
+/// `OSHIOKI_SESSION` is accepted for one release after the rename to vouch,
+/// so shells that still export the old name keep their label.
+const SESSION_ENV_VARS: &[&str] = &["VOUCH_SESSION", "OSHIOKI_SESSION"];
+
+/// The environment variable carrying the agent's own reason for a request.
+const REASON_ENV_VAR: &str = "VOUCH_REASON";
 
 /// Capture the invoking identity for the following one-shot approval check.
 ///
@@ -260,6 +267,7 @@ unsafe fn capture_open_state(
         // every sudo invocation from that environment.
         let submit_envp = unsafe { parse_sudo_env_lenient(submit_envp) };
         let session_env = extract_session_env(&submit_envp);
+        let reason_env = extract_reason_env(&submit_envp);
         if !has_required_identity(&user_info) {
             return Some(false);
         }
@@ -270,6 +278,7 @@ unsafe fn capture_open_state(
             user_info,
             noninteractive,
             session_env,
+            reason_env,
         });
         Some(true)
     });
@@ -352,6 +361,7 @@ unsafe fn gather_context_after_open(
             run_envp,
             &state.user_info,
             state.session_env.as_deref(),
+            state.reason_env.as_deref(),
             state.noninteractive,
         )
     }
@@ -380,23 +390,23 @@ fn has_required_identity(info: &[(String, String)]) -> bool {
 /// yield `None`; the last matching entry wins, matching how every other
 /// sudo array in this plugin is read.
 fn extract_session_env(envp: &[(String, String)]) -> Option<String> {
-    for name in SESSION_ENV_VARS {
-        let value = envp
-            .iter()
-            .rev()
-            .find_map(|(key, value)| (key == name).then_some(value.as_str()));
-        if let Some(value) = value {
-            let trimmed = value.trim();
-            if trimmed.is_empty()
-                || trimmed.chars().count() > 64
-                || trimmed.chars().any(char::is_control)
-            {
-                continue;
-            }
-            return Some(trimmed.to_owned());
-        }
-    }
-    None
+    SESSION_ENV_VARS.iter().find_map(|name| {
+        last_env_value(envp, name).and_then(vouch_protocol::normalize_session_label)
+    })
+}
+
+/// Pull the agent's reason out of `submit_envp`. Bounded to the limits
+/// `RequestV1::validate` enforces for `reason` (see
+/// `vouch_protocol::MAX_REASON_CHARS`), with control characters refused, so
+/// an invalid value is dropped here instead of failing the request later.
+fn extract_reason_env(envp: &[(String, String)]) -> Option<String> {
+    last_env_value(envp, REASON_ENV_VAR).and_then(vouch_protocol::normalize_reason)
+}
+
+fn last_env_value<'a>(envp: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    envp.iter()
+        .rev()
+        .find_map(|(key, value)| (key == name).then_some(value.as_str()))
 }
 
 /// Collect all sudo arrays into a single payload we can pipe to the hook.
@@ -413,6 +423,7 @@ unsafe fn gather_context(
     run_envp: *const *const c_char,
     user_info: &[(String, String)],
     session_env: Option<&str>,
+    reason_env: Option<&str>,
     noninteractive: bool,
 ) -> Option<SudoContext> {
     // SAFETY: command_info, run_argv, and run_envp are valid NUL-terminated
@@ -457,7 +468,12 @@ unsafe fn gather_context(
     // prefixes would let a display-only label masquerade as part of the
     // authenticated execution environment.
     if let Some(value) = session_env {
-        push_kv(&mut payload, "session.", "OSHIOKI_SESSION", value);
+        push_kv(&mut payload, "session.", "VOUCH_SESSION", value);
+    }
+    // The reason travels the same way and for the same reason: it is the
+    // agent's description, shown to the approver and never executed.
+    if let Some(value) = reason_env {
+        push_kv(&mut payload, "session.", "VOUCH_REASON", value);
     }
     // These markers are part of the private plugin-to-hook framing, not the
     // v1 request wire format. Both sides require the version and environment
@@ -2235,6 +2251,7 @@ mod tests {
                 envp_ptrs.as_ptr(),
                 &user_info,
                 session_env,
+                None,
                 false,
             )
         }
@@ -2677,7 +2694,7 @@ mod tests {
     fn extract_session_env_reads_present_value() {
         let envp = vec![
             ("PATH".to_owned(), "/usr/bin".to_owned()),
-            ("OSHIOKI_SESSION".to_owned(), "claude-1b".to_owned()),
+            ("VOUCH_SESSION".to_owned(), "claude-1b".to_owned()),
         ];
         assert_eq!(extract_session_env(&envp), Some("claude-1b".into()));
     }
@@ -2690,40 +2707,95 @@ mod tests {
 
     #[test]
     fn extract_session_env_empty_value_yields_none() {
-        let envp = vec![("OSHIOKI_SESSION".to_owned(), String::new())];
+        let envp = vec![("VOUCH_SESSION".to_owned(), String::new())];
         assert_eq!(extract_session_env(&envp), None);
     }
 
     #[test]
     fn extract_session_env_overlong_value_yields_none() {
-        let envp = vec![("OSHIOKI_SESSION".to_owned(), "x".repeat(65))];
+        let envp = vec![("VOUCH_SESSION".to_owned(), "x".repeat(65))];
         assert_eq!(extract_session_env(&envp), None);
     }
 
     #[test]
     fn extract_session_env_rejects_control_characters() {
-        let envp = vec![("OSHIOKI_SESSION".to_owned(), "bad\u{0007}name".to_owned())];
+        let envp = vec![("VOUCH_SESSION".to_owned(), "bad\u{0007}name".to_owned())];
         assert_eq!(extract_session_env(&envp), None);
     }
 
     #[test]
     fn extract_session_env_trims_whitespace() {
-        let envp = vec![("OSHIOKI_SESSION".to_owned(), "  claude  ".to_owned())];
+        let envp = vec![("VOUCH_SESSION".to_owned(), "  claude  ".to_owned())];
         assert_eq!(extract_session_env(&envp), Some("claude".into()));
     }
 
     #[test]
     fn extract_session_env_last_value_wins_on_duplicate() {
         let envp = vec![
-            ("OSHIOKI_SESSION".to_owned(), "first".to_owned()),
-            ("OSHIOKI_SESSION".to_owned(), "second".to_owned()),
+            ("VOUCH_SESSION".to_owned(), "first".to_owned()),
+            ("VOUCH_SESSION".to_owned(), "second".to_owned()),
         ];
         assert_eq!(extract_session_env(&envp), Some("second".into()));
     }
 
+    #[test]
+    fn extract_session_env_accepts_oshioki_session_for_one_release() {
+        let envp = vec![("OSHIOKI_SESSION".to_owned(), "legacy".to_owned())];
+        assert_eq!(extract_session_env(&envp), Some("legacy".into()));
+        let both = vec![
+            ("OSHIOKI_SESSION".to_owned(), "legacy".to_owned()),
+            ("VOUCH_SESSION".to_owned(), "current".to_owned()),
+        ];
+        assert_eq!(extract_session_env(&both), Some("current".into()));
+    }
+
+    #[test]
+    fn extract_reason_env_reads_bounds_and_refuses() {
+        let envp = |value: &str| vec![("VOUCH_REASON".to_owned(), value.to_owned())];
+        assert_eq!(
+            extract_reason_env(&envp("  Reload hevd  ")),
+            Some("Reload hevd".into())
+        );
+        assert_eq!(extract_reason_env(&envp("")), None);
+        assert_eq!(extract_reason_env(&envp("two\nlines")), None);
+        assert_eq!(
+            extract_reason_env(&envp(&"x".repeat(vouch_protocol::MAX_REASON_CHARS + 1))),
+            None
+        );
+        assert_eq!(extract_reason_env(&[]), None);
+    }
+
+    #[test]
+    fn gather_context_writes_the_reason_under_the_session_prefix() {
+        let (_command_info_strings, command_info_ptrs) = c_array(&[b"command=/bin/true"]);
+        let (_argv_strings, argv_ptrs) = c_array(&[b"/bin/true"]);
+        let (_envp_strings, envp_ptrs) = c_array(&[b"PATH=/usr/bin"]);
+        let user_info = vec![
+            ("user".to_owned(), "approvalcaller".to_owned()),
+            ("uid".to_owned(), "12345".to_owned()),
+        ];
+        // SAFETY: Each pointer array is NUL-terminated and its C strings live
+        // for the duration of the call.
+        let context = unsafe {
+            gather_context(
+                command_info_ptrs.as_ptr(),
+                argv_ptrs.as_ptr(),
+                envp_ptrs.as_ptr(),
+                &user_info,
+                None,
+                Some("Reload hevd"),
+                false,
+            )
+        }
+        .expect("context");
+        let payload = String::from_utf8(context.payload).unwrap();
+        assert!(payload.contains("session.VOUCH_REASON=Reload hevd\n"), "{payload}");
+        assert!(!payload.contains("env.VOUCH_REASON"), "{payload}");
+    }
+
     // -----------------------------------------------------------------
     // open() -> check() threading: the session label captured from
-    // submit_envp in open() must reach the payload as session.OSHIOKI_SESSION,
+    // submit_envp in open() must reach the payload as session.VOUCH_SESSION,
     // completely separately from run_envp's env.* entries.
     // -----------------------------------------------------------------
 
@@ -2734,7 +2806,7 @@ mod tests {
         assert_eq!(
             capture_test_open_with_envp(
                 &[b"user=approvalcaller", b"uid=12345"],
-                &[b"OSHIOKI_SESSION=claude-1b", b"PATH=/usr/bin"],
+                &[b"VOUCH_SESSION=claude-1b", b"PATH=/usr/bin"],
             ),
             SUDO_RC_OK
         );
@@ -2747,10 +2819,10 @@ mod tests {
         .expect("captured identity must yield a context");
 
         let payload = String::from_utf8(context.payload).unwrap();
-        assert!(payload.contains("session.OSHIOKI_SESSION=claude-1b\n"));
-        // submit_envp's OSHIOKI_SESSION must never leak into env.* — only
+        assert!(payload.contains("session.VOUCH_SESSION=claude-1b\n"));
+        // submit_envp's VOUCH_SESSION must never leak into env.* — only
         // run_envp's (post-env_reset) entries go there.
-        assert!(!payload.contains("env.OSHIOKI_SESSION"));
+        assert!(!payload.contains("env.VOUCH_SESSION"));
     }
 
     #[test]
@@ -2780,7 +2852,7 @@ mod tests {
     fn open_with_overlong_session_env_omits_session_prefix() {
         let _serial = identity_test();
 
-        let overlong = format!("OSHIOKI_SESSION={}", "x".repeat(65));
+        let overlong = format!("VOUCH_SESSION={}", "x".repeat(65));
         assert_eq!(
             capture_test_open_with_envp(
                 &[b"user=approvalcaller", b"uid=12345"],
@@ -2811,7 +2883,7 @@ mod tests {
                 &[b"user=approvalcaller", b"uid=12345"],
                 &[
                     b"CI_COMMIT_MESSAGE=subject\n\nbody line",
-                    b"OSHIOKI_SESSION=claude-1b",
+                    b"VOUCH_SESSION=claude-1b",
                     b"PATH=/usr/bin",
                 ],
             ),
@@ -2826,7 +2898,7 @@ mod tests {
         .expect("captured identity must yield a context");
 
         let payload = String::from_utf8(context.payload).unwrap();
-        assert!(payload.contains("session.OSHIOKI_SESSION=claude-1b\n"));
+        assert!(payload.contains("session.VOUCH_SESSION=claude-1b\n"));
         assert!(!payload.contains("CI_COMMIT_MESSAGE"));
     }
 
@@ -2837,7 +2909,7 @@ mod tests {
         assert_eq!(
             capture_test_open_with_envp(
                 &[b"user=approvalcaller", b"uid=12345"],
-                &[b"OSHIOKI_SESSION=claude\n1b", b"PATH=/usr/bin"],
+                &[b"VOUCH_SESSION=claude\n1b", b"PATH=/usr/bin"],
             ),
             SUDO_RC_OK
         );
@@ -2863,7 +2935,7 @@ mod tests {
                 &[
                     b"LATIN1=caf\xe9",
                     b"NO_SEPARATOR",
-                    b"OSHIOKI_SESSION=claude-1b",
+                    b"VOUCH_SESSION=claude-1b",
                 ],
             ),
             SUDO_RC_OK
@@ -2877,7 +2949,7 @@ mod tests {
         .expect("captured identity must yield a context");
 
         let payload = String::from_utf8(context.payload).unwrap();
-        assert!(payload.contains("session.OSHIOKI_SESSION=claude-1b\n"));
+        assert!(payload.contains("session.VOUCH_SESSION=claude-1b\n"));
     }
 
     #[test]
@@ -2890,7 +2962,7 @@ mod tests {
         )
         .expect("valid sudo arrays must yield a context");
         let payload = String::from_utf8(context.payload).unwrap();
-        assert!(payload.contains("session.OSHIOKI_SESSION=claude-1b\n"));
+        assert!(payload.contains("session.VOUCH_SESSION=claude-1b\n"));
     }
 
     #[cfg(target_os = "linux")]

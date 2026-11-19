@@ -56,7 +56,8 @@ pub use v1::{
     MAX_REQUEST_LIFETIME_SECS, NativeEnrollmentSubmissionV1, PRIVATE_PLUGIN_HOOK_PROTOCOL_VERSION,
     RequestEnvelopeV1, RequestV1, SealedDeviceBodyV1, VERSION_V1, WebauthnEnrollmentSubmissionV1,
     approve_challenge, decode_base64url, deny_challenge, device_fingerprint, encode_base64url,
-    is_approval_env, seal_v1, unseal_v1, verify_deny_v1,
+    MAX_REASON_CHARS, MAX_SESSION_CHARS, is_approval_env, normalize_reason, normalize_session_label,
+    seal_v1, unseal_v1, verify_deny_v1,
 };
 pub use webauthn_v1::{AssertionOutcomeV1, verify_approval_v1};
 

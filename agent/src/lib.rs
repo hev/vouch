@@ -976,6 +976,7 @@ mod tests {
             pid_chain: vec![],
             env: vec![],
             session: None,
+            reason: None,
             issued_at: 1_000,
             expires_at: 1_090,
         }

@@ -825,6 +825,7 @@ mod tests {
             pid_chain: vec![],
             env: vec![],
             session: None,
+            reason: None,
             issued_at: NOW,
             expires_at: NOW + 60,
         };
