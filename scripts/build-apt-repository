@@ -17,7 +17,7 @@ die() {
 }
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-REPOSITORY="${GITHUB_REPOSITORY:-epsalmond/oshioki}"
+REPOSITORY="${GITHUB_REPOSITORY:-hev/vouch}"
 OUTPUT_DIR=
 SIGNING_KEY=
 FINGERPRINT=

@@ -154,6 +154,11 @@ consumer filters after restart. See the [compatibility contract](docs/compatibil
 
 ## Maintain the apt repository
 
+Vouch does not publish an apt repository yet; the release workflow is
+switched off until `VOUCH_RELEASES_ENABLED` is set (see
+[release and recovery](docs/releases.md#publishing-is-off)). The rest of this
+section applies once it is.
+
 Set the repository's Actions secret `APT_SIGNING_PRIVATE_KEY` to the
 ASCII-armored export of the repository signing subkey, with no usable primary
 private key. Set Actions variable `APT_SIGNING_KEY_FINGERPRINT` to the full

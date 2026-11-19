@@ -1,24 +1,21 @@
 # Release signing policy
 
-The prospective signing checkpoint is Vouch **v0.4.1**. New commits and
-annotated release tags use cryptographic signatures; existing history and
-older unsigned tags remain unchanged.
+Release tags are verified against `allowed_signers` on reviewed `main` by
+`scripts/verify-release-tag`. **No release signer is configured yet.** The
+file is empty on purpose: upstream Oshioki's signer was removed when this
+repository became Vouch, and an empty policy makes the verifier reject every
+tag. Releases are also switched off in `release.yml` (see
+[the release guide](../../docs/releases.md#publishing-is-off)).
 
-Eric Psalmond's release signer is pinned in `allowed_signers`:
+To set up releases:
 
-- Principal: `epsalmond@gmail.com`
-- SSH ED25519 fingerprint: `SHA256:TzhZQs7IkRk41Y1UxiNVZfLRJBO8MMAte5YEhQHmfdw`
-- Namespace: `git`
-
-The key is public only. Its private half stays on the maintainer's signing
-host and is never supplied to Actions. GitHub web-flow signatures on reviewed
-merge commits are separate from the release tag signer.
-
-Approve this fingerprint independently before merging the checkpoint. The
-release verifier uses the committed policy from fetched `origin/main`, not a
-key supplied by the tag or an environment-selected trust file. This trusts
-the canonical repository's reviewed main branch and its governance; a
-signed tag carrying its own key would not establish first trust. Record the
-merged checkpoint SHA and signed tag-object SHA with release evidence.
+1. Generate or choose an SSH signing key for Adam's release host. Keep the
+   private half there; it never goes to Actions.
+2. Add one line to `allowed_signers` through a reviewed PR:
+   `<principal> namespaces="git" ssh-ed25519 AAAA...`
+   and record the principal and `SHA256:` fingerprint in this file.
+3. Approve the fingerprint independently before merging. The verifier trusts
+   the committed policy on fetched `origin/main`, never a key carried by the
+   tag or supplied through the environment.
 
 Rotation and emergency recovery are in [the release guide](../../docs/releases.md).

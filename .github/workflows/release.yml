@@ -20,7 +20,13 @@ permissions:
   contents: read
 
 jobs:
+  # Publishing is off until Adam sets up a release signer and an apt key for
+  # hev/vouch. Every other job needs this one, so nothing builds, releases
+  # or deploys the apt repository unless the repository is hev/vouch and the
+  # VOUCH_RELEASES_ENABLED repository variable is "true". This repository
+  # never publishes to upstream Oshioki's releases, tap or apt repository.
   gate:
+    if: ${{ github.repository == 'hev/vouch' && vars.VOUCH_RELEASES_ENABLED == 'true' }}
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -216,8 +222,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           scripts/test-compat-release-selection
-          tag="$(scripts/select-compat-previous-release)"
-          echo "VOUCH_COMPAT_PREV_TAG=$tag" >> "$GITHUB_ENV"
+          # hev/vouch has no published releases yet. Until it does, fall back
+          # to the newest tag that is not HEAD (the last Oshioki release),
+          # which is what test-compat-upgrade picks when no tag is given.
+          if [ -n "$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName --jq '.[].tagName')" ]; then
+            tag="$(scripts/select-compat-previous-release)"
+            echo "VOUCH_COMPAT_PREV_TAG=$tag" >> "$GITHUB_ENV"
+          else
+            echo "no published release on $GITHUB_REPOSITORY; test-compat-upgrade uses the newest tag" >> "$GITHUB_STEP_SUMMARY"
+          fi
       - run: cargo test --workspace --locked
       - run: scripts/test-nats-lane-upgrade
       - run: scripts/test-compat-upgrade

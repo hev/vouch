@@ -194,7 +194,7 @@ when unpublished tags exist. This operator override requires an existing
 version tag pointing to a different commit; it does not enforce GitHub
 publication or ancestry. Without an override, the upgrade script selects the
 newest local tag pointing to a different commit. To use CI's published-release
-policy locally, export `GITHUB_REPOSITORY=epsalmond/oshioki` and run
+policy locally, export `GITHUB_REPOSITORY=hev/vouch` and run
 `tag="$(scripts/select-compat-previous-release)" && VOUCH_COMPAT_PREV_TAG="$tag" scripts/test-compat-upgrade`.
 
 `scripts/test-compat-upgrade` keeps the previous-release hook waiting while

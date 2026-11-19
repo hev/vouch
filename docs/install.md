@@ -5,10 +5,11 @@ The browser login helper can be used on its own; it does not require sudo setup.
 
 ## macOS
 
-Apple Silicon packages are available through Homebrew:
+Vouch has no Homebrew tap yet. Build and install from a checkout on an
+Apple Silicon Mac:
 
 ```sh
-# Vouch has no Homebrew tap yet; from a checkout:
+git clone https://github.com/hev/vouch && cd vouch
 scripts/vouch-laptop-setup --local
 ```
 
@@ -22,16 +23,9 @@ unlocked login keychain.
 
 ## Debian or Ubuntu
 
-Configure the signed [apt repository](apt-repository.md), then install with
-apt:
-
-```sh
-sudo apt update
-sudo apt install vouch
-```
-
-For a one-time install without configuring the repository, download the amd64
-`.deb` built with `packaging/build-deb` (Vouch publishes no releases yet), then:
+Vouch publishes no releases or [apt repository](apt-repository.md) yet.
+Build the amd64 `.deb` with `packaging/build-deb` (the release workflow's
+`build-deb` job shows the steps), then:
 
 ```sh
 sudo apt install ./vouch_X.Y.Z_amd64.deb

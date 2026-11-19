@@ -167,7 +167,7 @@ grep -q 'provenance source identity mismatch' "$TEST_ROOT/wrong-source.log"
 cp "$TEST_ROOT/original-provenance.asc" "$TEST_ROOT/assets/PROVENANCE-0.4.2.asc"
 
 # Editing signed provenance is rejected even when the JSON is still valid.
-sed 's/"repository": "epsalmond\/vouch"/"repository": "attacker\/vouch"/' \
+sed 's/"repository": "hev\/vouch"/"repository": "attacker\/vouch"/' \
   "$TEST_ROOT/original-provenance.asc" >"$TEST_ROOT/assets/PROVENANCE-0.4.2.asc"
 if "$BUILD_REPOSITORY" --releases-json "$TEST_ROOT/releases.json" \
   --output-dir "$TEST_ROOT/repository-tampered-provenance" \

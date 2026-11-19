@@ -70,16 +70,67 @@ trap cleanup EXIT
 git fetch --tags --force >/dev/null 2>&1 || true
 git worktree add --detach "$PREV_SRC" "$PREV_TAG"
 
+# Releases up to v0.5.1 were published as Oshioki: the packages, binaries,
+# environment variables and config.env keys use that name. The prefix is read
+# from the tagged source rather than the version, so either spelling works.
+side_prefix() {
+  local src="$1"
+  if grep -q '^name = "oshioki-hook"$' "$src/hook/Cargo.toml"; then
+    echo oshioki
+  else
+    echo vouch
+  fi
+}
+
+# An Oshioki-era binary is installed under the vouch name behind a small
+# wrapper that copies each VOUCH_* variable to its OSHIOKI_* spelling, so the
+# rest of this script (and test-browser-local) can drive both sides alike.
+# exec keeps the PID, so the kill/wait bookkeeping below is unchanged.
+install_side_binary() {
+  local prefix="$1" built="$2" dest="$3"
+  if [ "$prefix" = vouch ]; then
+    install -m 0755 "$built" "$dest"
+    return
+  fi
+  install -m 0755 "$built" "$dest.oshioki"
+  cat >"$dest" <<'WRAPPER'
+#!/usr/bin/env bash
+for name in $(compgen -e); do
+  case "$name" in
+    VOUCH_*) export "OSHIOKI_${name#VOUCH_}=${!name}" ;;
+  esac
+done
+exec "$0.oshioki" "$@"
+WRAPPER
+  chmod 0755 "$dest"
+}
+
 build_side() {
-  local src="$1" dest="$2" target="${3:-$1/target}"
+  local src="$1" dest="$2" target="${3:-$1/target}" prefix
+  prefix="$(side_prefix "$src")"
   mkdir -p "$dest"
   cargo build --manifest-path "$src/Cargo.toml" --locked --release \
-    --target-dir "$target" -p vouch-hook -p vouch-server
+    --target-dir "$target" -p "$prefix-hook" -p "$prefix-server"
   cargo build --manifest-path "$src/Cargo.toml" --locked --release \
-    -p vouch-agent --features unattended --target-dir "$target/unattended"
-  install -m 0755 "$target/release/vouch" "$dest/vouch"
-  install -m 0755 "$target/release/vouch-server" "$dest/vouch-server"
-  install -m 0755 "$target/unattended/release/vouch-agent" "$dest/vouch-agent"
+    -p "$prefix-agent" --features unattended --target-dir "$target/unattended"
+  install_side_binary "$prefix" "$target/release/$prefix" "$dest/vouch"
+  install_side_binary "$prefix" "$target/release/$prefix-server" "$dest/vouch-server"
+  install_side_binary "$prefix" "$target/unattended/release/$prefix-agent" "$dest/vouch-agent"
+}
+
+# config.env is read by both sides; each reads only its own spelling of a key
+# and ignores the other.
+write_config_env() {
+  local file="$1"
+  shift
+  : >"$file"
+  local entry
+  for entry in "$@"; do
+    printf '%s\n' "$entry" >>"$file"
+    case "$entry" in
+      VOUCH_*) printf 'OSHIOKI_%s\n' "${entry#VOUCH_}" >>"$file" ;;
+    esac
+  done
 }
 
 echo "building $PREV_TAG"
@@ -152,7 +203,7 @@ run_socket_pair() {
   fingerprint="$("$agent_bin" show --state "$agent_state" | head -n1)"
   printf '{"version":1,"origin":"https://sudo.test","rp_id":"sudo.test","server_base_url":"https://sudo.test"}\n' \
     >"$hook_dir/hook.json"
-  printf 'VOUCH_AGENT_SOCKET=%s\n' "$agent_state/agent.sock" >"$hook_dir/config.env"
+  write_config_env "$hook_dir/config.env" "VOUCH_AGENT_SOCKET=$agent_state/agent.sock"
   printf '{"version":1,"devices":[]}\n' >"$hook_dir/devices.json"
   chmod 0600 "$hook_dir"/*
   printf '%s\n' "$fingerprint" | VOUCH_CONFIG_DIR="$hook_dir" "$hook_bin" pin-record "$state/device.json"
@@ -185,7 +236,7 @@ install -d -m 0700 "$upgrade_state/agent" "$upgrade_state/hook"
 fingerprint="$("$PREV_BIN/vouch-agent" show --state "$upgrade_state/agent" | head -n1)"
 printf '{"version":1,"origin":"https://sudo.test","rp_id":"sudo.test","server_base_url":"https://sudo.test"}\n' \
   >"$upgrade_state/hook/hook.json"
-printf 'VOUCH_AGENT_SOCKET=%s\n' "$upgrade_state/agent/agent.sock" >"$upgrade_state/hook/config.env"
+write_config_env "$upgrade_state/hook/config.env" "VOUCH_AGENT_SOCKET=$upgrade_state/agent/agent.sock"
 printf '{"version":1,"devices":[]}\n' >"$upgrade_state/hook/devices.json"
 chmod 0600 "$upgrade_state/hook"/*
 printf '%s\n' "$fingerprint" | VOUCH_CONFIG_DIR="$upgrade_state/hook" \
@@ -451,8 +502,8 @@ install -d -m 0700 "$SERVER_DIR" "$AGENT_STATE" "$HOOK_DIR"
 fingerprint="$("$PREV_BIN/vouch-agent" show --state "$AGENT_STATE" | head -n1)"
 printf '{"version":1,"origin":"https://sudo.test","rp_id":"sudo.test","server_base_url":"https://sudo.test"}\n' \
   >"$HOOK_DIR/hook.json"
-printf 'NATS_URL=%s\nNATS_USER=vouch\nNATS_PASS=test-only\nVOUCH_ALLOW_PLAINTEXT_NATS=1\n' \
-  "$NATS_URL" >"$HOOK_DIR/config.env"
+write_config_env "$HOOK_DIR/config.env" "NATS_URL=$NATS_URL" NATS_USER=vouch \
+  NATS_PASS=test-only VOUCH_ALLOW_PLAINTEXT_NATS=1
 printf '{"version":1,"devices":[]}\n' >"$HOOK_DIR/devices.json"
 chmod 0600 "$HOOK_DIR"/*
 printf '%s\n' "$fingerprint" | VOUCH_CONFIG_DIR="$HOOK_DIR" \

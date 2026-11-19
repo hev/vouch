@@ -39,7 +39,7 @@ scripts/vouch-laptop-setup --local
 Retry any approval interrupted by the restart.
 
 Privileged hook, plugin, and PAM updates still require the setup step above;
-automating those components is tracked in [#48](https://github.com/epsalmond/oshioki/issues/48).
+they are not automated yet.
 Use the setup mode you originally chose: omit `--local` for server-backed
 laptop setup. An existing PAM installation stays on PAM. Ordinary re-runs
 preserve the agent's configured NATS credentials; `--reconfigure` replaces them.

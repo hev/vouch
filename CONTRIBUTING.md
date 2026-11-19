@@ -1,5 +1,10 @@
 # Develop Vouch
 
+Vouch is maintained by Adam Hevenor at
+[github.com/hev/vouch](https://github.com/hev/vouch). Open issues and pull
+requests there, against `main`. Report vulnerabilities privately as
+described in [SECURITY.md](SECURITY.md), not in an issue.
+
 Use Rust through rustup (the checkout pins its toolchain), Node.js/npm for
 browser tests, and Python 3 for setup tests. Linux needs `libpam0g-dev`.
 Docker with Compose is required for the full end-to-end suite; `nats-server`
@@ -73,9 +78,9 @@ scripts/test-browser-relay-package /path/to/vouch-browser-relay /path/to/SHA256S
 
 This checks the shipped helper's hash, commands, private key creation, and
 the extracted gcloud/service setup tools' hashes and CLI help without
-contacting Google or asking for Touch ID. The separate Homebrew tap installs
-the setup tools when the release archive contains them; its formula test
-requires their manifest entries and checks their hashes and CLI help.
+contacting Google or asking for Touch ID. Vouch has no Homebrew tap yet, and
+the release workflow is off until a release signer is configured (see
+[release and recovery](docs/releases.md#publishing-is-off)).
 
 ## Supervised acceptance
 

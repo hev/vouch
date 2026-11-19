@@ -43,7 +43,7 @@ def process(mode, key, fingerprint, identity_path, *paths):
             assets = pathlib.Path(paths[0])
             version = identity["version"]
             names = [f"vouch_{version}_amd64.deb", f"vouch-macos-arm64-{version}.tar.gz", "SHA256SUMS"]
-            manifest = {**identity, "repository": "epsalmond/oshioki",
+            manifest = {**identity, "repository": "hev/vouch",
                         "sha256": {name: digest(assets / name) for name in names}}
             unsigned = home / "provenance.json"
             unsigned.write_text(json.dumps(manifest, sort_keys=True, indent=2) + "\n")
@@ -60,7 +60,7 @@ def process(mode, key, fingerprint, identity_path, *paths):
             require(len(valid) == 1 and fingerprint in (valid[0][2], valid[0][-1]), "provenance signer mismatch")
             manifest = json.loads(unsigned.read_text())
             require(all(manifest.get(name) == value for name, value in identity.items()), "provenance source identity mismatch")
-            require(manifest.get("repository") == "epsalmond/oshioki", "provenance repository mismatch")
+            require(manifest.get("repository") == "hev/vouch", "provenance repository mismatch")
             hashes = manifest["sha256"]
             require(package.name == f"vouch_{identity['version']}_amd64.deb", "package filename mismatch")
             require(hashes.get(package.name) == digest(package), "provenance package hash mismatch")

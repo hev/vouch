@@ -1,9 +1,17 @@
 # Debian and Ubuntu apt repository
 
-Configure apt to install and update Vouch from
-`https://epsalmond.github.io/vouch`.
+> **Not published yet.** Vouch has no apt repository or archive signing key
+> yet, and the release workflow's publishing jobs are switched off (see
+> [releases](releases.md#publishing-is-off)). Until then, build the `.deb`
+> yourself as described in [installation](install.md#debian-or-ubuntu). The
+> steps below describe the repository as it will work once it exists, at
+> `https://hev.github.io/vouch`. Replace `ARCHIVE_FINGERPRINT` with the
+> published key's fingerprint at that point.
 
-Published archive signing fingerprint: **AA93668ABF0040387C7EB51C1632F50E2226409D**.
+Configure apt to install and update Vouch from
+`https://hev.github.io/vouch`.
+
+Published archive signing fingerprint: **ARCHIVE_FINGERPRINT** (not yet issued).
 
 ## Install
 
@@ -16,9 +24,9 @@ published fingerprint:
   set -e
   keyring_tmp="$(mktemp)"
   trap 'rm -f "$keyring_tmp"' EXIT
-  expected_fingerprint='AA93668ABF0040387C7EB51C1632F50E2226409D'
+  expected_fingerprint='ARCHIVE_FINGERPRINT'
   curl --fail --show-error --silent --location \
-    https://epsalmond.github.io/vouch/vouch-archive-keyring.gpg \
+    https://hev.github.io/vouch/vouch-archive-keyring.gpg \
     --output "$keyring_tmp"
   gpg --show-keys --with-fingerprint "$keyring_tmp"
   keyring_info="$(gpg --show-keys --with-colons "$keyring_tmp")"
@@ -41,7 +49,7 @@ Vouch repository:
 
 ```sh
 printf '%s\n' \
-  'deb [arch=amd64 signed-by=/etc/apt/keyrings/vouch-archive-keyring.gpg] https://epsalmond.github.io/vouch stable main' \
+  'deb [arch=amd64 signed-by=/etc/apt/keyrings/vouch-archive-keyring.gpg] https://hev.github.io/vouch stable main' \
   | sudo tee /etc/apt/sources.list.d/vouch.list >/dev/null
 sudo apt update
 sudo apt install vouch

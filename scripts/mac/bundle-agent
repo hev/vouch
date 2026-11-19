@@ -93,42 +93,16 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# The icon is what the sheet shows next to the name. A renderer is preferred
-# so the icns always tracks the SVG, but assets/Vouch.icns is checked in as
-# the last resort: a builder with no renderer (a CI image where qlmanage
-# cannot reach a window server, say) would otherwise ship a logo-less bundle.
-icon_source="$ROOT/assets/vouch.svg"
-png="$(mktemp -d)/vouch.png"
-rendered=false
-if command -v rsvg-convert >/dev/null 2>&1; then
-  rsvg-convert -w 1024 -h 1024 "$icon_source" -o "$png" && rendered=true
-elif command -v qlmanage >/dev/null 2>&1; then
-  # qlmanage writes <name>.png into the output directory it is given.
-  if qlmanage -t -s 1024 -o "$(dirname "$png")" "$icon_source" >/dev/null 2>&1 \
-    && [ -f "$(dirname "$png")/vouch.svg.png" ]; then
-    mv "$(dirname "$png")/vouch.svg.png" "$png"
-    rendered=true
-  fi
-fi
-
+# The icon is what the sheet shows next to the name. assets/Vouch.icns is
+# checked in, already scaled with nearest-neighbour from assets/vouch-1024.png
+# (the icon is pixel art, and sips/iconutil would smooth it), so it is copied
+# as is rather than rendered here.
 icns="$APP/Contents/Resources/Vouch.icns"
-if [ "$rendered" = true ]; then
-  iconset="$(dirname "$png")/Vouch.iconset"
-  mkdir -p "$iconset"
-  for size in 16 32 128 256 512; do
-    sips -z "$size" "$size" "$png" --out "$iconset/icon_${size}x${size}.png" >/dev/null
-    sips -z $((size * 2)) $((size * 2)) "$png" \
-      --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
-  done
-  iconutil -c icns "$iconset" -o "$icns"
-  echo "icon: rendered from $icon_source" >&2
-elif [ -f "$ROOT/assets/Vouch.icns" ]; then
+if [ -f "$ROOT/assets/Vouch.icns" ]; then
   install -m 0644 "$ROOT/assets/Vouch.icns" "$icns"
-  echo "icon: no SVG renderer here, using the checked-in assets/Vouch.icns" >&2
 else
-  echo "note: no SVG renderer and no assets/Vouch.icns, so the sheet shows the name without the logo" >&2
+  echo "note: no assets/Vouch.icns, so the sheet shows the name without the logo" >&2
 fi
-rm -rf "$(dirname "$png")"
 
 # Touch the bundle so Launch Services notices a rebuilt app at the same path.
 touch "$APP"
