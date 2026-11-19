@@ -17,7 +17,7 @@ import tempfile
 from unittest import mock
 
 
-SOURCE = Path(__file__).resolve().with_name("oshioki-phone-setup")
+SOURCE = Path(__file__).resolve().with_name("vouch-phone-setup")
 LOADER = importlib.machinery.SourceFileLoader("phone_upgrade", str(SOURCE))
 SPEC = importlib.util.spec_from_loader("phone_upgrade", LOADER)
 assert SPEC and SPEC.loader
@@ -42,7 +42,7 @@ RECORD = {
 
 def main() -> None:
     hook = Path(sys.argv[1]).resolve(strict=True)
-    with tempfile.TemporaryDirectory(prefix="oshioki-registry-upgrade-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="vouch-registry-upgrade-") as temporary:
         root = Path(temporary)
         config = root / "config"
         config.mkdir(mode=0o700)
@@ -51,7 +51,7 @@ def main() -> None:
         record.chmod(0o600)
         environment = {
             **os.environ,
-            "OSHIOKI_CONFIG_DIR": str(config),
+            "VOUCH_CONFIG_DIR": str(config),
             "HOME": str(root),
             "XDG_CONFIG_HOME": str(root / "xdg"),
             "CODEX_HOME": str(root / "codex"),

@@ -15,9 +15,9 @@ from unittest.mock import patch
 
 
 FIXTURE_PATH = Path(sys.argv.pop(1) if len(sys.argv) > 1 else
-                    Path(__file__).with_name("test-oshioki-laptop-setup"))
+                    Path(__file__).with_name("test-vouch-laptop-setup"))
 SOURCE = FIXTURE_PATH.read_text()
-SETUP_SOURCE = FIXTURE_PATH.with_name("oshioki-laptop-setup").read_text()
+SETUP_SOURCE = FIXTURE_PATH.with_name("vouch-laptop-setup").read_text()
 WRAPPER = re.search(r"pty_wrap=\(python3 -c '(.*?)'\)", SOURCE, re.S).group(1)
 # Exercise the actual wrapper, shortening only its deadline for this regression.
 TIMEOUT_WRAPPER = WRAPPER.replace("signal.alarm(30)", "signal.alarm(1)")
@@ -25,9 +25,9 @@ LAUNCHCTL = re.search(r'cat > "\$TEST_ROOT/fake-bin/launchctl" <<\x27SH\x27\n(.*
                      SOURCE, re.S).group(1)
 FIXTURE_ROOT = ("# Under /tmp:" + SOURCE.split("# Under /tmp:", 1)[1].split("# Every bootstrap", 1)[0])
 # Keep the actual B2 assertions: accepting an alias must not accept another keg.
-KEG_ASSERTIONS = SOURCE.split('grep -Fq "installed $KEG/bin/oshioki"', 1)[1].split(
+KEG_ASSERTIONS = SOURCE.split('grep -Fq "installed $KEG/bin/vouch"', 1)[1].split(
     "\n# ... and a readlink", 1)[0]
-KEG_ASSERTIONS = 'grep -Fq "installed $KEG/bin/oshioki"' + KEG_ASSERTIONS
+KEG_ASSERTIONS = 'grep -Fq "installed $KEG/bin/vouch"' + KEG_ASSERTIONS
 CLEANUP = re.search(r'(stop_holders\(\) \{.*?\n\})', SOURCE, re.S).group(1)
 LOCAL_PREPARATION = SOURCE.split("# Scenario E:", 1)[1].split("reset_sudo_ticket", 1)[0]
 LOCAL_PREPARATION = "# Scenario E:" + LOCAL_PREPARATION
@@ -67,8 +67,8 @@ def kill_group(pgid):
 
 class FixturePathTests(unittest.TestCase):
     def test_local_autostart_ignores_inherited_launchagents_dir(self):
-        with tempfile.TemporaryDirectory(prefix="oshioki-inherited-plist-", dir="/tmp") as inherited:
-            outside = Path(inherited) / "com.oshioki.agent.plist"
+        with tempfile.TemporaryDirectory(prefix="vouch-inherited-plist-", dir="/tmp") as inherited:
+            outside = Path(inherited) / "com.hev.vouch.agent.plist"
             original = plistlib.dumps({"ProgramArguments": ["/outside-fixture/agent", "run"]})
             outside.write_bytes(original)
             outside.chmod(0o600)
@@ -81,11 +81,11 @@ class FixturePathTests(unittest.TestCase):
                     self.assertEqual(list(Path(inherited).iterdir()), [outside])
 
     def test_fresh_local_scenario_replaces_prior_nats_autostart(self):
-        with tempfile.TemporaryDirectory(prefix="oshioki-local-plist-", dir="/tmp") as root:
+        with tempfile.TemporaryDirectory(prefix="vouch-local-plist-", dir="/tmp") as root:
             root = Path(root)
-            state = root / "home/.config/oshioki"
+            state = root / "home/.config/vouch"
             state.mkdir(parents=True)
-            plist = root / "home/Library/LaunchAgents/com.oshioki.agent.plist"
+            plist = root / "home/Library/LaunchAgents/com.hev.vouch.agent.plist"
             plist.parent.mkdir(parents=True)
             # This is the preceding server-mode fixture's retained config,
             # matching the Mac log's preservation message in scenario E.
@@ -93,8 +93,8 @@ class FixturePathTests(unittest.TestCase):
                 "ProgramArguments": ["/prior/agent", "run"],
                 "EnvironmentVariables": {"NATS_URL": "nats://prior.test:4222",
                                          "NATS_USER": "prior-agent", "NATS_PASS": "prior-secret",
-                                         "OSHIOKI_AGENT_SOCKET": str(state / "agent.sock"),
-                                         "OSHIOKI_AGENT_STATE": str(state)},
+                                         "VOUCH_AGENT_SOCKET": str(state / "agent.sock"),
+                                         "VOUCH_AGENT_STATE": str(state)},
             }))
             launchctl = root / "launchctl"
             launchctl.write_text('''#!/usr/bin/env bash
@@ -113,9 +113,9 @@ fi
             env = dict(os.environ, TEST_ROOT=str(root), HOME=str(root / "home"),
                        LAUNCHAGENTS_DIR=str(plist.parent),
                        AGENT_STATE=str(state), AGENT_SOCKET_V=str(state / "agent.sock"),
-                       AGENT_BIN="/new/agent", LABEL="com.oshioki.agent", RECONFIGURE="0",
+                       AGENT_BIN="/new/agent", LABEL="com.hev.vouch.agent", RECONFIGURE="0",
                        NATS_USER_V="", LAUNCHCTL=str(launchctl), PLUTIL=str(plutil),
-                       OSHIOKI_AGENT_NATS_VERIFY_TIMEOUT="1")
+                       VOUCH_AGENT_NATS_VERIFY_TIMEOUT="1")
             helpers = ('set -euo pipefail\ninfo() { echo "$*" >&2; }\n'
                        'die() { echo "$*" >&2; exit 1; }\n'
                        'stable_keg_path() { printf "%s\\n" "$1"; }\n')
@@ -135,7 +135,7 @@ fi
                     launched = plistlib.loads((root / "launched.plist").read_bytes())
                     self.assertEqual(launched["ProgramArguments"], ["/new/agent", "run"])
                     configured = launched["EnvironmentVariables"]
-                    self.assertEqual(configured["OSHIOKI_AGENT_SOCKET"], env["AGENT_SOCKET_V"])
+                    self.assertEqual(configured["VOUCH_AGENT_SOCKET"], env["AGENT_SOCKET_V"])
                     if staged:
                         self.assertEqual(configured["NATS_URL"], env["AGENT_NATS_URL_V"])
                         self.assertEqual(configured["NATS_USER"], env["AGENT_NATS_USER_V"])
@@ -148,7 +148,7 @@ fi
     def test_symlinked_temp_parent_keeps_exact_keg_checks(self):
         # Model Darwin's /tmp -> /private/tmp on every host. Spaces also catch
         # accidental word splitting when canonicalizing the fixture root.
-        with tempfile.TemporaryDirectory(prefix="oshioki-path-alias-", dir="/tmp") as root:
+        with tempfile.TemporaryDirectory(prefix="vouch-path-alias-", dir="/tmp") as root:
             parent = Path(root)
             physical = parent / "private tmp"
             physical.mkdir()
@@ -160,10 +160,10 @@ fi
                     keg = fixture / "keg/0.1.8"
                     (keg / "bin").mkdir(parents=True)
                     (keg / "libexec").mkdir()
-                    hook = keg / "bin/oshioki"
+                    hook = keg / "bin/vouch"
                     manifest = keg / "libexec/SHA256SUMS"
                     if wrong == "hook":
-                        hook = fixture / "keg/brew-bin/oshioki"
+                        hook = fixture / "keg/brew-bin/vouch"
                     if wrong == "manifest":
                         manifest = fixture / "keg/0.1.9/libexec/SHA256SUMS"
                     (fixture / "keg.log").write_text("installed " + str(hook.resolve()) + "\n")
@@ -244,7 +244,7 @@ finally:
             report["reused_fd_open"] = False
 Path(report_path).write_text(json.dumps(report))
 '''
-        with tempfile.TemporaryDirectory(prefix="oshioki-pty-reap-", dir="/tmp") as root:
+        with tempfile.TemporaryDirectory(prefix="vouch-pty-reap-", dir="/tmp") as root:
             root = Path(root)
             wrapper = root / "wrapper.py"
             wrapper.write_text(WRAPPER)
@@ -266,7 +266,7 @@ Path(report_path).write_text(json.dumps(report))
                         self.assertTrue(report["reused_fd_open"], report)
 
     def test_pty_timeout_terminates_owned_child_and_group(self):
-        with tempfile.TemporaryDirectory(prefix="oshioki-pty-cleanup-", dir="/tmp") as root:
+        with tempfile.TemporaryDirectory(prefix="vouch-pty-cleanup-", dir="/tmp") as root:
             root = Path(root)
             child = root / "child.py"
             pid_file = root / "pids"
@@ -324,7 +324,7 @@ time.sleep(60)
         self.assertEqual(result.stderr, b"")
 
     def test_delayed_writer_cannot_outlive_stop_holders(self):
-        with tempfile.TemporaryDirectory(prefix="oshioki-helper-cleanup-", dir="/tmp") as root:
+        with tempfile.TemporaryDirectory(prefix="vouch-helper-cleanup-", dir="/tmp") as root:
             root = Path(root)
             fake = root / "launchctl"
             fake.write_text(LAUNCHCTL + "\n")

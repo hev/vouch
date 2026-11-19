@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-HOOK_CONFIG_DIR="${OSHIOKI_TEST_CONFIG_DIR:?set OSHIOKI_TEST_CONFIG_DIR}"
+HOOK_CONFIG_DIR="${VOUCH_TEST_CONFIG_DIR:?set VOUCH_TEST_CONFIG_DIR}"
 STATE_ROOT="${HOOK_CONFIG_DIR%/hook}"
-HOST_UID="${OSHIOKI_HOST_UID:?set OSHIOKI_HOST_UID}"
-TLS_ROOT=/tmp/oshioki-e2e-tls
+HOST_UID="${VOUCH_HOST_UID:?set VOUCH_HOST_UID}"
+TLS_ROOT=/tmp/vouch-e2e-tls
 case "$HOST_UID" in
   ''|*[!0-9]*) echo "invalid host UID: $HOST_UID" >&2; exit 2 ;;
 esac
@@ -46,10 +46,10 @@ mkdir -p "$HOOK_CONFIG_DIR" "$TLS_ROOT"
 chmod 0700 "$HOOK_CONFIG_DIR"
 
 printf '{"version":1,"origin":"%s","rp_id":"%s","server_base_url":"%s"}\n' \
-  "$OSHIOKI_ORIGIN" "$OSHIOKI_RP_ID" "$OSHIOKI_ORIGIN" \
+  "$VOUCH_ORIGIN" "$VOUCH_RP_ID" "$VOUCH_ORIGIN" \
   >"$HOOK_CONFIG_DIR/hook.json"
-printf 'NATS_URL=%s\nNATS_USER=%s\nNATS_PASS=%s\nOSHIOKI_ALLOW_PLAINTEXT_NATS=%s\n' \
-  "$NATS_URL" "$NATS_USER" "$NATS_PASS" "${OSHIOKI_ALLOW_PLAINTEXT_NATS:-1}" \
+printf 'NATS_URL=%s\nNATS_USER=%s\nNATS_PASS=%s\nVOUCH_ALLOW_PLAINTEXT_NATS=%s\n' \
+  "$NATS_URL" "$NATS_USER" "$NATS_PASS" "${VOUCH_ALLOW_PLAINTEXT_NATS:-1}" \
   >"$HOOK_CONFIG_DIR/config.env"
 printf '{"version":1,"devices":[]}\n' >"$HOOK_CONFIG_DIR/devices.json"
 chmod 0600 "$HOOK_CONFIG_DIR"/*.json "$HOOK_CONFIG_DIR/config.env"
@@ -57,14 +57,14 @@ chmod 0600 "$HOOK_CONFIG_DIR"/*.json "$HOOK_CONFIG_DIR/config.env"
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
   -subj /CN=sudo.test -addext subjectAltName=DNS:sudo.test \
   -keyout "$TLS_ROOT/key.pem" -out "$TLS_ROOT/cert.pem" >/dev/null 2>&1
-export OSHIOKI_TLS_KEY="$TLS_ROOT/key.pem"
-export OSHIOKI_TLS_CERT="$TLS_ROOT/cert.pem"
-export OSHIOKI_HTTPS_PORT=443
+export VOUCH_TLS_KEY="$TLS_ROOT/key.pem"
+export VOUCH_TLS_CERT="$TLS_ROOT/cert.pem"
+export VOUCH_HTTPS_PORT=443
 # `enroll` confirms an activation by reading the device back from the server
 # over HTTPS, so the hook's curl needs the origin name and the throwaway CA.
 # A container does not resolve its own Compose network alias, and every TLS
 # listener here binds loopback.
-export CURL_CA_BUNDLE="$OSHIOKI_TLS_CERT"
+export CURL_CA_BUNDLE="$VOUCH_TLS_CERT"
 grep -q 'sudo\.test$' /etc/hosts || printf '127.0.0.1 sudo.test\n' >>/etc/hosts
 
 cd /work/server/web
@@ -72,15 +72,15 @@ npm run test:e2e
 
 # --- native agent phase -------------------------------------------------
 AGENT_STATE="$STATE_ROOT/agent"
-AGENT_LOG=/tmp/oshioki-agent.log
-ENROLL_LOG=/tmp/oshioki-enroll.log
-HOOK_BIN=/work/target/release/oshioki
+AGENT_LOG=/tmp/vouch-agent.log
+ENROLL_LOG=/tmp/vouch-enroll.log
+HOOK_BIN=/work/target/release/vouch
 # Built with `--features unattended` for `run --auto`; kept apart from
 # target/release so that directory still matches its SHA256SUMS.
-AGENT_BIN=/work/target/unattended/oshioki-agent
+AGENT_BIN=/work/target/unattended/vouch-agent
 rm -rf "$AGENT_STATE"
 install -d -m 0700 "$AGENT_STATE"
-export OSHIOKI_CONFIG_DIR="$HOOK_CONFIG_DIR"
+export VOUCH_CONFIG_DIR="$HOOK_CONFIG_DIR"
 
 # Polls a log for a line matching an extended regex, up to 30 seconds.
 wait_for_line() {
@@ -134,7 +134,7 @@ enrollment_url="$(grep -Eom1 'https://sudo\.test(:[0-9]+)?/enroll/[0-9a-f-]+#[A-
 "$AGENT_BIN" pair "$enrollment_url" --label native-e2e --state "$AGENT_STATE"
 wait_for_line "$ENROLL_LOG" '^Device enrolled: '
 if ! wait "$enroll_pid"; then
-  echo "oshioki enroll failed" >&2
+  echo "vouch enroll failed" >&2
   cat "$ENROLL_LOG" >&2
   cat "$PROXY_LOG" >&2
   exit 1
@@ -190,24 +190,24 @@ cp "$HOOK_CONFIG_DIR/config.env" "$HOOK_CONFIG_DIR/hook.json" "$PIN_CONFIG_DIR/"
 printf '{"version":1,"devices":[]}\n' >"$PIN_CONFIG_DIR/devices.json"
 chmod 0600 "$PIN_CONFIG_DIR"/*.json "$PIN_CONFIG_DIR/config.env"
 if ! printf '%s\n' "$fingerprint" \
-  | OSHIOKI_CONFIG_DIR="$PIN_CONFIG_DIR" "$HOOK_BIN" pin "$fingerprint"; then
+  | VOUCH_CONFIG_DIR="$PIN_CONFIG_DIR" "$HOOK_BIN" pin "$fingerprint"; then
   echo "pin rejected the software native record" >&2
   cat "$PROXY_LOG" >&2
   exit 1
 fi
-if ! OSHIOKI_CONFIG_DIR="$PIN_CONFIG_DIR" "$HOOK_BIN" status \
+if ! VOUCH_CONFIG_DIR="$PIN_CONFIG_DIR" "$HOOK_BIN" status \
   | grep -Fq "$fingerprint  native-e2e  kind=software  active=true"; then
   echo "pinned software native record missing from status" >&2
   exit 1
 fi
 stop_background
 printf 'pin accepted the software native record: %s\n' "$fingerprint"
-unset OSHIOKI_CONFIG_DIR
+unset VOUCH_CONFIG_DIR
 
 cd /work
-OSHIOKI_E2E_IN_CONTAINER=1 \
-OSHIOKI_E2E_SKIP_BUILD=1 \
-OSHIOKI_E2E_PREBUILT=1 \
+VOUCH_E2E_IN_CONTAINER=1 \
+VOUCH_E2E_SKIP_BUILD=1 \
+VOUCH_E2E_PREBUILT=1 \
   scripts/test-sudo-plugin-container
 
 printf 'compose e2e passed; state root: %s\n' "$STATE_ROOT"

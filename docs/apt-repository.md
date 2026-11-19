@@ -1,7 +1,7 @@
 # Debian and Ubuntu apt repository
 
-Configure apt to install and update Oshioki from
-`https://epsalmond.github.io/oshioki`.
+Configure apt to install and update Vouch from
+`https://epsalmond.github.io/vouch`.
 
 Published archive signing fingerprint: **AA93668ABF0040387C7EB51C1632F50E2226409D**.
 
@@ -18,7 +18,7 @@ published fingerprint:
   trap 'rm -f "$keyring_tmp"' EXIT
   expected_fingerprint='AA93668ABF0040387C7EB51C1632F50E2226409D'
   curl --fail --show-error --silent --location \
-    https://epsalmond.github.io/oshioki/oshioki-archive-keyring.gpg \
+    https://epsalmond.github.io/vouch/vouch-archive-keyring.gpg \
     --output "$keyring_tmp"
   gpg --show-keys --with-fingerprint "$keyring_tmp"
   keyring_info="$(gpg --show-keys --with-colons "$keyring_tmp")"
@@ -27,24 +27,24 @@ published fingerprint:
   actual_fingerprint="$(printf '%s\n' "$keyring_info" \
     | awk -F: '$1 == "fpr" { print toupper($10); exit }')"
   if [ "$public_key_count" != 1 ] || [ "$actual_fingerprint" != "$expected_fingerprint" ]; then
-    echo 'Oshioki archive key must contain exactly one public key matching the published fingerprint.' >&2
+    echo 'Vouch archive key must contain exactly one public key matching the published fingerprint.' >&2
     exit 1
   fi
   sudo install -d -m 0755 /etc/apt/keyrings
   sudo install -m 0644 "$keyring_tmp" \
-    /etc/apt/keyrings/oshioki-archive-keyring.gpg
+    /etc/apt/keyrings/vouch-archive-keyring.gpg
 )
 ```
 
 Add the repository with `Signed-By` so this key is trusted only for the
-Oshioki repository:
+Vouch repository:
 
 ```sh
 printf '%s\n' \
-  'deb [arch=amd64 signed-by=/etc/apt/keyrings/oshioki-archive-keyring.gpg] https://epsalmond.github.io/oshioki stable main' \
-  | sudo tee /etc/apt/sources.list.d/oshioki.list >/dev/null
+  'deb [arch=amd64 signed-by=/etc/apt/keyrings/vouch-archive-keyring.gpg] https://epsalmond.github.io/vouch stable main' \
+  | sudo tee /etc/apt/sources.list.d/vouch.list >/dev/null
 sudo apt update
-sudo apt install oshioki
+sudo apt install vouch
 ```
 
 For package updates, follow [update and restore](update.md#debian-or-ubuntu).

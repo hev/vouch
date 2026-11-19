@@ -20,8 +20,8 @@ def run(*args, cwd=None, check=True):
 def commit_version(repo, version):
     (repo / "Cargo.toml").write_text('[workspace]\nmembers = ["test"]\n[workspace.package]\nversion = "' + version + '"\n')
     (repo / "test").mkdir(exist_ok=True)
-    (repo / "test/Cargo.toml").write_text('[package]\nname = "oshioki-test"\nversion.workspace = true\n')
-    (repo / "Cargo.lock").write_text('version = 3\n[[package]]\nname = "oshioki-test"\nversion = "' + version + '"\n')
+    (repo / "test/Cargo.toml").write_text('[package]\nname = "vouch-test"\nversion.workspace = true\n')
+    (repo / "Cargo.lock").write_text('version = 3\n[[package]]\nname = "vouch-test"\nversion = "' + version + '"\n')
     run("git", "add", ".", cwd=repo)
     run("git", "commit", "--no-gpg-sign", "-m", "fixture " + version, cwd=repo)
     run("git", "update-ref", "refs/remotes/origin/main", "HEAD", cwd=repo)
@@ -53,7 +53,7 @@ def make_source(directory):
 
 class ReleaseTagTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="oshioki-signing-test-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="vouch-signing-test-")
         self.addCleanup(self.temporary.cleanup)
         self.directory = pathlib.Path(self.temporary.name)
         self.repo, self.key = make_source(self.directory)
@@ -144,7 +144,7 @@ class ReleaseTagTests(unittest.TestCase):
         self.verify()
 
     def test_lockfile_version(self):
-        (self.repo / "Cargo.lock").write_text('version = 3\n[[package]]\nname = "oshioki-test"\nversion = "0.4.0"\n')
+        (self.repo / "Cargo.lock").write_text('version = 3\n[[package]]\nname = "vouch-test"\nversion = "0.4.0"\n')
         run("git", "add", ".", cwd=self.repo)
         run("git", "commit", "--no-gpg-sign", "-m", "wrong lockfile", cwd=self.repo)
         run("git", "update-ref", "refs/remotes/origin/main", "HEAD", cwd=self.repo)

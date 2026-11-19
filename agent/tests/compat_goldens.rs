@@ -1,10 +1,10 @@
 //! Frozen previous-release identity files. Regenerate with
-//! `OSHIOKI_WRITE_COMPAT_GOLDENS=1 cargo test -p oshioki-agent --test compat_goldens`.
+//! `VOUCH_WRITE_COMPAT_GOLDENS=1 cargo test -p vouch-agent --test compat_goldens`.
 
 use std::{fs, os::unix::fs::PermissionsExt as _, path::PathBuf};
 
-use oshioki_agent::{Identity, secret_store::MemoryStore};
-use oshioki_protocol::{VERSION_V1, encode_base64url};
+use vouch_agent::{Identity, secret_store::MemoryStore};
+use vouch_protocol::{VERSION_V1, encode_base64url};
 
 fn goldens_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/compat/goldens")
@@ -23,13 +23,13 @@ fn a_legacy_identity_golden_migrates_without_changing_the_fingerprint() {
     });
     let pretty = serde_json::to_string_pretty(&generated).unwrap() + "\n";
     let path = goldens_dir().join("identity-legacy.json");
-    if std::env::var_os("OSHIOKI_WRITE_COMPAT_GOLDENS").is_some() {
+    if std::env::var_os("VOUCH_WRITE_COMPAT_GOLDENS").is_some() {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, &pretty).unwrap();
     } else {
         let stored = fs::read_to_string(&path).unwrap_or_else(|error| {
             panic!(
-                "missing {}: {error}; regenerate with OSHIOKI_WRITE_COMPAT_GOLDENS=1",
+                "missing {}: {error}; regenerate with VOUCH_WRITE_COMPAT_GOLDENS=1",
                 path.display()
             )
         });
@@ -37,7 +37,7 @@ fn a_legacy_identity_golden_migrates_without_changing_the_fingerprint() {
     }
 
     let dir = std::env::temp_dir().join(format!(
-        "oshioki-compat-identity-{}-{}",
+        "vouch-compat-identity-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

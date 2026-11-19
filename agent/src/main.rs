@@ -1,4 +1,4 @@
-//! `oshioki-agent`: pairs a native device with a host and answers sudo
+//! `vouch-agent`: pairs a native device with a host and answers sudo
 //! requests over NATS and a local Unix socket. NATS is optional at runtime:
 //! without it the agent answers socket requests only.
 //!
@@ -22,8 +22,8 @@ use anyhow::{Context as _, Result, bail};
 use clap::ValueEnum;
 use clap::{CommandFactory as _, Parser, Subcommand};
 use futures::StreamExt as _;
-use oshioki_agent::{Identity, OpenedRequest, SignerKind, parse_enrollment_url, remaining_until};
-use oshioki_protocol::{
+use vouch_agent::{Identity, OpenedRequest, SignerKind, parse_enrollment_url, remaining_until};
+use vouch_protocol::{
     ALLOW_PLAINTEXT_NATS_ENV, AUTH_ENVELOPE_TYPE, ActivationV1, AliveV1, AuthDecisionV1,
     AuthEnvelopeV1, AuthInvocationV1, AuthRequestV1, DecisionV1, DeviceKindV1, OpenedAuthRequestV1,
     RequestEnvelopeV1, allow_plaintext_nats, check_nats_url, escape_for_terminal, nats_url_is_tls,
@@ -45,7 +45,7 @@ const MAX_IN_FLIGHT_REQUESTS: usize = 8;
 /// window, while bounding memory if a publisher sends many unique IDs.
 const MAX_SEEN_REQUEST_IDS: usize = 1024;
 const SEEN_REQUEST_RETENTION: Duration = Duration::from_secs(
-    (oshioki_protocol::MAX_REQUEST_LIFETIME_SECS + oshioki_protocol::MAX_REQUEST_ISSUANCE_SKEW_SECS)
+    (vouch_protocol::MAX_REQUEST_LIFETIME_SECS + vouch_protocol::MAX_REQUEST_ISSUANCE_SKEW_SECS)
         as u64,
 );
 /// A connected socket peer must deliver its complete frame promptly; without
@@ -280,13 +280,13 @@ fn payload_hash(raw: &[u8]) -> [u8; 32] {
 
 #[derive(Parser)]
 #[command(
-    name = "oshioki-agent",
+    name = "vouch-agent",
     version,
-    about = "Run a native Oshioki approval agent"
+    about = "Run a native Vouch approval agent"
 )]
 struct Cli {
-    /// Directory holding the agent identity (default: `$OSHIOKI_AGENT_STATE`,
-    /// then ~/.config/oshioki).
+    /// Directory holding the agent identity (default: `$VOUCH_AGENT_STATE`,
+    /// then ~/.config/vouch).
     #[arg(long, global = true)]
     state: Option<PathBuf>,
     #[command(subcommand)]
@@ -295,9 +295,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Verb {
-    /// Enroll this device with a host using the URL printed by `oshioki enroll`.
+    /// Enroll this device with a host using the URL printed by `vouch enroll`.
     Pair {
-        /// Enrollment URL printed by `oshioki enroll`.
+        /// Enrollment URL printed by `vouch enroll`.
         #[arg(value_name = "ENROLLMENT_URL", allow_hyphen_values = true)]
         enrollment_url: String,
         /// Label shown on the host's device list.
@@ -458,11 +458,11 @@ fn state_dir(flag: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(dir) = flag {
         return Ok(dir);
     }
-    if let Some(dir) = std::env::var_os("OSHIOKI_AGENT_STATE") {
+    if let Some(dir) = std::env::var_os("VOUCH_AGENT_STATE") {
         return Ok(PathBuf::from(dir));
     }
     let home = std::env::var_os("HOME").context("HOME is not set")?;
-    Ok(PathBuf::from(home).join(".config").join("oshioki"))
+    Ok(PathBuf::from(home).join(".config").join("vouch"))
 }
 
 /// Loads the identity, creating one on first use. One identity serves every
@@ -480,7 +480,7 @@ struct Pairing {
 fn load_or_create(path: &std::path::Path, pairing: &Pairing) -> Result<Identity> {
     #[cfg(target_os = "macos")]
     {
-        let store = oshioki_agent::secret_store::KeychainStore::oshioki();
+        let store = vouch_agent::secret_store::KeychainStore::vouch();
         load_or_create_with(path, pairing, &store)
     }
     #[cfg(not(target_os = "macos"))]
@@ -495,12 +495,12 @@ fn load_or_create(path: &std::path::Path, pairing: &Pairing) -> Result<Identity>
 }
 
 /// The macOS pairing flow, and every platform's tests, through an explicit
-/// secret store. See `oshioki_agent::Identity::load_with`.
+/// secret store. See `vouch_agent::Identity::load_with`.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn load_or_create_with(
     path: &std::path::Path,
     pairing: &Pairing,
-    store: &dyn oshioki_agent::secret_store::SecretStore,
+    store: &dyn vouch_agent::secret_store::SecretStore,
 ) -> Result<Identity> {
     if path.exists() && !pairing.force {
         // One identity serves every host this device pairs with, so an
@@ -571,8 +571,8 @@ fn remove_old_secret(path: &std::path::Path) {
         let Some(reference) = file.get("box_secret_ref").and_then(|value| value.as_str()) else {
             return;
         };
-        let store = oshioki_agent::secret_store::KeychainStore::oshioki();
-        if let Err(error) = oshioki_agent::secret_store::SecretStore::remove(&store, reference) {
+        let store = vouch_agent::secret_store::KeychainStore::vouch();
+        if let Err(error) = vouch_agent::secret_store::SecretStore::remove(&store, reference) {
             warn!(path = %path.display(), error = %format!("{error:#}"), "kept the replaced identity's keychain entry");
         }
     }
@@ -592,8 +592,8 @@ async fn cmd_pair(
     let identity = load_or_create(identity_path, &pairing)?;
     let native = identity.enrollment_submission(&enrollment_id, &secret, label)?;
     let submission = match identity.signer_kind() {
-        SignerKind::Software => oshioki_protocol::EnrollmentSubmissionV1::Software(native),
-        SignerKind::Enclave => oshioki_protocol::EnrollmentSubmissionV1::SecureEnclave(native),
+        SignerKind::Software => vouch_protocol::EnrollmentSubmissionV1::Software(native),
+        SignerKind::Enclave => vouch_protocol::EnrollmentSubmissionV1::SecureEnclave(native),
     };
     let nats = connect_nats().await?;
     let mut activations = nats
@@ -636,7 +636,7 @@ async fn cmd_run(
     let identity = Arc::new(Identity::load(identity_path)?);
     // Bind before subscribing so a second instance fails fast instead of
     // double-prompting behind the first one.
-    let socket_path = socket_path(identity_path, std::env::var_os("OSHIOKI_AGENT_SOCKET"))?;
+    let socket_path = socket_path(identity_path, std::env::var_os("VOUCH_AGENT_SOCKET"))?;
     let socket = bind_socket(&socket_path)?;
     info!(
         path = %socket_path.display(),
@@ -1354,7 +1354,7 @@ fn native_decider(identity: &Arc<Identity>) -> Option<Decider> {
     }
     info!("approvals are the Touch ID sheet; nothing is read from stdin");
     Some(Decider::TouchId(
-        oshioki_agent::touchid::TouchIdPrompt::new(
+        vouch_agent::touchid::TouchIdPrompt::new(
             Box::new(mac::Screen),
             Arc::new(mac::Canceller(Arc::clone(identity))),
         ),
@@ -1370,7 +1370,7 @@ fn native_decider(_identity: &Arc<Identity>) -> Option<Decider> {
 /// Publishes one decision and says so in the log.
 async fn publish(
     nats: &async_nats::Client,
-    request: &oshioki_protocol::RequestV1,
+    request: &vouch_protocol::RequestV1,
     decision: DecisionV1,
 ) -> Result<()> {
     nats.publish(
@@ -1413,7 +1413,7 @@ async fn publish_alive(nats: &async_nats::Client, request_id: &str) -> Result<()
 // ---------------------------------------------------------------------------
 
 /// File name of the agent socket inside the agent state directory, unless
-/// `OSHIOKI_AGENT_SOCKET` overrides it.
+/// `VOUCH_AGENT_SOCKET` overrides it.
 const AGENT_SOCKET_NAME: &str = "agent.sock";
 
 /// Resolve the socket path: explicit override first, then the state dir next
@@ -1425,7 +1425,7 @@ fn socket_path(
 ) -> Result<PathBuf> {
     if let Some(path) = override_path {
         if path.is_empty() {
-            bail!("OSHIOKI_AGENT_SOCKET is set but empty");
+            bail!("VOUCH_AGENT_SOCKET is set but empty");
         }
         return Ok(PathBuf::from(path));
     }
@@ -1571,7 +1571,7 @@ async fn handle_socket(
         );
         return Ok(());
     }
-    let alive = oshioki_protocol::socket_v1::encode_frame(&serde_json::to_vec(
+    let alive = vouch_protocol::socket_v1::encode_frame(&serde_json::to_vec(
         &AliveV1::for_request(&opened.request.request_id),
     )?)?;
     writer
@@ -1587,7 +1587,7 @@ async fn handle_socket(
     else {
         return Ok(());
     };
-    let frame = oshioki_protocol::socket_v1::encode_frame(&serde_json::to_vec(&decision)?)?;
+    let frame = vouch_protocol::socket_v1::encode_frame(&serde_json::to_vec(&decision)?)?;
     writer
         .write_all(&frame)
         .await
@@ -1636,7 +1636,7 @@ async fn handle_socket_authentication(
         );
         return Ok(());
     }
-    let alive = oshioki_protocol::socket_v1::encode_frame(&serde_json::to_vec(
+    let alive = vouch_protocol::socket_v1::encode_frame(&serde_json::to_vec(
         &AliveV1::for_request(&opened.request.request_id),
     )?)?;
     writer
@@ -1652,7 +1652,7 @@ async fn handle_socket_authentication(
     else {
         return Ok(());
     };
-    let frame = oshioki_protocol::socket_v1::encode_frame(&serde_json::to_vec(&decision)?)?;
+    let frame = vouch_protocol::socket_v1::encode_frame(&serde_json::to_vec(&decision)?)?;
     writer
         .write_all(&frame)
         .await
@@ -1667,13 +1667,13 @@ async fn handle_socket_authentication(
 /// Read one length-delimited frame. A peer that hangs up before delivering
 /// one has not answered.
 async fn read_frame(reader: &mut tokio::net::unix::OwnedReadHalf) -> Result<Option<Vec<u8>>> {
-    let mut prefix = [0u8; oshioki_protocol::socket_v1::FRAME_LEN_BYTES];
+    let mut prefix = [0u8; vouch_protocol::socket_v1::FRAME_LEN_BYTES];
     match reader.read_exact(&mut prefix).await {
         Ok(_) => {}
         Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
         Err(error) => return Err(error.into()),
     }
-    let len = oshioki_protocol::socket_v1::decode_frame_len(prefix)?;
+    let len = vouch_protocol::socket_v1::decode_frame_len(prefix)?;
     let mut payload = vec![0u8; len];
     match reader.read_exact(&mut payload).await {
         Ok(_) => {}
@@ -1734,7 +1734,7 @@ enum Decider {
     Auto(bool),
     Prompt(Prompter),
     #[cfg(target_os = "macos")]
-    TouchId(oshioki_agent::touchid::TouchIdPrompt),
+    TouchId(vouch_agent::touchid::TouchIdPrompt),
 }
 
 /// What the operator is being asked to allow, shown on the Touch ID sheet
@@ -1751,7 +1751,7 @@ enum Decider {
 /// `argv[0]` already names it. Host and user are never dropped; the argv
 /// tail is truncated with "…" to fit the cap, and the session prefix is the
 /// first thing dropped under pressure.
-fn approval_reason_for_raw(request: &oshioki_protocol::RequestV1) -> String {
+fn approval_reason_for_raw(request: &vouch_protocol::RequestV1) -> String {
     let target = format!(
         "{}@{}",
         escape_for_terminal(&request.user),
@@ -1831,7 +1831,7 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
 ///
 /// `None` when nothing resolves, in which case the reason drops the prefix
 /// entirely rather than show a blank label.
-fn session_name_for(request: &oshioki_protocol::RequestV1) -> Option<String> {
+fn session_name_for(request: &vouch_protocol::RequestV1) -> Option<String> {
     if let Some(session) = request.session.as_ref().filter(|value| !value.is_empty()) {
         return Some(escape_for_terminal(session));
     }
@@ -1889,14 +1889,14 @@ const MAX_APPROVAL_REASON_CHARS: usize = 160;
 /// Test helper for the short reason generated from a semantically valid
 /// request. Production paths use the exact retained bytes directly.
 #[cfg(test)]
-fn approval_reason(request: &oshioki_protocol::RequestV1) -> String {
+fn approval_reason(request: &vouch_protocol::RequestV1) -> String {
     approval_reason_for_raw(request)
 }
 
 /// The complete bound environment as approver-visible lines, empty when the
 /// request carries none. The terminal is scrollable, so hiding a suffix or
 /// summarizing entries would let an unreviewed value affect execution.
-fn format_env(request: &oshioki_protocol::RequestV1) -> String {
+fn format_env(request: &vouch_protocol::RequestV1) -> String {
     use std::fmt::Write as _;
     let mut shown = String::new();
     for (index, entry) in request.env.iter().enumerate() {
@@ -2111,12 +2111,12 @@ mod mac {
     use std::sync::Arc;
 
     use anyhow::Result;
-    use oshioki_agent::{
+    use vouch_agent::{
         Identity, OpenedRequest,
         touchid::{AttemptError, Outcome, PromptCancel, ScreenLock, TouchIdPrompt},
     };
-    use oshioki_enclave::SignError;
-    use oshioki_protocol::{AuthDecisionV1, DecisionV1, OpenedAuthRequestV1, escape_for_terminal};
+    use vouch_enclave::SignError;
+    use vouch_protocol::{AuthDecisionV1, DecisionV1, OpenedAuthRequestV1, escape_for_terminal};
     use tracing::{error, info};
 
     use super::{approval_reason_for_raw, authentication_reason};
@@ -2126,7 +2126,7 @@ mod mac {
 
     impl ScreenLock for Screen {
         fn is_locked(&self) -> bool {
-            oshioki_enclave::screen_is_locked()
+            vouch_enclave::screen_is_locked()
         }
     }
 
@@ -2182,7 +2182,7 @@ mod mac {
                 error!(
                     request_id = %escape_for_terminal(&request.request_id),
                     error = %escape_for_terminal(&format!("{error:#}")),
-                    "the Secure Enclave would not sign; re-pair with `oshioki-agent pair`"
+                    "the Secure Enclave would not sign; re-pair with `vouch-agent pair`"
                 );
                 Ok(None)
             }
@@ -2223,7 +2223,7 @@ mod mac {
                 error!(
                     request_id = %escape_for_terminal(&request.request_id),
                     error = %escape_for_terminal(&format!("{error:#}")),
-                    "the Secure Enclave would not sign; re-pair with `oshioki-agent pair`"
+                    "the Secure Enclave would not sign; re-pair with `vouch-agent pair`"
                 );
                 Ok(None)
             }
@@ -2250,9 +2250,9 @@ mod tests {
         payload_hash, prompt_output, quote_argv, runas_label, socket_path,
     };
     use clap::Parser as _;
-    use oshioki_agent::SignerKind;
-    use oshioki_agent::secret_store::MemoryStore;
-    use oshioki_protocol::{
+    use vouch_agent::SignerKind;
+    use vouch_agent::secret_store::MemoryStore;
+    use vouch_protocol::{
         EnvEntryV1, RequestEnvelopeV1, RequestV1, VERSION_V1, encode_base64url,
     };
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -2260,8 +2260,8 @@ mod tests {
 
     /// One test decision, distinct per request id so a relayed answer can be
     /// told apart from a freshly minted one.
-    fn test_decision(request_id: &str) -> oshioki_protocol::DecisionV1 {
-        oshioki_protocol::DecisionV1::Deny(oshioki_protocol::DenyV1 {
+    fn test_decision(request_id: &str) -> vouch_protocol::DecisionV1 {
+        vouch_protocol::DecisionV1::Deny(vouch_protocol::DenyV1 {
             version: VERSION_V1,
             request_id: request_id.to_owned(),
             device_fingerprint: "fingerprint".into(),
@@ -2459,7 +2459,7 @@ mod tests {
         let dir = socket_test_dir("late-ack");
         let store = MemoryStore::new();
         let identity = std::sync::Arc::new(
-            oshioki_agent::Identity::generate_to_with(
+            vouch_agent::Identity::generate_to_with(
                 &dir.join("agent.json"),
                 SignerKind::Software,
                 &store,
@@ -2483,9 +2483,9 @@ mod tests {
             super::handle_socket(agent_side, &socket_identity, &decider, permit).await
         });
 
-        let frame = oshioki_protocol::socket_v1::encode_frame(&envelope).unwrap();
+        let frame = vouch_protocol::socket_v1::encode_frame(&envelope).unwrap();
         hook_side.write_all(&frame).await.unwrap();
-        let acknowledgement: oshioki_protocol::AliveV1 =
+        let acknowledgement: vouch_protocol::AliveV1 =
             serde_json::from_slice(&read_socket_frame(&mut hook_side).await).unwrap();
         acknowledgement.validate(&request.request_id).unwrap();
 
@@ -2506,7 +2506,7 @@ mod tests {
             }
         });
         let relayed = waiter.wait(request.expires_at).await;
-        let verdict: oshioki_protocol::DecisionV1 =
+        let verdict: vouch_protocol::DecisionV1 =
             serde_json::from_slice(&read_socket_frame(&mut hook_side).await).unwrap();
         serve.await.unwrap().unwrap();
         feeder.abort();
@@ -2523,7 +2523,7 @@ mod tests {
 
     /// Read one length-delimited frame from a connected hook-side socket.
     async fn read_socket_frame(stream: &mut tokio::net::UnixStream) -> Vec<u8> {
-        let mut prefix = [0u8; oshioki_protocol::socket_v1::FRAME_LEN_BYTES];
+        let mut prefix = [0u8; vouch_protocol::socket_v1::FRAME_LEN_BYTES];
         stream.read_exact(&mut prefix).await.unwrap();
         let len = usize::try_from(u32::from_be_bytes(prefix)).unwrap();
         let mut payload = vec![0u8; len];
@@ -2536,9 +2536,9 @@ mod tests {
         let dir = socket_test_dir("flood");
         let store = MemoryStore::new();
         let identity = std::sync::Arc::new(
-            oshioki_agent::Identity::generate_to_with(
+            vouch_agent::Identity::generate_to_with(
                 &dir.join("agent.json"),
-                oshioki_agent::SignerKind::Software,
+                vouch_agent::SignerKind::Software,
                 &store,
             )
             .unwrap(),
@@ -2550,7 +2550,7 @@ mod tests {
             let mut request = request_for_log_probe();
             request.request_id = format!("encrypted-flood-{index}");
             request.issued_at = now();
-            request.expires_at = request.issued_at + oshioki_protocol::MAX_REQUEST_LIFETIME_SECS;
+            request.expires_at = request.issued_at + vouch_protocol::MAX_REQUEST_LIFETIME_SECS;
             let payload = sealed_envelope_bytes(&identity, &request);
             dispatch_nats_request(&payload, &identity, &decider, None, &admission);
         }
@@ -2566,9 +2566,9 @@ mod tests {
         let dir = socket_test_dir("dedupe");
         let store = MemoryStore::new();
         let identity = std::sync::Arc::new(
-            oshioki_agent::Identity::generate_to_with(
+            vouch_agent::Identity::generate_to_with(
                 &dir.join("agent.json"),
-                oshioki_agent::SignerKind::Software,
+                vouch_agent::SignerKind::Software,
                 &store,
             )
             .unwrap(),
@@ -2579,12 +2579,12 @@ mod tests {
         let mut request = request_for_log_probe();
         request.request_id = "claim-after-rejection".into();
         request.issued_at = now();
-        request.expires_at = request.issued_at + oshioki_protocol::MAX_REQUEST_LIFETIME_SECS;
+        request.expires_at = request.issued_at + vouch_protocol::MAX_REQUEST_LIFETIME_SECS;
 
         let mut invalid: RequestEnvelopeV1 =
             serde_json::from_slice(&sealed_envelope_bytes(&identity, &request)).unwrap();
-        invalid.issued_at = now() + oshioki_protocol::MAX_REQUEST_ISSUANCE_SKEW_SECS + 1;
-        invalid.expires_at = invalid.issued_at + oshioki_protocol::MAX_REQUEST_LIFETIME_SECS;
+        invalid.issued_at = now() + vouch_protocol::MAX_REQUEST_ISSUANCE_SKEW_SECS + 1;
+        invalid.expires_at = invalid.issued_at + vouch_protocol::MAX_REQUEST_LIFETIME_SECS;
         dispatch_nats_request(
             &serde_json::to_vec(&invalid).unwrap(),
             &identity,
@@ -2595,7 +2595,7 @@ mod tests {
         assert!(admission.request_ids.lock().unwrap().is_empty());
 
         let foreign =
-            oshioki_agent::Identity::from_material([0x44; 32], [0x55; 32], [0x66; 32]).unwrap();
+            vouch_agent::Identity::from_material([0x44; 32], [0x55; 32], [0x66; 32]).unwrap();
         dispatch_nats_request(
             &sealed_envelope_bytes(&foreign, &request),
             &identity,
@@ -2616,15 +2616,15 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    fn auth_request_for_tests() -> oshioki_protocol::AuthRequestV1 {
-        oshioki_protocol::AuthRequestV1 {
-            message_type: oshioki_protocol::AUTH_REQUEST_TYPE.into(),
-            version: oshioki_protocol::AUTH_WIRE_VERSION,
+    fn auth_request_for_tests() -> vouch_protocol::AuthRequestV1 {
+        vouch_protocol::AuthRequestV1 {
+            message_type: vouch_protocol::AUTH_REQUEST_TYPE.into(),
+            version: vouch_protocol::AUTH_WIRE_VERSION,
             request_id: "auth-1".into(),
             nonce: encode_base64url(&[3; 16]),
             issued_at: now(),
             expires_at: now() + 70,
-            trusted: oshioki_protocol::TrustedAuthContextV1 {
+            trusted: vouch_protocol::TrustedAuthContextV1 {
                 host: "host.example".into(),
                 service: "sudo".into(),
                 pam_user: "root".into(),
@@ -2633,10 +2633,10 @@ mod tests {
                 invoking_user: Some("eric".into()),
                 tty: Some("/dev/pts/3".into()),
             },
-            submitted: oshioki_protocol::SubmittedAuthContextV1 {
+            submitted: vouch_protocol::SubmittedAuthContextV1 {
                 session: None,
                 agent_label: None,
-                invocation: oshioki_protocol::AuthInvocationV1::Truncated {
+                invocation: vouch_protocol::AuthInvocationV1::Truncated {
                     command: None,
                     argv: vec!["apt".into(), "upgrade".into()],
                     cwd: None,
@@ -2647,14 +2647,14 @@ mod tests {
     }
 
     fn auth_envelope_bytes(
-        identity: &oshioki_agent::Identity,
-        request: &oshioki_protocol::AuthRequestV1,
+        identity: &vouch_agent::Identity,
+        request: &vouch_protocol::AuthRequestV1,
     ) -> Vec<u8> {
         let raw = request.raw_json().unwrap();
-        let sealed = oshioki_protocol::seal_v1(&raw, &identity.device_record("test")).unwrap();
-        let envelope = oshioki_protocol::AuthEnvelopeV1 {
-            message_type: oshioki_protocol::AUTH_ENVELOPE_TYPE.into(),
-            version: oshioki_protocol::AUTH_WIRE_VERSION,
+        let sealed = vouch_protocol::seal_v1(&raw, &identity.device_record("test")).unwrap();
+        let envelope = vouch_protocol::AuthEnvelopeV1 {
+            message_type: vouch_protocol::AUTH_ENVELOPE_TYPE.into(),
+            version: vouch_protocol::AUTH_WIRE_VERSION,
             request_id: request.request_id.clone(),
             host: request.trusted.host.clone(),
             issued_at: request.issued_at,
@@ -2674,9 +2674,9 @@ mod tests {
         let dir = socket_test_dir("auth-software");
         let store = MemoryStore::new();
         let identity = std::sync::Arc::new(
-            oshioki_agent::Identity::generate_to_with(
+            vouch_agent::Identity::generate_to_with(
                 &dir.join("agent.json"),
-                oshioki_agent::SignerKind::Software,
+                vouch_agent::SignerKind::Software,
                 &store,
             )
             .unwrap(),
@@ -2697,9 +2697,9 @@ mod tests {
         let dir = socket_test_dir("auth-unknown");
         let store = MemoryStore::new();
         let identity = std::sync::Arc::new(
-            oshioki_agent::Identity::generate_to_with(
+            vouch_agent::Identity::generate_to_with(
                 &dir.join("agent.json"),
-                oshioki_agent::SignerKind::Software,
+                vouch_agent::SignerKind::Software,
                 &store,
             )
             .unwrap(),
@@ -2728,10 +2728,10 @@ mod tests {
     #[tokio::test]
     async fn auto_never_answers_an_authentication() {
         let identity = std::sync::Arc::new(
-            oshioki_agent::Identity::from_material([0x11; 32], [0x22; 32], [0x33; 32]).unwrap(),
+            vouch_agent::Identity::from_material([0x11; 32], [0x22; 32], [0x33; 32]).unwrap(),
         );
         let request = auth_request_for_tests();
-        let opened = oshioki_protocol::OpenedAuthRequestV1 {
+        let opened = vouch_protocol::OpenedAuthRequestV1 {
             raw: request.raw_json().unwrap(),
             request,
         };
@@ -2789,7 +2789,7 @@ mod tests {
     #[test]
     fn an_unavailable_invocation_is_labelled_honestly() {
         let mut request = auth_request_for_tests();
-        request.submitted.invocation = oshioki_protocol::AuthInvocationV1::Unavailable;
+        request.submitted.invocation = vouch_protocol::AuthInvocationV1::Unavailable;
         assert!(authentication_summary(&request).contains("invocation: unavailable"));
         assert!(authentication_reason(&request).contains("unavailable"));
         assert!(
@@ -2877,14 +2877,14 @@ mod tests {
     #[test]
     fn reason_prefers_request_session_field_over_env() {
         let mut request = request_for_reason();
-        request.session = Some("oshioki-1b".into());
+        request.session = Some("vouch-1b".into());
         request.env = vec![EnvEntryV1 {
             name: "OSHIOKI_SESSION".into(),
             value: "laptop-ghostty".into(),
         }];
         assert_eq!(
             approval_reason(&request),
-            "oshioki-1b: eric@host.example sudo apt update"
+            "vouch-1b: eric@host.example sudo apt update"
         );
     }
 
@@ -3062,13 +3062,13 @@ mod tests {
     #[test]
     fn device_record_takes_a_label() {
         let cli =
-            Cli::try_parse_from(["oshioki-agent", "device-record", "--label", "mbp"]).unwrap();
+            Cli::try_parse_from(["vouch-agent", "device-record", "--label", "mbp"]).unwrap();
         assert!(matches!(cli.verb, Verb::DeviceRecord { .. }));
     }
 
     #[test]
     fn init_takes_signer_and_force() {
-        let cli = Cli::try_parse_from(["oshioki-agent", "init", "--signer", "software"]).unwrap();
+        let cli = Cli::try_parse_from(["vouch-agent", "init", "--signer", "software"]).unwrap();
         assert!(matches!(
             cli.verb,
             Verb::Init {
@@ -3076,7 +3076,7 @@ mod tests {
                 force: false
             }
         ));
-        let cli = Cli::try_parse_from(["oshioki-agent", "init", "--force"]).unwrap();
+        let cli = Cli::try_parse_from(["vouch-agent", "init", "--force"]).unwrap();
         assert!(matches!(
             cli.verb,
             Verb::Init {
@@ -3108,7 +3108,7 @@ mod tests {
     /// part of them.
     #[test]
     fn approvals_differ_by_environment() {
-        let dir = std::env::temp_dir().join(format!("oshioki-env-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vouch-env-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let pairing = Pairing {
@@ -3122,12 +3122,12 @@ mod tests {
             let mut request = request_for_reason();
             request.env = env;
             let raw = request.raw_json().unwrap();
-            let opened = oshioki_agent::OpenedRequest { request, raw };
+            let opened = vouch_agent::OpenedRequest { request, raw };
             match identity
                 .approve(&opened, &approval_reason(&opened.request))
                 .unwrap()
             {
-                oshioki_protocol::DecisionV1::ApproveNative(approval) => approval.signature,
+                vouch_protocol::DecisionV1::ApproveNative(approval) => approval.signature,
                 other => panic!("expected an approval, got {other:?}"),
             }
         };
@@ -3150,7 +3150,7 @@ mod tests {
     /// quietly does nothing is worse than a refusal.
     #[test]
     fn pairing_reuses_an_identity_and_refuses_to_pretend_otherwise() {
-        let dir = std::env::temp_dir().join(format!("oshioki-pair-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vouch-pair-{}", std::process::id()));
         let path = dir.join("agent.json");
         let _ = std::fs::remove_dir_all(&dir);
         let pairing = |requested, force| Pairing {
@@ -3282,7 +3282,7 @@ mod tests {
 
     fn socket_test_dir(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "oshioki-agent-socket-{name}-{}",
+            "vouch-agent-socket-{name}-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);
@@ -3354,14 +3354,14 @@ mod tests {
     /// one envelope per active device.
     #[cfg(feature = "unattended")]
     fn sealed_envelope_for(
-        identity: &oshioki_agent::Identity,
-        request: &oshioki_protocol::RequestV1,
+        identity: &vouch_agent::Identity,
+        request: &vouch_protocol::RequestV1,
     ) -> Vec<u8> {
-        use oshioki_protocol::RequestEnvelopeV1;
+        use vouch_protocol::RequestEnvelopeV1;
         let raw = request.raw_json().unwrap();
-        let sealed = oshioki_protocol::seal_v1(&raw, &identity.device_record("test")).unwrap();
+        let sealed = vouch_protocol::seal_v1(&raw, &identity.device_record("test")).unwrap();
         let envelope = RequestEnvelopeV1 {
-            version: oshioki_protocol::VERSION_V1,
+            version: vouch_protocol::VERSION_V1,
             request_id: request.request_id.clone(),
             host: request.host.clone(),
             user: request.user.clone(),
@@ -3378,10 +3378,10 @@ mod tests {
     /// only exists in the E2E build, like `run --auto` itself.
     #[cfg(feature = "unattended")]
     async fn socket_verdict(
-        identity: std::sync::Arc<oshioki_agent::Identity>,
+        identity: std::sync::Arc<vouch_agent::Identity>,
         approve: bool,
         envelope: &[u8],
-    ) -> oshioki_protocol::DecisionV1 {
+    ) -> vouch_protocol::DecisionV1 {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let (mut hook_side, agent_side) = tokio::net::UnixStream::pair().unwrap();
         let serve = tokio::spawn(async move {
@@ -3394,16 +3394,16 @@ mod tests {
             )
             .await
         });
-        let frame = oshioki_protocol::socket_v1::encode_frame(envelope).unwrap();
+        let frame = vouch_protocol::socket_v1::encode_frame(envelope).unwrap();
         hook_side.write_all(&frame).await.unwrap();
-        let mut prefix = [0u8; oshioki_protocol::socket_v1::FRAME_LEN_BYTES];
+        let mut prefix = [0u8; vouch_protocol::socket_v1::FRAME_LEN_BYTES];
         hook_side.read_exact(&mut prefix).await.unwrap();
         let len = usize::try_from(u32::from_be_bytes(prefix)).unwrap();
         let mut acknowledgement = vec![0u8; len];
         hook_side.read_exact(&mut acknowledgement).await.unwrap();
-        let acknowledgement: oshioki_protocol::AliveV1 =
+        let acknowledgement: vouch_protocol::AliveV1 =
             serde_json::from_slice(&acknowledgement).unwrap();
-        let request: oshioki_protocol::RequestEnvelopeV1 =
+        let request: vouch_protocol::RequestEnvelopeV1 =
             serde_json::from_slice(envelope).unwrap();
         acknowledgement.validate(&request.request_id).unwrap();
         hook_side.read_exact(&mut prefix).await.unwrap();
@@ -3421,14 +3421,14 @@ mod tests {
     async fn socket_auto_approve_returns_a_signed_verdict() {
         let dir = socket_test_dir("happy");
         let identity =
-            oshioki_agent::Identity::from_material([0x41; 32], [0x42; 32], [0x43; 32]).unwrap();
+            vouch_agent::Identity::from_material([0x41; 32], [0x42; 32], [0x43; 32]).unwrap();
         let mut request = request_for_reason();
         request.issued_at = now();
         request.expires_at = now() + 60;
         let envelope = sealed_envelope_for(&identity, &request);
         let identity = std::sync::Arc::new(identity);
         match socket_verdict(identity.clone(), true, &envelope).await {
-            oshioki_protocol::DecisionV1::ApproveNative(approval) => {
+            vouch_protocol::DecisionV1::ApproveNative(approval) => {
                 assert_eq!(approval.request_id, request.request_id);
                 assert_eq!(approval.device_fingerprint, identity.fingerprint());
             }
@@ -3443,18 +3443,18 @@ mod tests {
     async fn socket_auto_deny_returns_a_denial() {
         let dir = socket_test_dir("deny");
         let identity =
-            oshioki_agent::Identity::from_material([0x44; 32], [0x45; 32], [0x46; 32]).unwrap();
+            vouch_agent::Identity::from_material([0x44; 32], [0x45; 32], [0x46; 32]).unwrap();
         let mut request = request_for_reason();
         request.issued_at = now();
         request.expires_at = now() + 60;
         let envelope = sealed_envelope_for(&identity, &request);
         let identity = std::sync::Arc::new(identity);
         match socket_verdict(identity.clone(), false, &envelope).await {
-            oshioki_protocol::DecisionV1::Deny(denial) => {
+            vouch_protocol::DecisionV1::Deny(denial) => {
                 assert_eq!(denial.request_id, request.request_id);
                 // Auto-deny signs like an explicit refusal: the hook
                 // verifies this against the pinned record.
-                oshioki_protocol::verify_deny_v1(&denial, &identity.device_record("laptop"))
+                vouch_protocol::verify_deny_v1(&denial, &identity.device_record("laptop"))
                     .unwrap();
             }
             other => panic!("expected a denial, got {other:?}"),
@@ -3507,9 +3507,9 @@ mod tests {
     /// Seal one envelope the way the hook seals one per active device.
     /// Unlike `sealed_envelope_for` this is not gated on `unattended`: seal
     /// and open work with a software key in every build.
-    fn sealed_envelope_bytes(identity: &oshioki_agent::Identity, request: &RequestV1) -> Vec<u8> {
+    fn sealed_envelope_bytes(identity: &vouch_agent::Identity, request: &RequestV1) -> Vec<u8> {
         let raw = request.raw_json().unwrap();
-        let sealed = oshioki_protocol::seal_v1(&raw, &identity.device_record("test")).unwrap();
+        let sealed = vouch_protocol::seal_v1(&raw, &identity.device_record("test")).unwrap();
         let envelope = RequestEnvelopeV1 {
             version: VERSION_V1,
             request_id: request.request_id.clone(),
@@ -3686,9 +3686,9 @@ mod tests {
         let dir = socket_test_dir("logprobe");
         let store = MemoryStore::new();
         let identity = std::sync::Arc::new(
-            oshioki_agent::Identity::generate_to_with(
+            vouch_agent::Identity::generate_to_with(
                 &dir.join("agent.json"),
-                oshioki_agent::SignerKind::Software,
+                vouch_agent::SignerKind::Software,
                 &store,
             )
             .unwrap(),
@@ -3716,7 +3716,7 @@ mod tests {
         assert!(
             matches!(
                 decision,
-                Some(oshioki_protocol::DecisionV1::ApproveNative(_))
+                Some(vouch_protocol::DecisionV1::ApproveNative(_))
             ),
             "the canned yes should approve"
         );
@@ -3724,7 +3724,7 @@ mod tests {
         // Local socket path: the same request through `handle_socket`.
         let (mut hook_side, agent_side) = tokio::net::UnixStream::pair().unwrap();
         let frame =
-            oshioki_protocol::socket_v1::encode_frame(&sealed_envelope_bytes(&identity, &request))
+            vouch_protocol::socket_v1::encode_frame(&sealed_envelope_bytes(&identity, &request))
                 .unwrap();
         hook_side.write_all(&frame).await.unwrap();
         let (prompter, _sender) = canned_prompter("y");
@@ -3737,7 +3737,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let mut prefix = [0u8; oshioki_protocol::socket_v1::FRAME_LEN_BYTES];
+        let mut prefix = [0u8; vouch_protocol::socket_v1::FRAME_LEN_BYTES];
         hook_side.read_exact(&mut prefix).await.unwrap();
         let len = usize::try_from(u32::from_be_bytes(prefix)).unwrap();
         assert!(len > 0, "the socket path should answer");

@@ -1,4 +1,4 @@
-//! The first production PAM boundary for contextual oshioki authentication.
+//! The first production PAM boundary for contextual vouch authentication.
 //!
 //! This crate deliberately owns only the PAM-to-helper boundary.  The helper
 //! receives one bounded private JSON request on stdin and returns its decision
@@ -55,7 +55,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-compile_error!("oshioki-pam supports Linux and macOS only");
+compile_error!("vouch-pam supports Linux and macOS only");
 
 // ---------------------------------------------------------------------------
 // PAM ABI
@@ -131,7 +131,7 @@ unsafe extern "C" {
     ) -> c_int;
 }
 
-const HELPER_PATH: &str = "/usr/local/sbin/oshioki";
+const HELPER_PATH: &str = "/usr/local/sbin/vouch";
 /// Private protocol version for the helper request.  Version 2 replaced the
 /// resolved `uid` fields of version 1 with names only: the helper runs as root
 /// and resolves them inside its own bounded budget, keeping NSS out of the
@@ -142,7 +142,7 @@ const HELPER_ARGS: [&str; 3] = ["authenticate", "--pam-protocol-version", "2"];
 /// descriptor.  The module holds the write end, so readable/EOF on that
 /// descriptor means the PAM call is gone and the helper must exit.
 const HELPER_LIVENESS_FLAG: &str = "--pam-liveness-fd";
-const PAM_STATE_KEY: &[u8] = b"oshioki-pam-attempt-v1\0";
+const PAM_STATE_KEY: &[u8] = b"vouch-pam-attempt-v1\0";
 
 const MAX_TEXT_BYTES: usize = 4096;
 const MAX_USER_BYTES: usize = 256;
@@ -260,9 +260,9 @@ enum HelperPathStatus {
 /// a cancellation, or a deadline — those stay `PAM_AUTHINFO_UNAVAIL`.
 ///
 /// Linux stacks spell fail-closed with a bracket control: the installer
-/// writes `auth [... default=die] liboshioki_pam.so`, so `PAM_AUTH_ERR` ends
+/// writes `auth [... default=die] libvouch_pam.so`, so `PAM_AUTH_ERR` ends
 /// the chain with a denial. `OpenPAM` has no bracket controls, so the macOS
-/// entry is `auth sufficient /usr/local/lib/pam/liboshioki_pam.dylib`. Live
+/// entry is `auth sufficient /usr/local/lib/pam/libvouch_pam.dylib`. Live
 /// macOS validation showed that `PAM_ABORT` under `sufficient` is also
 /// recorded and ignored; use plain `PAM_AUTH_ERR` so the stock password
 /// provider remains available. A hard helper fault is still a failed device
@@ -276,7 +276,7 @@ const fn hard_failure_status() -> c_int {
 // PAM entry point and per-handle bookkeeping
 // ---------------------------------------------------------------------------
 
-/// Authenticate the PAM handle through the fixed oshioki helper.
+/// Authenticate the PAM handle through the fixed vouch helper.
 ///
 /// The signature mirrors `pam_sm_authenticate` from Linux-PAM and Apple's
 /// `security/pam_modules.h`.  PAM module arguments are intentionally ignored;
@@ -1817,7 +1817,7 @@ mod tests {
     fn test_dir() -> std::path::PathBuf {
         let id = NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed);
         let path =
-            std::env::temp_dir().join(format!("oshioki-pam-test-{}-{id}", std::process::id()));
+            std::env::temp_dir().join(format!("vouch-pam-test-{}-{id}", std::process::id()));
         fs::create_dir(&path).expect("create test directory");
         path
     }

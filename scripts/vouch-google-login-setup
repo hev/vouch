@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install an opt-in gcloud wrapper for Oshioki browser-approved logins."""
+"""Install an opt-in gcloud wrapper for Vouch browser-approved logins."""
 
 import argparse
 import hashlib
@@ -13,9 +13,9 @@ import sys
 import tempfile
 
 
-STATE_NAME = ".oshioki-google-login-setup.json"
-WRAPPER_MARKER = "# oshioki-google-login-setup managed wrapper v1"
-BYPASS_ENV = "OSHIOKI_GCLOUD_WRAPPER_BYPASS"
+STATE_NAME = ".vouch-google-login-setup.json"
+WRAPPER_MARKER = "# vouch-google-login-setup managed wrapper v1"
+BYPASS_ENV = "VOUCH_GCLOUD_WRAPPER_BYPASS"
 
 
 def fail(message):
@@ -157,7 +157,7 @@ def reject_gcloud_recursion(gcloud, wrapper):
     except OSError:
         fail("gcloud executable cannot be inspected")
     if WRAPPER_MARKER in marker:
-        fail("gcloud path names an existing Oshioki wrapper")
+        fail("gcloud path names an existing Vouch wrapper")
 
 
 def wrapper_text(mode, config, gcloud, relay):
@@ -166,7 +166,7 @@ def wrapper_text(mode, config, gcloud, relay):
         "#!/bin/sh",
         WRAPPER_MARKER,
         "# Routes only the bare interactive login command.",
-        f'if [ "${{OSHIOKI_BROWSER_SOCKET+x}}" != x ] && [ "${{{BYPASS_ENV}+x}}" != x ] && [ "$#" -eq 2 ] && [ "$1" = auth ] && [ "$2" = login ]; then',
+        f'if [ "${{VOUCH_BROWSER_SOCKET+x}}" != x ] && [ "${{{BYPASS_ENV}+x}}" != x ] && [ "$#" -eq 2 ] && [ "$1" = auth ] && [ "$2" = login ]; then',
         f"  {BYPASS_ENV}=1 exec {shlex.quote(str(relay))} {command} --config {shlex.quote(str(config))}",
         "fi",
         f"exec {shlex.quote(str(gcloud))} \"$@\"",
@@ -194,7 +194,7 @@ def install(args):
     config = absolute_path(args.config, "config")
     validate_config(config, args.mode)
     gcloud = executable_path(args.gcloud, "gcloud")
-    relay = executable_path(args.relay or "oshioki-browser-relay", "relay", search=args.relay is None)
+    relay = executable_path(args.relay or "vouch-browser-relay", "relay", search=args.relay is None)
     bin_dir = absolute_path(args.bin_dir, "bin-dir")
     ensure_destination_directory(bin_dir)
     wrapper = bin_dir / "gcloud"
@@ -245,14 +245,14 @@ def install(args):
 def uninstall(args):
     bin_dir = absolute_path(args.bin_dir, "bin-dir")
     if not bin_dir.exists():
-        print("no Oshioki gcloud wrapper installed")
+        print("no Vouch gcloud wrapper installed")
         return
     ensure_destination_directory(bin_dir)
     wrapper = bin_dir / "gcloud"
     state_path = bin_dir / STATE_NAME
     state = managed_state(state_path, wrapper)
     if state is None:
-        print("no Oshioki gcloud wrapper installed")
+        print("no Vouch gcloud wrapper installed")
         return
     info = file_info(wrapper)
     if info and file_hash(wrapper) != state["wrapper_sha256"]:
@@ -260,7 +260,7 @@ def uninstall(args):
     if info:
         wrapper.unlink()
     state_path.unlink()
-    print(f"removed Oshioki gcloud wrapper from {bin_dir}")
+    print(f"removed Vouch gcloud wrapper from {bin_dir}")
 
 
 def parser():
@@ -270,7 +270,7 @@ def parser():
     setup.add_argument("--mode", choices=("requester", "local"), required=True)
     setup.add_argument("--config", required=True, help="absolute private relay config path")
     setup.add_argument("--gcloud", required=True, help="absolute real gcloud executable path")
-    setup.add_argument("--relay", help="absolute oshioki-browser-relay executable path")
+    setup.add_argument("--relay", help="absolute vouch-browser-relay executable path")
     setup.add_argument("--bin-dir", default="~/.local/bin")
     setup.set_defaults(run=install)
     remove = commands.add_parser("uninstall", help="remove an unmodified owned wrapper")
@@ -284,7 +284,7 @@ def main():
     try:
         args.run(args)
     except (OSError, ValueError) as error:
-        print(f"oshioki-google-login-setup: {error}", file=sys.stderr)
+        print(f"vouch-google-login-setup: {error}", file=sys.stderr)
         return 1
     return 0
 

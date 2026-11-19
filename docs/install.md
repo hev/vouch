@@ -1,4 +1,4 @@
-# Install Oshioki
+# Install Vouch
 
 Install on each machine that runs sudo and each Mac that approves requests.
 The browser login helper can be used on its own; it does not require sudo setup.
@@ -8,7 +8,7 @@ The browser login helper can be used on its own; it does not require sudo setup.
 Apple Silicon packages are available through Homebrew:
 
 ```sh
-brew install epsalmond/oshioki/oshioki
+brew install epsalmond/oshioki/vouch
 ```
 
 Next, choose [local sudo](local-sudo.md), [remote sudo](remote-sudo.md),
@@ -26,19 +26,19 @@ apt:
 
 ```sh
 sudo apt update
-sudo apt install oshioki
+sudo apt install vouch
 ```
 
 For a one-time install without configuring the repository, download the amd64
 `.deb` from a [release](https://github.com/epsalmond/oshioki/releases), then:
 
 ```sh
-sudo apt install ./oshioki_X.Y.Z_amd64.deb
+sudo apt install ./vouch_X.Y.Z_amd64.deb
 ```
 
 The package includes the sudo hook, plugin, PAM module, server, phone setup
-helper, browser relay, and the opt-in `oshioki-google-login-setup` and
-`oshioki-browser-service` commands. Python 3 is installed as a runtime
+helper, browser relay, and the opt-in `vouch-google-login-setup` and
+`vouch-browser-service` commands. Python 3 is installed as a runtime
 dependency (3.9 or newer) for these commands. It does not include the Linux
 native agent or laptop setup helper; use a source build for those.
 
@@ -60,23 +60,23 @@ cargo build --locked --release --workspace
 Binaries are under `target/release`. To configure local sudo from this checkout:
 
 ```sh
-scripts/oshioki-laptop-setup --local
+scripts/vouch-laptop-setup --local
 ```
 
 For a manually configured host, create the installer manifest after building.
 On Linux:
 
 ```sh
-(cd target/release && sha256sum oshioki liboshioki_plugin.so liboshioki_pam.so > SHA256SUMS)
+(cd target/release && sha256sum vouch libvouch_plugin.so libvouch_pam.so > SHA256SUMS)
 ```
 
 On macOS:
 
 ```sh
-(cd target/release && shasum -a 256 oshioki liboshioki_plugin.dylib liboshioki_pam.dylib > SHA256SUMS)
+(cd target/release && shasum -a 256 vouch libvouch_plugin.dylib libvouch_pam.dylib > SHA256SUMS)
 ```
 
-Then use `scripts/install-oshioki-hook` wherever a guide uses the packaged
+Then use `scripts/install-vouch-hook` wherever a guide uses the packaged
 installer. Hashes must describe the binaries from this build.
 
 ## Activate a manually configured sudo host
@@ -84,20 +84,20 @@ installer. Hashes must describe the binaries from this build.
 Use this after the phone or remote guide has configured the host and pinned
 a device. Keep a second root shell open until verification succeeds.
 
-The installer is `install-oshioki-hook` on Homebrew,
-`/usr/share/oshioki/install-oshioki-hook` on Debian, or
-`scripts/install-oshioki-hook` in a checkout. For Debian:
+The installer is `install-vouch-hook` on Homebrew,
+`/usr/share/vouch/install-vouch-hook` on Debian, or
+`scripts/install-vouch-hook` in a checkout. For Debian:
 
 ```sh
-sudo /usr/share/oshioki/install-oshioki-hook --prelaunch --dry-run --config-file /etc/oshioki/install.env
-sudo /usr/share/oshioki/install-oshioki-hook --prelaunch --config-file /etc/oshioki/install.env
-sudo /usr/share/oshioki/install-oshioki-hook --prelaunch-status
+sudo /usr/share/vouch/install-vouch-hook --prelaunch --dry-run --config-file /etc/vouch/install.env
+sudo /usr/share/vouch/install-vouch-hook --prelaunch --config-file /etc/vouch/install.env
+sudo /usr/share/vouch/install-vouch-hook --prelaunch-status
 sudo -k
 sudo true
 ```
 
 The final command must produce and complete an approval. A successful
-`oshioki test` checks delivery and signing, but does not prove sudo integration.
+`vouch test` checks delivery and signing, but does not prove sudo integration.
 
 The installer preserves the device registry and leaves approval disabled
 while it is empty. Hardware-backed devices qualify for its passwordless
@@ -106,7 +106,7 @@ The opt-in [PAM mode](local-sudo.md#sudo-authentication-through-pam) uses
 sudo's authentication and timestamp behavior instead.
 
 The passwordless rule is written only after root's `sudo -V` prints
-`Oshioki approval plugin version X.Y.Z`, which proves that this sudo loads
+`Vouch approval plugin version X.Y.Z`, which proves that this sudo loads
 the plugin. Without that line the installer writes no rule, removes an
 existing one, and exits with status 3. Sudo then keeps its password path.
 `--prelaunch-status` reports `plugin loaded: yes` or `no` from the same check
@@ -134,9 +134,9 @@ package, and re-run the installer. The contextual
 [PAM mode](local-sudo.md#sudo-authentication-through-pam) may work with
 sudo-rs, but it has not been validated.
 
-On Debian and Ubuntu, the package also enables `oshioki-sudo-reconcile.path`.
+On Debian and Ubuntu, the package also enables `vouch-sudo-reconcile.path`.
 It watches `/etc/sudo.conf`, the `sudo` alternative, `/usr/bin/sudo`, and
 the sudo-rs paths. On any change it runs
-`install-oshioki-hook --reconcile-plugin-rule`, which repeats the proof and
+`install-vouch-hook --reconcile-plugin-rule`, which repeats the proof and
 removes the passwordless rule if the proof fails. It never writes the rule;
 re-run `--prelaunch` to restore it once the host qualifies again.

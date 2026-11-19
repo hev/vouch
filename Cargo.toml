@@ -21,7 +21,7 @@ members = [
 version = "0.5.1"
 edition = "2024"
 rust-version = "1.88.0"
-repository = "https://github.com/epsalmond/oshioki"
+repository = "https://github.com/hev/vouch"
 license = "MIT OR Apache-2.0"
 publish = false
 
@@ -36,7 +36,7 @@ publish = false
 lto = "thin"
 panic = "abort"
 
-[profile.release.package.oshioki-plugin]
+[profile.release.package.vouch-plugin]
 opt-level = "z"
 codegen-units = 1
 

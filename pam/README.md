@@ -1,6 +1,6 @@
 # Contextual sudo PAM contract
 
-This crate connects sudo's PAM authentication to `oshioki authenticate`.
+This crate connects sudo's PAM authentication to `vouch authenticate`.
 For installation and the user-visible mode comparison, see
 [local sudo](../docs/local-sudo.md#sudo-authentication-through-pam).
 This page is the implementation contract.
@@ -30,7 +30,7 @@ Submitted argv is advisory context, not a verified final command or environment.
 The fixed invocation is:
 
 ```text
-/usr/local/sbin/oshioki authenticate --pam-protocol-version 2 --pam-liveness-fd N
+/usr/local/sbin/vouch authenticate --pam-protocol-version 2 --pam-liveness-fd N
 ```
 
 The module checks every directory from `/` through `/usr/local/sbin` for root
@@ -142,7 +142,7 @@ and rollback. See [update and restore](../docs/update.md).
 
 On macOS, `LC_ID_DYLIB` is set to the Homebrew `opt` path at link time so
 bottling does not rewrite and re-sign the module after hashing.
-`OSHIOKI_PAM_INSTALL_NAME` supports a different build prefix.
+`VOUCH_PAM_INSTALL_NAME` supports a different build prefix.
 OpenPAM loads the absolute configured path; this install name does not redirect it.
 
 ## Verification and limits
@@ -150,10 +150,10 @@ OpenPAM loads the absolute configured path; this install name does not redirect 
 Focused checks:
 
 ```sh
-cargo test --locked -p oshioki-pam
-cargo clippy --locked -p oshioki-pam --all-targets -- -D warnings
-cargo fmt -p oshioki-pam -- --check
-scripts/test-install-oshioki-hook
+cargo test --locked -p vouch-pam
+cargo clippy --locked -p vouch-pam --all-targets -- -D warnings
+cargo fmt -p vouch-pam -- --check
+scripts/test-install-vouch-hook
 scripts/test-pam-acceptance
 ```
 

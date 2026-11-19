@@ -1,7 +1,7 @@
 [package]
 # `core` collides with the builtin `core` crate and breaks thiserror's derive
-# in doctests. `oshioki-protocol` is unambiguous.
-name = "oshioki-protocol"
+# in doctests. `vouch-protocol` is unambiguous.
+name = "vouch-protocol"
 edition = { workspace = true }
 rust-version = { workspace = true }
 version = { workspace = true }

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-TEST_ROOT="$(mktemp -d -t oshioki-debian-package-test.XXXXXX)"
+TEST_ROOT="$(mktemp -d -t vouch-debian-package-test.XXXXXX)"
 trap 'rm -rf "$TEST_ROOT"' EXIT
 fail() { echo "test-debian-package-scripts: $*" >&2; exit 1; }
 
@@ -25,7 +25,7 @@ cat > "$TEST_ROOT/fake-bin/sudo" <<'SH'
 if [ "${1:-}" = -V ]; then
   echo 'Sudo version 1.9.15p5'
   if [ -f "${SUDO_CONF:-}" ] && grep -q '^Plugin approval_exec ' "$SUDO_CONF"; then
-    echo 'Oshioki approval plugin version 0.0.0-test'
+    echo 'Vouch approval plugin version 0.0.0-test'
   fi
 fi
 exit 0
@@ -59,8 +59,8 @@ SH
 # path the real installer writes in the prerm cases -- to the real tool.
 cat > "$TEST_ROOT/fake-bin/getent" <<'SH'
 #!/usr/bin/env bash
-if [ "${1:-}" = passwd ] && [ "${2:-}" = oshioki ]; then
-  echo 'oshioki:x:999:999::/var/lib/oshioki:/usr/sbin/nologin'
+if [ "${1:-}" = passwd ] && [ "${2:-}" = vouch ]; then
+  echo 'vouch:x:999:999::/var/lib/vouch:/usr/sbin/nologin'
   exit 0
 fi
 exec /usr/bin/getent "$@"
@@ -69,7 +69,7 @@ cat > "$TEST_ROOT/fake-bin/install" <<'SH'
 #!/usr/bin/env bash
 for arg in "$@"; do
   case "$arg" in
-    /etc/oshioki|/var/lib/oshioki) exit 0 ;;
+    /etc/vouch|/var/lib/vouch) exit 0 ;;
   esac
 done
 args=(); while [ "$#" -gt 0 ]; do case "$1" in -o|-g) shift 2;; *) args+=("$1"); shift;; esac; done
@@ -87,13 +87,13 @@ cat > "$TEST_ROOT/fake-bin/rm" <<'SH'
 #!/usr/bin/env bash
 for arg in "$@"; do
   case "$arg" in
-    /etc/oshioki|/var/lib/oshioki|/usr/local/sbin/oshioki|/usr/local/libexec/sudo/oshioki.so) exit 0 ;;
+    /etc/vouch|/var/lib/vouch|/usr/local/sbin/vouch|/usr/local/libexec/sudo/vouch.so) exit 0 ;;
   esac
 done
 exec /bin/rm "$@"
 SH
 chmod 0755 "$TEST_ROOT/fake-bin"/*
-cp "$SCRIPT_DIR/install-oshioki-hook" "$TEST_ROOT/installer"
+cp "$SCRIPT_DIR/install-vouch-hook" "$TEST_ROOT/installer"
 chmod 0755 "$TEST_ROOT/installer"
 
 new_case() {
@@ -107,16 +107,16 @@ new_case() {
 # holding pam_unix.so (what discover_security_dir insists on before it will
 # call a directory a PAM directory) plus our module, and a /etc/pam.d with a
 # stock-looking sudo stack. `with_block` adds the exact owned block.
-PAM_AUTH_LINE='auth [success=done authinfo_unavail=ignore module_unknown=ignore ignore=ignore default=die] liboshioki_pam.so'
+PAM_AUTH_LINE='auth [success=done authinfo_unavail=ignore module_unknown=ignore ignore=ignore default=die] libvouch_pam.so'
 new_pam_fixture() {
   local with_block="$1"
   mkdir -p "$CASE_ROOT/pam.d" "$CASE_ROOT/security"
   : > "$CASE_ROOT/security/pam_unix.so"
-  printf 'module\n' > "$CASE_ROOT/security/liboshioki_pam.so"
+  printf 'module\n' > "$CASE_ROOT/security/libvouch_pam.so"
   {
     printf '%s\n' '#%PAM-1.0'
     if [ "$with_block" = with-block ]; then
-      printf '%s\n' '# BEGIN oshioki pam' "$PAM_AUTH_LINE" '# END oshioki pam'
+      printf '%s\n' '# BEGIN vouch pam' "$PAM_AUTH_LINE" '# END vouch pam'
     fi
     printf '%s\n' '@include common-auth' '@include common-account' '@include common-session-noninteractive'
   } > "$CASE_ROOT/pam.d/sudo"
@@ -141,9 +141,9 @@ SH
 }
 run_postinst() {
   PATH="$TEST_ROOT/fake-bin:/usr/bin:/bin" \
-    OSHIOKI_INSTALLER="${INSTALLER_OVERRIDE:-$TEST_ROOT/installer}" \
-    OSHIOKI_INSTALL_ENV="$CASE_ROOT/install.env" \
-    OSHIOKI_STATE_DIR="$CASE_ROOT/state" FAKE_STAT_OWNER="${FAKE_STAT_OWNER:-0}" \
+    VOUCH_INSTALLER="${INSTALLER_OVERRIDE:-$TEST_ROOT/installer}" \
+    VOUCH_INSTALL_ENV="$CASE_ROOT/install.env" \
+    VOUCH_STATE_DIR="$CASE_ROOT/state" FAKE_STAT_OWNER="${FAKE_STAT_OWNER:-0}" \
     PAM_D="${PAM_D_OVERRIDE:-$CASE_ROOT/pam.d}" \
     STUB_LOG="$CASE_ROOT/installer.log" STUB_FAIL_MODE="${STUB_FAIL_MODE:-}" \
     STUB_FAIL_STATUS="${STUB_FAIL_STATUS:-1}" UNIT_LOG="${UNIT_LOG:-}" \
@@ -151,24 +151,24 @@ run_postinst() {
 }
 run_prerm() {
   PATH="$TEST_ROOT/fake-bin:/usr/bin:/bin" \
-    OSHIOKI_INSTALLER="${INSTALLER_OVERRIDE:-$TEST_ROOT/installer}" \
+    VOUCH_INSTALLER="${INSTALLER_OVERRIDE:-$TEST_ROOT/installer}" \
     STUB_LOG="$CASE_ROOT/installer.log" STUB_FAIL_MODE="${STUB_FAIL_MODE:-}" \
     SUDO_CONF="$CASE_ROOT/sudo.conf" SUDOERS_D="$CASE_ROOT/sudoers.d" \
     SUDO_PLUGIN_DIR=/usr/local/libexec/sudo SBIN_DIR="$CASE_ROOT/sbin" \
-    OSHIOKI_STATE_DIR="$CASE_ROOT/state" SKIP_NODEVER=1 \
+    VOUCH_STATE_DIR="$CASE_ROOT/state" SKIP_NODEVER=1 \
     PAM_D="${PAM_D_OVERRIDE:-$CASE_ROOT/pam.d}" \
     PAM_SECURITY_DIR="${PAM_SECURITY_DIR_OVERRIDE:-$CASE_ROOT/security}" \
-    OSHIOKI_PAM_MULTIARCH="$CASE_ROOT/pam-multiarch" \
+    VOUCH_PAM_MULTIARCH="$CASE_ROOT/pam-multiarch" \
     INSTALL_TRACE="${INSTALL_TRACE:-}" UNIT_LOG="${UNIT_LOG:-}" \
-    OSHIOKI_SUDO_RS_PATHS="$CASE_ROOT/absent-sudo-rs" OSHIOKI_SETUID_SCAN_DIRS="$CASE_ROOT/absent-bin" \
+    VOUCH_SUDO_RS_PATHS="$CASE_ROOT/absent-sudo-rs" VOUCH_SETUID_SCAN_DIRS="$CASE_ROOT/absent-bin" \
     bash "$SCRIPT_DIR/../packaging/debian/DEBIAN/prerm" remove
 }
 run_postrm_purge() {
   PATH="$TEST_ROOT/fake-bin:/usr/bin:/bin" \
-    OSHIOKI_INSTALLER="$TEST_ROOT/installer" \
+    VOUCH_INSTALLER="$TEST_ROOT/installer" \
     SUDOERS_D="$CASE_ROOT/sudoers.d" \
     PAM_D="${PAM_D_OVERRIDE:-$CASE_ROOT/pam.d}" \
-    PAM_MODULE_GLOBS="${PAM_MODULE_GLOBS_OVERRIDE:-$CASE_ROOT/security/liboshioki_pam.so}" \
+    PAM_MODULE_GLOBS="${PAM_MODULE_GLOBS_OVERRIDE:-$CASE_ROOT/security/libvouch_pam.so}" \
     bash "$SCRIPT_DIR/../packaging/debian/DEBIAN/postrm" purge
 }
 
@@ -209,38 +209,38 @@ for unsafe in foreign-owner writable symlink; do
   [ "$(state_mode "$CASE_ROOT/state")" = "$before_mode" ] || fail "postinst changed refused state"
 done
 
-# Missing sudo.conf must not prevent an exact Oshioki drop-in from being
+# Missing sudo.conf must not prevent an exact Vouch drop-in from being
 # removed by prerm.
 new_case missing-conf
-printf 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL\n' > "$CASE_ROOT/sudoers.d/oshioki"
+printf 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL\n' > "$CASE_ROOT/sudoers.d/vouch"
 run_prerm
-[ ! -e "$CASE_ROOT/sudoers.d/oshioki" ] || fail "missing sudo.conf left the drop-in"
+[ ! -e "$CASE_ROOT/sudoers.d/vouch" ] || fail "missing sudo.conf left the drop-in"
 
 # A malformed marker pair still gets independently cleaned up, including the
 # exact plugin directive and the drop-in.
 new_case malformed-conf
-printf '%s\n' '# BEGIN oshioki' 'Plugin approval_exec /usr/local/libexec/sudo/oshioki.so' > "$CASE_ROOT/sudo.conf"
-printf 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL\n' > "$CASE_ROOT/sudoers.d/oshioki"
+printf '%s\n' '# BEGIN vouch' 'Plugin approval_exec /usr/local/libexec/sudo/vouch.so' > "$CASE_ROOT/sudo.conf"
+printf 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL\n' > "$CASE_ROOT/sudoers.d/vouch"
 run_prerm
-if grep -Fq 'Plugin approval_exec /usr/local/libexec/sudo/oshioki.so' "$CASE_ROOT/sudo.conf"; then fail "malformed sudo.conf left the plugin"; fi
-[ ! -e "$CASE_ROOT/sudoers.d/oshioki" ] || fail "malformed sudo.conf left the drop-in"
+if grep -Fq 'Plugin approval_exec /usr/local/libexec/sudo/vouch.so' "$CASE_ROOT/sudo.conf"; then fail "malformed sudo.conf left the plugin"; fi
+[ ! -e "$CASE_ROOT/sudoers.d/vouch" ] || fail "malformed sudo.conf left the drop-in"
 
 # If only one marker survived, cleanup removes that marker while preserving
 # unrelated administrator text.
 new_case partial-conf
-printf '%s\n' 'outside' '# END oshioki' > "$CASE_ROOT/sudo.conf"
-printf 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL\n' > "$CASE_ROOT/sudoers.d/oshioki"
+printf '%s\n' 'outside' '# END vouch' > "$CASE_ROOT/sudo.conf"
+printf 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL\n' > "$CASE_ROOT/sudoers.d/vouch"
 run_prerm
 grep -Fxq outside "$CASE_ROOT/sudo.conf" || fail "partial cleanup changed unrelated sudo.conf text"
-if grep -Fq '# END oshioki' "$CASE_ROOT/sudo.conf"; then fail "partial sudo.conf left the marker"; fi
-[ ! -e "$CASE_ROOT/sudoers.d/oshioki" ] || fail "partial sudo.conf left the drop-in"
+if grep -Fq '# END vouch' "$CASE_ROOT/sudo.conf"; then fail "partial sudo.conf left the marker"; fi
+[ ! -e "$CASE_ROOT/sudoers.d/vouch" ] || fail "partial sudo.conf left the drop-in"
 
 # The package scripts must refuse an unrelated administrator rule at the
 # reserved path rather than deleting it during removal.
 new_case unrelated-dropin
-printf 'administrator ALL=(ALL) NOPASSWD: /usr/bin/id\n' > "$CASE_ROOT/sudoers.d/oshioki"
+printf 'administrator ALL=(ALL) NOPASSWD: /usr/bin/id\n' > "$CASE_ROOT/sudoers.d/vouch"
 if run_prerm >"$CASE_ROOT/log" 2>&1; then fail "prerm accepted an unrelated drop-in"; fi
-[ -e "$CASE_ROOT/sudoers.d/oshioki" ] || fail "prerm deleted unrelated sudoers content"
+[ -e "$CASE_ROOT/sudoers.d/vouch" ] || fail "prerm deleted unrelated sudoers content"
 
 # The PAM lane comes out before anything else prerm touches, and within the
 # installer the entries come out strictly before the module file: a module
@@ -250,19 +250,19 @@ if run_prerm >"$CASE_ROOT/log" 2>&1; then fail "prerm accepted an unrelated drop
 # that could coincide.
 new_case prerm-pam-block
 new_pam_fixture with-block
-printf 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL\n' > "$CASE_ROOT/sudoers.d/oshioki"
+printf 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL\n' > "$CASE_ROOT/sudoers.d/vouch"
 INSTALL_TRACE="$CASE_ROOT/trace" run_prerm
 [ -f "$CASE_ROOT/trace" ] || fail "prerm did not run the contextual PAM cleanup"
-if grep -Fq liboshioki_pam "$CASE_ROOT/pam.d/sudo"; then fail "prerm left the PAM entry"; fi
-if grep -Fq '# BEGIN oshioki pam' "$CASE_ROOT/pam.d/sudo"; then fail "prerm left the PAM marker"; fi
+if grep -Fq libvouch_pam "$CASE_ROOT/pam.d/sudo"; then fail "prerm left the PAM entry"; fi
+if grep -Fq '# BEGIN vouch pam' "$CASE_ROOT/pam.d/sudo"; then fail "prerm left the PAM marker"; fi
 grep -Fxq '@include common-auth' "$CASE_ROOT/pam.d/sudo" || fail "prerm changed unrelated PAM text"
-[ ! -e "$CASE_ROOT/security/liboshioki_pam.so" ] || fail "prerm left the PAM module installed"
+[ ! -e "$CASE_ROOT/security/libvouch_pam.so" ] || fail "prerm left the PAM module installed"
 edit_line="$(grep -n '^pam:disable:edit:sudo$' "$CASE_ROOT/trace" | head -1 | cut -d: -f1)"
 module_line="$(grep -n '^pam:disable:module-removed:' "$CASE_ROOT/trace" | head -1 | cut -d: -f1)"
 [ -n "$edit_line" ] || fail "no PAM edit step in the trace"
 [ -n "$module_line" ] || fail "no module removal step in the trace"
 [ "$edit_line" -lt "$module_line" ] || fail "prerm removed the module before the PAM entries"
-[ ! -e "$CASE_ROOT/sudoers.d/oshioki" ] || fail "prerm left the drop-in after PAM cleanup"
+[ ! -e "$CASE_ROOT/sudoers.d/vouch" ] || fail "prerm left the drop-in after PAM cleanup"
 
 # A host that never migrated must see no PAM work at all: the block below is
 # what decides, and an unconditional call would run the installer's migration
@@ -270,25 +270,25 @@ module_line="$(grep -n '^pam:disable:module-removed:' "$CASE_ROOT/trace" | head 
 new_case prerm-no-pam
 new_pam_fixture without-block
 cp "$CASE_ROOT/pam.d/sudo" "$CASE_ROOT/sudo.expected"
-printf 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL\n' > "$CASE_ROOT/sudoers.d/oshioki"
+printf 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL\n' > "$CASE_ROOT/sudoers.d/vouch"
 INSTALL_TRACE="$CASE_ROOT/trace" run_prerm
 [ ! -e "$CASE_ROOT/trace" ] || fail "prerm ran PAM cleanup on a host with no PAM entries"
 cmp -s "$CASE_ROOT/pam.d/sudo" "$CASE_ROOT/sudo.expected" || fail "prerm edited an unmigrated PAM stack"
-[ -e "$CASE_ROOT/security/liboshioki_pam.so" ] || fail "prerm removed a module it had not disabled"
-[ ! -e "$CASE_ROOT/sudoers.d/oshioki" ] || fail "prerm left the drop-in"
+[ -e "$CASE_ROOT/security/libvouch_pam.so" ] || fail "prerm removed a module it had not disabled"
+[ ! -e "$CASE_ROOT/sudoers.d/vouch" ] || fail "prerm left the drop-in"
 
 # postrm purge is the final defensive cleanup opportunity after the installer
 # has otherwise been removed from dpkg's file list.
 new_case postrm-fallback
-printf 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL\n' > "$CASE_ROOT/sudoers.d/oshioki"
+printf 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL\n' > "$CASE_ROOT/sudoers.d/vouch"
 rm "$TEST_ROOT/installer"
 run_postrm_purge
-[ ! -e "$CASE_ROOT/sudoers.d/oshioki" ] || fail "postrm purge left the Oshioki drop-in"
+[ ! -e "$CASE_ROOT/sudoers.d/vouch" ] || fail "postrm purge left the Vouch drop-in"
 
 new_case postrm-legacy
-printf 'testuser ALL=(ALL) NOPASSWD: ALL\n' > "$CASE_ROOT/sudoers.d/oshioki"
+printf 'testuser ALL=(ALL) NOPASSWD: ALL\n' > "$CASE_ROOT/sudoers.d/vouch"
 run_postrm_purge
-[ ! -e "$CASE_ROOT/sudoers.d/oshioki" ] || fail "postrm purge left the legacy Oshioki drop-in"
+[ ! -e "$CASE_ROOT/sudoers.d/vouch" ] || fail "postrm purge left the legacy Vouch drop-in"
 
 # postinst on an already-migrated host: the lane comes from host state, not
 # from install.env, so an upgrade still refreshes the module -- and
@@ -297,7 +297,7 @@ run_postrm_purge
 new_case postinst-migrated
 new_pam_fixture with-block
 make_stub_installer
-printf 'OSHIOKI_ORIGIN=https://sudo.test\n' > "$CASE_ROOT/install.env"
+printf 'VOUCH_ORIGIN=https://sudo.test\n' > "$CASE_ROOT/install.env"
 INSTALLER_OVERRIDE="$CASE_ROOT/stub-installer" run_postinst >"$CASE_ROOT/log" 2>&1
 grep -q -- '--prelaunch' "$CASE_ROOT/installer.log" || fail "postinst did not run --prelaunch"
 grep -q -- '--contextual-pam' "$CASE_ROOT/installer.log" ||
@@ -311,7 +311,7 @@ pam_line="$(grep -n -- '--contextual-pam' "$CASE_ROOT/installer.log" | head -1 |
 new_case postinst-plugin-lane
 new_pam_fixture without-block
 make_stub_installer
-printf 'OSHIOKI_ORIGIN=https://sudo.test\n' > "$CASE_ROOT/install.env"
+printf 'VOUCH_ORIGIN=https://sudo.test\n' > "$CASE_ROOT/install.env"
 INSTALLER_OVERRIDE="$CASE_ROOT/stub-installer" run_postinst >"$CASE_ROOT/log" 2>&1
 grep -q -- '--prelaunch' "$CASE_ROOT/installer.log" || fail "postinst did not run --prelaunch"
 if grep -q -- '--contextual-pam' "$CASE_ROOT/installer.log"; then
@@ -322,7 +322,7 @@ fi
 new_case postinst-optin-key
 new_pam_fixture without-block
 make_stub_installer
-printf 'OSHIOKI_ORIGIN=https://sudo.test\nOSHIOKI_CONTEXTUAL_PAM=1\n' > "$CASE_ROOT/install.env"
+printf 'VOUCH_ORIGIN=https://sudo.test\nVOUCH_CONTEXTUAL_PAM=1\n' > "$CASE_ROOT/install.env"
 INSTALLER_OVERRIDE="$CASE_ROOT/stub-installer" run_postinst >"$CASE_ROOT/log" 2>&1
 grep -q -- '--contextual-pam' "$CASE_ROOT/installer.log" || fail "postinst ignored the opt-in key"
 
@@ -331,7 +331,7 @@ grep -q -- '--contextual-pam' "$CASE_ROOT/installer.log" || fail "postinst ignor
 new_case postinst-migration-fails
 new_pam_fixture without-block
 make_stub_installer
-printf 'OSHIOKI_ORIGIN=https://sudo.test\nOSHIOKI_CONTEXTUAL_PAM=1\n' > "$CASE_ROOT/install.env"
+printf 'VOUCH_ORIGIN=https://sudo.test\nVOUCH_CONTEXTUAL_PAM=1\n' > "$CASE_ROOT/install.env"
 INSTALLER_OVERRIDE="$CASE_ROOT/stub-installer" STUB_FAIL_MODE=--contextual-pam \
   run_postinst >"$CASE_ROOT/log" 2>&1 || fail "a failed migration failed the whole configure"
 grep -Fq 'did not complete' "$CASE_ROOT/log" || fail "a failed migration was silent"
@@ -344,7 +344,7 @@ grep -Fq -- '--contextual-pam' "$CASE_ROOT/log" || fail "the failure message nam
 new_case postinst-plugin-refused
 new_pam_fixture without-block
 make_stub_installer
-printf 'OSHIOKI_ORIGIN=https://sudo.test\nOSHIOKI_CONTEXTUAL_PAM=1\n' > "$CASE_ROOT/install.env"
+printf 'VOUCH_ORIGIN=https://sudo.test\nVOUCH_CONTEXTUAL_PAM=1\n' > "$CASE_ROOT/install.env"
 INSTALLER_OVERRIDE="$CASE_ROOT/stub-installer" STUB_FAIL_MODE=--prelaunch STUB_FAIL_STATUS=3 \
   run_postinst >"$CASE_ROOT/log" 2>&1 || { cat "$CASE_ROOT/log" >&2; fail "a refused plugin lane failed the whole configure"; }
 grep -Fq 'passwordless sudo was not enabled' "$CASE_ROOT/log" || fail "a refused plugin lane was silent"
@@ -354,7 +354,7 @@ grep -q -- '--contextual-pam' "$CASE_ROOT/installer.log" || fail "a refused plug
 new_case postinst-prelaunch-fails
 new_pam_fixture without-block
 make_stub_installer
-printf 'OSHIOKI_ORIGIN=https://sudo.test\n' > "$CASE_ROOT/install.env"
+printf 'VOUCH_ORIGIN=https://sudo.test\n' > "$CASE_ROOT/install.env"
 if INSTALLER_OVERRIDE="$CASE_ROOT/stub-installer" STUB_FAIL_MODE=--prelaunch STUB_FAIL_STATUS=1 \
    run_postinst >"$CASE_ROOT/log" 2>&1; then
   fail "postinst ignored a failed --prelaunch"
@@ -364,31 +364,31 @@ fi
 # is enabled and started by configure whether or not install.env exists: a
 # host can carry the rule from an earlier configure. prerm stops it.
 UNIT_DIR="$SCRIPT_DIR/../packaging/debian/usr/lib/systemd/system"
-[ -f "$UNIT_DIR/oshioki-sudo-reconcile.path" ] || fail "the reconcile path unit is not packaged"
-grep -Fxq 'ExecStart=/usr/share/oshioki/install-oshioki-hook --reconcile-plugin-rule' \
-  "$UNIT_DIR/oshioki-sudo-reconcile.service" || fail "the reconcile service runs something other than the remove-only mode"
-[ "$(grep -c '^ExecStart' "$UNIT_DIR/oshioki-sudo-reconcile.service")" = 1 ] ||
+[ -f "$UNIT_DIR/vouch-sudo-reconcile.path" ] || fail "the reconcile path unit is not packaged"
+grep -Fxq 'ExecStart=/usr/share/vouch/install-vouch-hook --reconcile-plugin-rule' \
+  "$UNIT_DIR/vouch-sudo-reconcile.service" || fail "the reconcile service runs something other than the remove-only mode"
+[ "$(grep -c '^ExecStart' "$UNIT_DIR/vouch-sudo-reconcile.service")" = 1 ] ||
   fail "the reconcile service runs more than one command"
 for watched in /etc/sudo.conf /etc/alternatives/sudo /usr/bin/sudo-rs /usr/lib/cargo/bin/sudo; do
-  grep -Fxq "PathChanged=$watched" "$UNIT_DIR/oshioki-sudo-reconcile.path" ||
+  grep -Fxq "PathChanged=$watched" "$UNIT_DIR/vouch-sudo-reconcile.path" ||
     fail "the reconcile path unit does not watch $watched"
 done
-grep -Fxq 'Unit=oshioki-sudo-reconcile.service' "$UNIT_DIR/oshioki-sudo-reconcile.path" ||
+grep -Fxq 'Unit=vouch-sudo-reconcile.service' "$UNIT_DIR/vouch-sudo-reconcile.path" ||
   fail "the path unit triggers the wrong service"
 new_case postinst-reconcile-unit
 make_stub_installer
 UNIT_LOG="$CASE_ROOT/units.log" INSTALLER_OVERRIDE="$CASE_ROOT/stub-installer" run_postinst >"$CASE_ROOT/log" 2>&1 ||
   { cat "$CASE_ROOT/log" >&2; fail "postinst failed while enabling the reconcile unit"; }
-grep -Fxq 'deb-systemd-helper --system enable oshioki-sudo-reconcile.path' "$CASE_ROOT/units.log" ||
+grep -Fxq 'deb-systemd-helper --system enable vouch-sudo-reconcile.path' "$CASE_ROOT/units.log" ||
   fail "postinst did not enable the reconcile path unit"
 if [ -d /run/systemd/system ]; then
-  grep -Fxq 'systemctl restart oshioki-sudo-reconcile.path' "$CASE_ROOT/units.log" ||
+  grep -Fxq 'systemctl restart vouch-sudo-reconcile.path' "$CASE_ROOT/units.log" ||
     fail "postinst did not start the reconcile path unit"
 fi
 new_case prerm-reconcile-unit
 UNIT_LOG="$CASE_ROOT/units.log" run_prerm >"$CASE_ROOT/log" 2>&1 || { cat "$CASE_ROOT/log" >&2; fail "prerm failed"; }
 if [ -d /run/systemd/system ]; then
-  grep -Fq 'systemctl stop oshioki-sudo-reconcile.path' "$CASE_ROOT/units.log" ||
+  grep -Fq 'systemctl stop vouch-sudo-reconcile.path' "$CASE_ROOT/units.log" ||
     fail "prerm did not stop the reconcile path unit"
 fi
 
@@ -409,8 +409,8 @@ grep -Fq 'hook not enabled' "$CASE_ROOT/log" || fail "postinst did not report th
 new_case postinst-pam-litter
 new_pam_fixture without-block
 make_stub_installer
-printf '%s\n' '# BEGIN oshioki pam' '# END oshioki pam' > "$CASE_ROOT/pam.d/sudo.AbCdEf"
-printf 'OSHIOKI_ORIGIN=https://sudo.test\n' > "$CASE_ROOT/install.env"
+printf '%s\n' '# BEGIN vouch pam' '# END vouch pam' > "$CASE_ROOT/pam.d/sudo.AbCdEf"
+printf 'VOUCH_ORIGIN=https://sudo.test\n' > "$CASE_ROOT/install.env"
 INSTALLER_OVERRIDE="$CASE_ROOT/stub-installer" run_postinst >"$CASE_ROOT/log" 2>&1
 if grep -q -- '--contextual-pam' "$CASE_ROOT/installer.log"; then
   fail "postinst counted a leftover sudo.XXXXXX file as a live PAM lane"
@@ -422,14 +422,14 @@ fi
 new_case prerm-pam-disable-fails
 new_pam_fixture with-block
 make_stub_installer
-printf '%s\n' '# BEGIN oshioki' 'Plugin approval_exec /usr/local/libexec/sudo/oshioki.so' '# END oshioki' > "$CASE_ROOT/sudo.conf"
-printf 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL\n' > "$CASE_ROOT/sudoers.d/oshioki"
+printf '%s\n' '# BEGIN vouch' 'Plugin approval_exec /usr/local/libexec/sudo/vouch.so' '# END vouch' > "$CASE_ROOT/sudo.conf"
+printf 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL\n' > "$CASE_ROOT/sudoers.d/vouch"
 if INSTALLER_OVERRIDE="$CASE_ROOT/stub-installer" STUB_FAIL_MODE=--disable-contextual-pam \
    run_prerm >"$CASE_ROOT/log" 2>&1; then
   fail "prerm succeeded after the PAM disable failed"
 fi
 grep -Fq 'left untouched' "$CASE_ROOT/log" || fail "prerm did not say the legacy artifacts were left alone"
-[ -e "$CASE_ROOT/sudoers.d/oshioki" ] || fail "prerm removed the drop-in after a failed PAM disable"
+[ -e "$CASE_ROOT/sudoers.d/vouch" ] || fail "prerm removed the drop-in after a failed PAM disable"
 grep -Fq 'Plugin approval_exec' "$CASE_ROOT/sudo.conf" ||
   fail "prerm removed the plugin block after a failed PAM disable"
 [ "$(grep -c -- '--' "$CASE_ROOT/installer.log")" = 1 ] ||
@@ -441,30 +441,30 @@ grep -Fq 'Plugin approval_exec' "$CASE_ROOT/sudo.conf" ||
 new_case postrm-pam-sweep
 new_pam_fixture without-block
 run_postrm_purge
-[ ! -e "$CASE_ROOT/security/liboshioki_pam.so" ] || fail "postrm purge left an unreferenced module"
+[ ! -e "$CASE_ROOT/security/libvouch_pam.so" ] || fail "postrm purge left an unreferenced module"
 
 # The default globs are real `*` patterns: a sweep has to clear every
 # multiarch directory it matches, not just the first.
 new_case postrm-pam-two-dirs
 new_pam_fixture without-block
 mkdir -p "$CASE_ROOT/usr/lib/x86_64-linux-gnu/security" "$CASE_ROOT/usr/lib/aarch64-linux-gnu/security"
-printf 'module\n' > "$CASE_ROOT/usr/lib/x86_64-linux-gnu/security/liboshioki_pam.so"
-printf 'module\n' > "$CASE_ROOT/usr/lib/aarch64-linux-gnu/security/liboshioki_pam.so"
-PAM_MODULE_GLOBS_OVERRIDE="$CASE_ROOT/usr/lib/*/security/liboshioki_pam.so" run_postrm_purge
+printf 'module\n' > "$CASE_ROOT/usr/lib/x86_64-linux-gnu/security/libvouch_pam.so"
+printf 'module\n' > "$CASE_ROOT/usr/lib/aarch64-linux-gnu/security/libvouch_pam.so"
+PAM_MODULE_GLOBS_OVERRIDE="$CASE_ROOT/usr/lib/*/security/libvouch_pam.so" run_postrm_purge
 for dir in x86_64-linux-gnu aarch64-linux-gnu; do
-  [ ! -e "$CASE_ROOT/usr/lib/$dir/security/liboshioki_pam.so" ] ||
+  [ ! -e "$CASE_ROOT/usr/lib/$dir/security/libvouch_pam.so" ] ||
     fail "postrm purge left the module in $dir"
 done
 
 new_case postrm-pam-referenced
 new_pam_fixture with-block
 run_postrm_purge 2>"$CASE_ROOT/log"
-[ -e "$CASE_ROOT/security/liboshioki_pam.so" ] || fail "postrm purge removed a module PAM still references"
-grep -Fq "leaving $CASE_ROOT/security/liboshioki_pam.so in place" "$CASE_ROOT/log" ||
+[ -e "$CASE_ROOT/security/libvouch_pam.so" ] || fail "postrm purge removed a module PAM still references"
+grep -Fq "leaving $CASE_ROOT/security/libvouch_pam.so in place" "$CASE_ROOT/log" ||
   fail "postrm purge did not name the module it left behind"
 # A module that stays must keep the helper it execs and the config it reads,
 # or /etc/pam.d names a module with nothing to run.
-grep -Fq "leaving /usr/local/sbin/oshioki and /etc/oshioki in place" "$CASE_ROOT/log" ||
+grep -Fq "leaving /usr/local/sbin/vouch and /etc/vouch in place" "$CASE_ROOT/log" ||
   fail "postrm purge did not keep the helper a referenced module still execs"
 
 echo "test-debian-package-scripts: PASS"

@@ -57,7 +57,7 @@ fn write_logo(output: &mut impl Write) -> io::Result<()> {
         &base64::engine::general_purpose::STANDARD,
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../assets/oshioki-cli.png"
+            "/../assets/vouch-cli.png"
         )),
     );
     let chunk_count = encoded.len().div_ceil(IMAGE_CHUNK_SIZE);
@@ -165,7 +165,7 @@ mod tests {
             decoded,
             include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../assets/oshioki-cli.png"
+                "/../assets/vouch-cli.png"
             ))
         );
     }

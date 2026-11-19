@@ -2,7 +2,7 @@
 // and lifecycle helpers. These tests never construct a network transport.
 fn revocation_directory(name: &str) -> PathBuf {
     use std::os::unix::fs::DirBuilderExt as _;
-    let root = std::env::var_os("OSHIOKI_REVOCATION_TEST_STATE")
+    let root = std::env::var_os("VOUCH_REVOCATION_TEST_STATE")
         .map_or_else(std::env::temp_dir, PathBuf::from);
     let dir = root.join(format!("{name}-{}", Uuid::new_v4()));
     fs::DirBuilder::new().mode(0o700).create(&dir).unwrap();
@@ -18,7 +18,7 @@ fn revocation_command_decision(
     counter: u32,
 ) -> DecisionV1 {
     let client = serde_json::to_vec(&serde_json::json!({"type":"webauthn.get",
-        "challenge":URL_SAFE_NO_PAD.encode(oshioki_protocol::approve_challenge(raw)),
+        "challenge":URL_SAFE_NO_PAD.encode(vouch_protocol::approve_challenge(raw)),
         "origin":TEST_ORIGIN,"crossOrigin":false}))
     .unwrap();
     let mut data = Sha256::digest(TEST_RP_ID.as_bytes()).to_vec();
@@ -27,7 +27,7 @@ fn revocation_command_decision(
     let mut signed = data.clone();
     signed.extend_from_slice(&Sha256::digest(&client));
     let signature: p256::ecdsa::Signature = signing.sign(&signed);
-    DecisionV1::Approve(oshioki_protocol::ApproveV1 {
+    DecisionV1::Approve(vouch_protocol::ApproveV1 {
         version: VERSION_V1,
         request_id: request.request_id.clone(),
         device_fingerprint: device.fingerprint.clone(),
@@ -43,8 +43,8 @@ fn revocation_native_command(
     request: &RequestV1,
     raw: &[u8],
 ) -> DecisionV1 {
-    let signature: p256::ecdsa::Signature = signing.sign(&oshioki_protocol::approve_challenge(raw));
-    DecisionV1::ApproveNative(oshioki_protocol::ApproveNativeV1 {
+    let signature: p256::ecdsa::Signature = signing.sign(&vouch_protocol::approve_challenge(raw));
+    DecisionV1::ApproveNative(vouch_protocol::ApproveNativeV1 {
         version: VERSION_V1,
         request_id: request.request_id.clone(),
         device_fingerprint: device.fingerprint.clone(),
@@ -405,18 +405,18 @@ async fn revocation_exact_identity_gate_rejects_token_kind_and_key_changes_but_a
         // change fingerprint too; token/kind replacements retain fingerprint.
         if field == "public" {
             let public =
-                oshioki_protocol::decode_base64url(&changed.credential_public_key).unwrap();
+                vouch_protocol::decode_base64url(&changed.credential_public_key).unwrap();
             changed.credential_id =
-                URL_SAFE_NO_PAD.encode(oshioki_protocol::native_credential_id(&public));
+                URL_SAFE_NO_PAD.encode(vouch_protocol::native_credential_id(&public));
         }
         if field == "credential" {
             changed.kind = DeviceKindV1::Webauthn;
             changed.credential_public_key = webauthn_test_device().0.credential_public_key;
         }
-        changed.fingerprint = oshioki_protocol::device_fingerprint(
-            &oshioki_protocol::decode_base64url(&changed.credential_id).unwrap(),
-            &oshioki_protocol::decode_base64url(&changed.credential_public_key).unwrap(),
-            &oshioki_protocol::decode_base64url(&changed.box_public_key).unwrap(),
+        changed.fingerprint = vouch_protocol::device_fingerprint(
+            &vouch_protocol::decode_base64url(&changed.credential_id).unwrap(),
+            &vouch_protocol::decode_base64url(&changed.credential_public_key).unwrap(),
+            &vouch_protocol::decode_base64url(&changed.box_public_key).unwrap(),
         );
         changed.validate().unwrap();
         seed_registry(&dir, vec![changed]);
@@ -835,11 +835,11 @@ async fn revocation_epoch_overflow_fails_without_remote_or_mutation() {
 // flock. Parent uses bounded async pipe handshakes, never timing sleeps.
 #[test]
 fn revocation_lock_child() {
-    let Some(dir) = std::env::var_os("OSHIOKI_LOCK_CHILD_DIR") else {
+    let Some(dir) = std::env::var_os("VOUCH_LOCK_CHILD_DIR") else {
         return;
     };
     let dir = PathBuf::from(dir);
-    if std::env::var_os("OSHIOKI_LOCK_CHILD_CONTEND").is_some() {
+    if std::env::var_os("VOUCH_LOCK_CHILD_CONTEND").is_some() {
         let error = registry::Transaction::acquire(&dir)
             .err()
             .expect("held process lock must contend");
@@ -890,8 +890,8 @@ async fn revocation_independent_process_lock_survives_atomic_rename_and_exit() {
                 "auth_tests::revocation_lock_child",
                 "--nocapture",
             ])
-            .env("OSHIOKI_LOCK_CHILD_DIR", &dir)
-            .env_remove("OSHIOKI_LOCK_CHILD_CONTEND")
+            .env("VOUCH_LOCK_CHILD_DIR", &dir)
+            .env_remove("VOUCH_LOCK_CHILD_CONTEND")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .kill_on_drop(true)
@@ -918,8 +918,8 @@ async fn revocation_independent_process_lock_survives_atomic_rename_and_exit() {
                 "auth_tests::revocation_lock_child",
                 "--nocapture",
             ])
-            .env("OSHIOKI_LOCK_CHILD_DIR", &dir)
-            .env("OSHIOKI_LOCK_CHILD_CONTEND", "1")
+            .env("VOUCH_LOCK_CHILD_DIR", &dir)
+            .env("VOUCH_LOCK_CHILD_CONTEND", "1")
             .stdout(std::process::Stdio::piped())
             .kill_on_drop(true)
             .spawn()

@@ -8,12 +8,12 @@ import { join } from "node:path";
 import { URL } from "node:url";
 import { startTlsProxy } from "../../../scripts/e2e-tls-proxy.mjs";
 
-const hookBinary = process.env.OSHIOKI_HOOK ?? "/work/target/release/oshioki";
-const hookConfigDir = process.env.OSHIOKI_TEST_CONFIG_DIR;
-const origin = process.env.OSHIOKI_ORIGIN ?? "https://sudo.test";
+const hookBinary = process.env.VOUCH_HOOK ?? "/work/target/release/vouch";
+const hookConfigDir = process.env.VOUCH_TEST_CONFIG_DIR;
+const origin = process.env.VOUCH_ORIGIN ?? "https://sudo.test";
 const natsOptions = {
   servers: process.env.NATS_URL ?? "nats://nats:4222",
-  user: process.env.NATS_USER ?? "oshioki",
+  user: process.env.NATS_USER ?? "vouch",
   pass: process.env.NATS_PASS ?? "test-only",
 };
 let proxy;
@@ -55,7 +55,7 @@ test.afterEach(async () => {
 function hook(args, binary = hookBinary) {
   const child = spawn(binary, args, {
     env: hookConfigDir
-      ? { ...process.env, OSHIOKI_CONFIG_DIR: hookConfigDir }
+      ? { ...process.env, VOUCH_CONFIG_DIR: hookConfigDir }
       : process.env,
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -225,7 +225,7 @@ async function apiRequest(requestId, token) {
   return new Promise((resolve, reject) => {
     const request = https.request({
       hostname: "127.0.0.1",
-      port: Number(process.env.OSHIOKI_HTTPS_PORT ?? "443"),
+      port: Number(process.env.VOUCH_HTTPS_PORT ?? "443"),
       path: `/api/v1/requests/${requestId}`,
       method: "GET",
       servername: "sudo.test",
@@ -280,7 +280,7 @@ async function requestWith(profile, device, action, { binary = hookBinary, befor
   await navigate(profile.page, `${origin}/r/${envelope.request_id}`);
   await expect(profile.page.locator("#request")).toBeVisible();
   await expect(profile.page.locator("#actions")).toBeVisible();
-  // `oshioki test` builds a request that targets root, and the page names the
+  // `vouch test` builds a request that targets root, and the page names the
   // target rather than leaving sudo's default implicit.
   await expect(profile.page.locator("#runas")).toHaveText("root (uid 0)");
   await expect(profile.page.locator("#command")).toHaveText("/usr/bin/true");
@@ -351,7 +351,7 @@ async function toolRequestEnvelope(requestId, device, publicDevice) {
     hook_event_name: "PermissionRequest",
     tool_name: "Bash",
     tool_input: input,
-    cwd: "/tmp/oshioki-project",
+    cwd: "/tmp/vouch-project",
     session_id: "session-tool-1",
     agent_id: "agent-subtask-1",
     agent_type: "worker",
@@ -462,10 +462,10 @@ async function exerciseToolDecision(profile, device, action) {
 
 // The compatibility runner requires the prior release artifacts before selecting
 // this lane. Ordinary browser runs retain their current-version selection.
-if (process.env.OSHIOKI_COMPAT_CONTINUITY === "1") {
-  const previousHook = process.env.OSHIOKI_COMPAT_PREV_HOOK;
-  const previousApp = readFileSync(process.env.OSHIOKI_COMPAT_PREV_APP_JS, "utf8");
-  const previousTag = process.env.OSHIOKI_COMPAT_PREV_TAG;
+if (process.env.VOUCH_COMPAT_CONTINUITY === "1") {
+  const previousHook = process.env.VOUCH_COMPAT_PREV_HOOK;
+  const previousApp = readFileSync(process.env.VOUCH_COMPAT_PREV_APP_JS, "utf8");
+  const previousTag = process.env.VOUCH_COMPAT_PREV_TAG;
   if (!previousHook || !previousTag || !previousApp) throw new Error("missing required prior-release continuity artifacts");
 
   for (const failure of ["legacy push config", "push config 503", "hanging push initialization"]) {
@@ -638,7 +638,7 @@ test("two enrollments share one browser endpoint and the remaining enrollment ap
   expect(first.fingerprint).not.toBe(second.fingerprint);
   const endpoint = `https://push.example/browser-${crypto.randomUUID()}`;
   await profile.page.evaluate(async ({ endpoint, fingerprint }) => {
-    await OshiokiPush.createPushBinding(endpoint, fingerprint);
+    await VouchPush.createPushBinding(endpoint, fingerprint);
   }, { endpoint, fingerprint: first.fingerprint });
   await profile.context.addInitScript(({ endpoint }) => {
     const bytes = value => {
@@ -663,8 +663,8 @@ test("two enrollments share one browser endpoint and the remaining enrollment ap
   }, { endpoint });
   await navigate(profile.page, `${origin}/setup`);
   const shared = await profile.page.evaluate(async () => {
-    const result = await OshiokiPush.syncOwnedPushSubscription();
-    return { registered: result.registered, binding: await OshiokiPush.getSetting("pushBinding") };
+    const result = await VouchPush.syncOwnedPushSubscription();
+    return { registered: result.registered, binding: await VouchPush.getSetting("pushBinding") };
   });
   expect(shared.registered).toBe(2);
   expect(shared.binding.endpoint).toBe(endpoint);
@@ -695,8 +695,8 @@ test("two enrollments share one browser endpoint and the remaining enrollment ap
       revokedBearer: request.headers().authorization === `Bearer ${first.apiToken}` });
   });
   const afterRevoke = await profile.page.evaluate(async () => {
-    const result = await OshiokiPush.syncOwnedPushSubscription();
-    return { registered: result.registered, failures: result.failures.length, binding: await OshiokiPush.getSetting("pushBinding"), unsubscribed: window.__sharedPushUnsubscribed };
+    const result = await VouchPush.syncOwnedPushSubscription();
+    return { registered: result.registered, failures: result.failures.length, binding: await VouchPush.getSetting("pushBinding"), unsubscribed: window.__sharedPushUnsubscribed };
   });
   expect(afterRevoke.registered).toBe(1);
   expect(afterRevoke.failures).toBe(1);

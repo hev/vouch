@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install, disable, or inspect the retained oshioki prelaunch block.
+# Install, disable, or inspect the retained vouch prelaunch block.
 set -euo pipefail
 
 MODE=""
@@ -11,11 +11,11 @@ while [ "$#" -gt 0 ]; do
     --prelaunch|--disable-prelaunch|--remove-sudoers-dropin|--prelaunch-status|--standalone-e2e|\
     --reconcile-plugin-rule|\
     --contextual-pam|--disable-contextual-pam|--contextual-pam-status)
-      [ -z "$MODE" ] || { echo "install-oshioki-hook: choose exactly one mode" >&2; exit 2; }
+      [ -z "$MODE" ] || { echo "install-vouch-hook: choose exactly one mode" >&2; exit 2; }
       MODE="${1#--}"
       ;;
     --config-file)
-      [ "$#" -ge 2 ] || { echo "install-oshioki-hook: --config-file requires a path" >&2; exit 2; }
+      [ "$#" -ge 2 ] || { echo "install-vouch-hook: --config-file requires a path" >&2; exit 2; }
       CONFIG_FILE="$2"
       shift
       ;;
@@ -23,15 +23,15 @@ while [ "$#" -gt 0 ]; do
     # Only --contextual-pam step 7 uses this: a live `sudo true` as the named
     # account, with an administrator present to approve the device prompt.
     --supervised) SUPERVISED=1 ;;
-    *) echo "install-oshioki-hook: unknown argument: $1" >&2; exit 2 ;;
+    *) echo "install-vouch-hook: unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
 done
-[ -n "$MODE" ] || { echo "install-oshioki-hook: choose exactly one mode" >&2; exit 2; }
+[ -n "$MODE" ] || { echo "install-vouch-hook: choose exactly one mode" >&2; exit 2; }
 
 # Where this script really lives. `pwd -P` alone resolves symlinked
 # *directories* but not a symlinked *file*, and Homebrew puts this script on
-# PATH as /opt/homebrew/bin/<name> -> ../Cellar/oshioki/<version>/bin/<name>.
+# PATH as /opt/homebrew/bin/<name> -> ../Cellar/vouch/<version>/bin/<name>.
 # Taking the dirname of the link would point every keg-relative lookup at
 # /opt/homebrew instead of the Cellar (issue #91), so walk the link chain
 # first. macOS ships no `readlink -f`, hence the loop.
@@ -39,20 +39,20 @@ resolve_script_path() {
   local path="$1" target dir hops=0
   while [ -L "$path" ]; do
     hops=$((hops + 1))
-    [ "$hops" -le 40 ] || { echo "install-oshioki-hook: symlink loop resolving $1" >&2; return 1; }
+    [ "$hops" -le 40 ] || { echo "install-vouch-hook: symlink loop resolving $1" >&2; return 1; }
     # Fail closed. A readlink that is missing or errors would otherwise leave
     # target empty, path would become "<dir>/", the loop would end, and the
     # function would hand back the link's own directory -- exactly the #91
     # behaviour this walk exists to prevent, with nothing said about it.
     target="$(readlink "$path")" && [ -n "$target" ] ||
-      { echo "install-oshioki-hook: cannot resolve symlink: $path" >&2; return 1; }
+      { echo "install-vouch-hook: cannot resolve symlink: $path" >&2; return 1; }
     case "$target" in
       /*) path="$target" ;;
       *) path="$(dirname "$path")/$target" ;;
     esac
   done
   dir="$(cd "$(dirname "$path")" && pwd -P)" ||
-    { echo "install-oshioki-hook: cannot reach the directory of $path" >&2; return 1; }
+    { echo "install-vouch-hook: cannot reach the directory of $path" >&2; return 1; }
   printf '%s/%s\n' "$dir" "$(basename "$path")"
 }
 SCRIPT_PATH="$(resolve_script_path "${BASH_SOURCE[0]}")" || exit 1
@@ -60,25 +60,25 @@ SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 SERVICE_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 SUDO_CONF="${SUDO_CONF:-/etc/sudo.conf}"
 SBIN_DIR="${SBIN_DIR:-/usr/local/sbin}"
-STATE_DIR="${OSHIOKI_STATE_DIR:-/etc/oshioki}"
+STATE_DIR="${VOUCH_STATE_DIR:-/etc/vouch}"
 SUDOERS_D="${SUDOERS_D:-/etc/sudoers.d}"
 MAIN_SUDOERS="${MAIN_SUDOERS:-/etc/sudoers}"
-SUDOERS_FILE="$SUDOERS_D/oshioki"
-ORIGIN="${OSHIOKI_ORIGIN:-}"
-RP_ID="${OSHIOKI_RP_ID:-}"
+SUDOERS_FILE="$SUDOERS_D/vouch"
+ORIGIN="${VOUCH_ORIGIN:-}"
+RP_ID="${VOUCH_RP_ID:-}"
 NATS_URL="${NATS_URL:-}"
 NATS_USER="${NATS_USER:-}"
 NATS_PASS="${NATS_PASS:-}"
-ALLOW_PLAINTEXT="${OSHIOKI_ALLOW_PLAINTEXT_NATS:-}"
-AGENT_SOCKET="${OSHIOKI_AGENT_SOCKET:-}"
-BEGIN_MARK='# BEGIN oshioki'
-END_MARK='# END oshioki'
-LOCK_DIR="${OSHIOKI_INSTALL_LOCK:-${STATE_DIR}.install.lock}"
+ALLOW_PLAINTEXT="${VOUCH_ALLOW_PLAINTEXT_NATS:-}"
+AGENT_SOCKET="${VOUCH_AGENT_SOCKET:-}"
+BEGIN_MARK='# BEGIN vouch'
+END_MARK='# END vouch'
+LOCK_DIR="${VOUCH_INSTALL_LOCK:-${STATE_DIR}.install.lock}"
 
 case "$(uname -s)" in
-  Linux) PLUGIN_DIR="${SUDO_PLUGIN_DIR:-/usr/local/libexec/sudo}"; PLUGIN_NAME=oshioki.so; BUILD_PLUGIN=liboshioki_plugin.so ;;
-  Darwin) PLUGIN_DIR="${SUDO_PLUGIN_DIR:-/usr/local/libexec/sudo}"; PLUGIN_NAME=oshioki.dylib; BUILD_PLUGIN=liboshioki_plugin.dylib ;;
-  *) echo "install-oshioki-hook: unsupported operating system" >&2; exit 1 ;;
+  Linux) PLUGIN_DIR="${SUDO_PLUGIN_DIR:-/usr/local/libexec/sudo}"; PLUGIN_NAME=vouch.so; BUILD_PLUGIN=libvouch_plugin.so ;;
+  Darwin) PLUGIN_DIR="${SUDO_PLUGIN_DIR:-/usr/local/libexec/sudo}"; PLUGIN_NAME=vouch.dylib; BUILD_PLUGIN=libvouch_plugin.dylib ;;
+  *) echo "install-vouch-hook: unsupported operating system" >&2; exit 1 ;;
 esac
 ROOT_GROUP=root
 [ "$(uname -s)" = Darwin ] && ROOT_GROUP=wheel
@@ -91,7 +91,7 @@ ROOT_GROUP=root
 # SERVICE_DIR is the shared /usr/share, does not reach first for a
 # /usr/share/libexec that belongs to nobody. An explicit environment variable
 # always wins: these are consulted only when one is unset, so the .deb
-# postinst and oshioki-laptop-setup keep pointing the installer wherever they
+# postinst and vouch-laptop-setup keep pointing the installer wherever they
 # like. When no lane has the file the repo path is handed back unchanged, so
 # a source checkout that simply has not been built still fails with the
 # familiar "missing or unsafe build artifact" naming target/release.
@@ -105,13 +105,13 @@ first_artifact() {
   return 1
 }
 HOOK_BIN="${HOOK_BIN:-$(first_artifact \
-  "$SERVICE_DIR/target/release/oshioki" \
-  "$SCRIPT_DIR/oshioki" \
-  "$SERVICE_DIR/libexec/oshioki" ||
-  printf '%s\n' "$SERVICE_DIR/target/release/oshioki")}"
+  "$SERVICE_DIR/target/release/vouch" \
+  "$SCRIPT_DIR/vouch" \
+  "$SERVICE_DIR/libexec/vouch" ||
+  printf '%s\n' "$SERVICE_DIR/target/release/vouch")}"
 # The plugin is the one artifact whose installed name differs from its build
-# name: cargo emits liboshioki_plugin.dylib and the release tarball, and so
-# the keg libexec, rename it to oshioki.dylib. Both spellings are probed in
+# name: cargo emits libvouch_plugin.dylib and the release tarball, and so
+# the keg libexec, rename it to vouch.dylib. Both spellings are probed in
 # every lane because SHA256SUMS records whichever one that layout shipped and
 # verification is by basename.
 PLUGIN_BIN="${PLUGIN_BIN:-$(first_artifact \
@@ -123,7 +123,7 @@ PLUGIN_BIN="${PLUGIN_BIN:-$(first_artifact \
   printf '%s\n' "$SERVICE_DIR/target/release/$BUILD_PLUGIN")}"
 PLUGIN_DEST="$PLUGIN_DIR/$PLUGIN_NAME"
 
-die() { echo "install-oshioki-hook: $*" >&2; exit 1; }
+die() { echo "install-vouch-hook: $*" >&2; exit 1; }
 run() { if [ "$DRY_RUN" -eq 1 ]; then printf 'DRY:'; printf ' %q' "$@"; printf '\n'; else "$@"; fi; }
 regular_or_absent() { [ ! -L "$1" ] || die "refusing unsafe target: $1"; [ ! -e "$1" ] || [ -f "$1" ] || die "refusing unsafe target: $1"; }
 canonicalize() {
@@ -153,7 +153,7 @@ hash_file() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk
 # file locks every sudo out, so the drop-in is
 # visudo-validated before it lands and sudo ignores a leaked temp file (its
 # name carries a dot).
-sudoers_user() { printf '%s' "${OSHIOKI_SUDO_USER:-${SUDO_USER:-}}"; }
+sudoers_user() { printf '%s' "${VOUCH_SUDO_USER:-${SUDO_USER:-}}"; }
 valid_sudoers_user() {
   case "$1" in
     ''|*[!A-Za-z0-9_.-]*) return 1 ;;
@@ -163,9 +163,9 @@ valid_sudoers_user() {
 # `ALL` would imply SETENV; explicitly deny it so the approved environment is
 # exactly the one the plugin authenticated in its RequestV1.
 sudoers_line() { printf '%s ALL=(ALL) NOSETENV: NOPASSWD: ALL\n' "$1"; }
-# Accept the pre-#50 spelling while removing an upgrade's old Oshioki-owned
+# Accept the pre-#50 spelling while removing an upgrade's old Vouch-owned
 # file. It is still accepted only as a complete root-owned 0440 drop-in at the
-# exact Oshioki path, never as an arbitrary sudoers rule.
+# exact Vouch path, never as an arbitrary sudoers rule.
 legacy_sudoers_line() { printf '%s ALL=(ALL) NOPASSWD: ALL\n' "$1"; }
 # The drop-in takes effect only when the main sudoers file includes its
 # directory. Either spelling of the system path counts, and so does either
@@ -186,7 +186,7 @@ find_visudo() {
 # drop-in survives. Either way the drop-in alone is passwordless root. Root's
 # `sudo -V` opens every approval plugin and prints its show_version line, so
 # the plugin's banner there is positive proof that this sudo loads it.
-PLUGIN_BANNER='Oshioki approval plugin version '
+PLUGIN_BANNER='Vouch approval plugin version '
 # Exit status of a run that refused the plugin lane's passwordless rule and
 # left sudo on its own password path. The Debian postinst reports it as a
 # warning rather than failing the package configuration.
@@ -211,7 +211,7 @@ sudo_plugin_loaded() {
   grep -Fq "$PLUGIN_BANNER" <<<"$text"
 }
 # Definitely not loaded: root's sudo -V answered (sudo-rs included) and
-# lists no Oshioki plugin. False when sudo -V itself fails.
+# lists no Vouch plugin. False when sudo -V itself fails.
 sudo_lacks_plugin() {
   local text
   [ "$(id -u)" -eq 0 ] || return 1
@@ -229,10 +229,10 @@ sudo_lacks_plugin() {
 # executed as root. Each candidate is asked for its own `-V` banner with no
 # stdin and, where `timeout` exists (not stock macOS), a 5-second limit, so
 # an odd binary cannot hang postinst or the reconcile service.
-# OSHIOKI_SUDO_RS_PATHS and OSHIOKI_SETUID_SCAN_DIRS are test seams for the
+# VOUCH_SUDO_RS_PATHS and VOUCH_SETUID_SCAN_DIRS are test seams for the
 # fixture harness; production callers leave them unset.
-SUDO_RS_PATHS="${OSHIOKI_SUDO_RS_PATHS:-/usr/bin/sudo-rs /usr/lib/cargo/bin/sudo /usr/local/bin/sudo-rs}"
-SETUID_SCAN_DIRS="${OSHIOKI_SETUID_SCAN_DIRS:-/usr/bin /usr/sbin /bin /sbin /usr/local/bin /usr/local/sbin /usr/lib/cargo/bin}"
+SUDO_RS_PATHS="${VOUCH_SUDO_RS_PATHS:-/usr/bin/sudo-rs /usr/lib/cargo/bin/sudo /usr/local/bin/sudo-rs}"
+SETUID_SCAN_DIRS="${VOUCH_SETUID_SCAN_DIRS:-/usr/bin /usr/sbin /bin /sbin /usr/local/bin /usr/local/sbin /usr/lib/cargo/bin}"
 probe_version_banner() {
   if command -v timeout >/dev/null 2>&1; then
     timeout 5 "$1" -V </dev/null 2>&1
@@ -274,7 +274,7 @@ nopasswd_proven() {
     return 1
   fi
   if ! sudo_plugin_loaded; then
-    nopasswd_refusal="root's sudo -V does not list the Oshioki approval plugin, so this sudo is not running it"
+    nopasswd_refusal="root's sudo -V does not list the Vouch approval plugin, so this sudo is not running it"
     return 1
   fi
   return 0
@@ -286,10 +286,10 @@ nopasswd_provably_unsafe() {
   sudo_rs_installed >/dev/null || sudo_lacks_plugin
 }
 sudo_rs_refusal() {
-  echo "install-oshioki-hook: refusing the approval plugin lane: this host's sudo is sudo-rs, which has no approval-plugin support and ignores $SUDO_CONF, so its passwordless sudoers rule would allow every sudo without approval. sudo keeps its password path. Remove sudo-rs and use classic sudo 1.9; the contextual PAM lane (install-oshioki-hook --contextual-pam) may work with sudo-rs but has not been validated." >&2
+  echo "install-vouch-hook: refusing the approval plugin lane: this host's sudo is sudo-rs, which has no approval-plugin support and ignores $SUDO_CONF, so its passwordless sudoers rule would allow every sudo without approval. sudo keeps its password path. Remove sudo-rs and use classic sudo 1.9; the contextual PAM lane (install-vouch-hook --contextual-pam) may work with sudo-rs but has not been validated." >&2
 }
 no_plugin_proof_refusal() {
-  echo "install-oshioki-hook: refusing passwordless sudo: $nopasswd_refusal; $SUDOERS_FILE is not written and sudo keeps asking for passwords" >&2
+  echo "install-vouch-hook: refusing passwordless sudo: $nopasswd_refusal; $SUDOERS_FILE is not written and sudo keeps asking for passwords" >&2
 }
 write_sudoers_dropin() {
   local user="$1" tmp checker
@@ -317,7 +317,7 @@ install_sudoers_dropin() {
     # request. Keep the plugin available for an additional approval, but
     # remove any stale NOPASSWD rule so sudo still performs its normal
     # authentication first.
-    echo "install-oshioki-hook: warning: active devices have no hardware-backed approval; sudo keeps asking for passwords" >&2
+    echo "install-vouch-hook: warning: active devices have no hardware-backed approval; sudo keeps asking for passwords" >&2
     remove_sudoers_dropin
     return 0
   fi
@@ -331,12 +331,12 @@ install_sudoers_dropin() {
     return 0
   fi
   if [ -z "$user" ]; then
-    echo "install-oshioki-hook: warning: no laptop user (set OSHIOKI_SUDO_USER); sudo keeps asking for passwords" >&2
+    echo "install-vouch-hook: warning: no laptop user (set VOUCH_SUDO_USER); sudo keeps asking for passwords" >&2
     return 0
   fi
   valid_sudoers_user "$user" || die "invalid sudoers user: $user"
   if ! sudoers_included; then
-    echo "install-oshioki-hook: warning: $MAIN_SUDOERS includes no sudoers.d directory; sudo keeps asking for passwords" >&2
+    echo "install-vouch-hook: warning: $MAIN_SUDOERS includes no sudoers.d directory; sudo keeps asking for passwords" >&2
     return 0
   fi
   write_sudoers_dropin "$user"
@@ -353,7 +353,7 @@ plan_sudoers_dropin() {
   if [ -z "$user" ]; then echo "DRY: skip $SUDOERS_FILE (no laptop user named)"; return 0; fi
   valid_sudoers_user "$user" || die "invalid sudoers user: $user"
   if ! sudoers_included; then echo "DRY: skip $SUDOERS_FILE ($MAIN_SUDOERS includes no sudoers.d directory)"; return 0; fi
-  echo "DRY: require root's sudo -V to list the Oshioki approval plugin, else remove $SUDOERS_FILE"
+  echo "DRY: require root's sudo -V to list the Vouch approval plugin, else remove $SUDOERS_FILE"
   printf 'DRY: write %s for passwordless sudo by %s\n' "$SUDOERS_FILE" "$user"
 }
 remove_sudoers_dropin() {
@@ -413,23 +413,23 @@ restore_sudo_backups() {
   # verified sudoers rule. This keeps an interrupted rollback fail-closed.
   if [ -n "$backup" ] && [ -f "$backup" ]; then
     if ! cp -p "$backup" "$SUDO_CONF"; then
-      echo "install-oshioki-hook: rollback could not restore sudo.conf; leaving the sudoers rule absent" >&2
+      echo "install-vouch-hook: rollback could not restore sudo.conf; leaving the sudoers rule absent" >&2
       return 1
     fi
     if ! rm -f "$backup"; then
-      echo "install-oshioki-hook: rollback could not remove its sudo.conf backup; leaving the sudoers rule absent" >&2
+      echo "install-vouch-hook: rollback could not remove its sudo.conf backup; leaving the sudoers rule absent" >&2
       return 1
     fi
     pam_trace "pam:rollback:plugin-restored:$SUDO_CONF"
   fi
   # A rollback must not bring back a passwordless rule that the restored
   # sudo provably does not guard with the plugin (sudo-rs, or a lost plugin
-  # line): sudo answers, and lists no Oshioki plugin. An unanswered sudo -V
+  # line): sudo answers, and lists no Vouch plugin. An unanswered sudo -V
   # proves nothing either way and keeps the prior behavior of restoring.
   if [ -n "$dropin_backup" ] && [ -f "$dropin_backup" ] && nopasswd_provably_unsafe; then
-    echo "install-oshioki-hook: rollback is not restoring $SUDOERS_FILE: sudo does not load the approval plugin or sudo-rs is installed, so sudo keeps its password path" >&2
+    echo "install-vouch-hook: rollback is not restoring $SUDOERS_FILE: sudo does not load the approval plugin or sudo-rs is installed, so sudo keeps its password path" >&2
     if ! rm -f "$dropin_backup"; then
-      echo "install-oshioki-hook: rollback could not remove its sudoers backup" >&2
+      echo "install-vouch-hook: rollback could not remove its sudoers backup" >&2
       return 1
     fi
     dropin_backup=""
@@ -438,15 +438,15 @@ restore_sudo_backups() {
   # rm first: the drop-in is 0440, so overwriting it in place fails.
   if [ -n "$dropin_backup" ] && [ -f "$dropin_backup" ]; then
     if ! rm -f "$SUDOERS_FILE"; then
-      echo "install-oshioki-hook: rollback could not remove the current sudoers rule" >&2
+      echo "install-vouch-hook: rollback could not remove the current sudoers rule" >&2
       return 1
     fi
     if ! cp -p "$dropin_backup" "$SUDOERS_FILE"; then
-      echo "install-oshioki-hook: rollback could not restore the sudoers rule" >&2
+      echo "install-vouch-hook: rollback could not restore the sudoers rule" >&2
       return 1
     fi
     if ! rm -f "$dropin_backup"; then
-      echo "install-oshioki-hook: rollback could not remove its sudoers backup" >&2
+      echo "install-vouch-hook: rollback could not remove its sudoers backup" >&2
       return 1
     fi
     pam_trace "pam:rollback:dropin-restored:$SUDOERS_FILE"
@@ -465,11 +465,11 @@ drop_sudo_backups() {
   # restore only one of the two privilege artifacts.
   backup=""; dropin_backup=""; dropin_original_present=0; rollback_armed=0
   if [ -n "$old_backup" ] && ! rm -f "$old_backup"; then
-    echo "install-oshioki-hook: could not remove its sudo.conf rollback backup" >&2
+    echo "install-vouch-hook: could not remove its sudo.conf rollback backup" >&2
     cleanup_failed=1
   fi
   if [ -n "$old_dropin_backup" ] && ! rm -f "$old_dropin_backup"; then
-    echo "install-oshioki-hook: could not remove its sudoers rollback backup" >&2
+    echo "install-vouch-hook: could not remove its sudoers rollback backup" >&2
     cleanup_failed=1
   fi
   return "$cleanup_failed"
@@ -530,7 +530,7 @@ prepare_upgrade() {
       grep -Fq "$BEGIN_MARK" "$SUDO_CONF" ||
       grep -Fq "$END_MARK" "$SUDO_CONF" ||
       has_our_plugin;
-    } && echo "DRY: remove the managed Oshioki plugin block from $SUDO_CONF"
+    } && echo "DRY: remove the managed Vouch plugin block from $SUDO_CONF"
     validate_sudo
     return 0
   fi
@@ -607,15 +607,15 @@ load_config_file() {
       [[:space:]]*|*[[:space:]]|\"*\"|\'*\') die "config value must be unquoted and untrimmed: $key" ;;
     esac
     case "$key" in
-      OSHIOKI_ORIGIN) ORIGIN="$value" ;;
-      OSHIOKI_RP_ID) RP_ID="$value" ;;
+      VOUCH_ORIGIN) ORIGIN="$value" ;;
+      VOUCH_RP_ID) RP_ID="$value" ;;
       NATS_URL) NATS_URL="$value" ;;
       NATS_USER) NATS_USER="$value" ;;
       NATS_PASS) NATS_PASS="$value" ;;
-      OSHIOKI_ALLOW_PLAINTEXT_NATS) ALLOW_PLAINTEXT="$value" ;;
-      OSHIOKI_AGENT_SOCKET) AGENT_SOCKET="$value" ;;
-      OSHIOKI_LOCAL) : ;; # local-setup marker; inert, kept so the mode is visible in the file
-      OSHIOKI_CONTEXTUAL_PAM) : ;; # read by the Debian postinst to opt into --contextual-pam; inert here
+      VOUCH_ALLOW_PLAINTEXT_NATS) ALLOW_PLAINTEXT="$value" ;;
+      VOUCH_AGENT_SOCKET) AGENT_SOCKET="$value" ;;
+      VOUCH_LOCAL) : ;; # local-setup marker; inert, kept so the mode is visible in the file
+      VOUCH_CONTEXTUAL_PAM) : ;; # read by the Debian postinst to opt into --contextual-pam; inert here
       *) die "unknown config key in $path: $key" ;;
     esac
   done < "$path"
@@ -669,14 +669,14 @@ validate_marker_pair() {
   ends="$(grep -cF "$end" "$source" 2>/dev/null || true)"
   if ! { { [ "$begins" -eq 0 ] && [ "$ends" -eq 0 ]; } ||
     { [ "$begins" -eq 1 ] && [ "$ends" -eq 1 ]; }; }; then
-    echo "install-oshioki-hook: malformed managed block in $source" >&2
+    echo "install-vouch-hook: malformed managed block in $source" >&2
     return 1
   fi
   if [ "$begins" -eq 1 ]; then
     begin_line="$(grep -nF "$begin" "$source" | cut -d: -f1)"
     end_line="$(grep -nF "$end" "$source" | cut -d: -f1)"
     if [ "$begin_line" -ge "$end_line" ]; then
-      echo "install-oshioki-hook: malformed managed block in $source" >&2
+      echo "install-vouch-hook: malformed managed block in $source" >&2
       return 1
     fi
   fi
@@ -702,22 +702,22 @@ validate_block() {
 # invoked: a mistake there would reach every service on the host, not just
 # sudo.
 # ---------------------------------------------------------------------------
-PAM_BEGIN_MARK='# BEGIN oshioki pam'
-PAM_END_MARK='# END oshioki pam'
+PAM_BEGIN_MARK='# BEGIN vouch pam'
+PAM_END_MARK='# END vouch pam'
 # The only line this installer ever puts in a PAM service file it created
 # itself (macOS sudo_local, which a stock host may not have). write_pam_block
 # writes it and the disable path recognises it, so the two cannot drift.
-PAM_CREATED_HEADER='# sudo_local: created by install-oshioki-hook --contextual-pam'
+PAM_CREATED_HEADER='# sudo_local: created by install-vouch-hook --contextual-pam'
 PAM_D="${PAM_D:-/etc/pam.d}"
 PAM_MODULE_BIN="${PAM_MODULE_BIN:-}"
-PAM_MULTIARCH_FILE="${OSHIOKI_PAM_MULTIARCH:-/usr/share/oshioki/pam-multiarch}"
+PAM_MULTIARCH_FILE="${VOUCH_PAM_MULTIARCH:-/usr/share/vouch/pam-multiarch}"
 case "$(uname -s)" in
   Darwin)
-    PAM_MODULE_NAME=liboshioki_pam.dylib
+    PAM_MODULE_NAME=libvouch_pam.dylib
     PAM_SERVICES="sudo_local"
     ;;
   *)
-    PAM_MODULE_NAME=liboshioki_pam.so
+    PAM_MODULE_NAME=libvouch_pam.so
     PAM_SERVICES="sudo sudo-i"
     ;;
 esac
@@ -770,7 +770,7 @@ pam_lane_active() {
     file="$PAM_D/$service"
     [ -f "$file" ] || continue
     if grep -Fq "$PAM_BEGIN_MARK" "$file" 2>/dev/null; then return 0; fi
-    if grep -Eq '^[[:space:]]*auth[[:space:]].*liboshioki_pam' "$file" 2>/dev/null; then return 0; fi
+    if grep -Eq '^[[:space:]]*auth[[:space:]].*libvouch_pam' "$file" 2>/dev/null; then return 0; fi
   done
   return 1
 }
@@ -822,7 +822,7 @@ prepare_state_directory() {
 }
 
 helper_path_secure() {
-  local helper="$SBIN_DIR/oshioki" directory mode
+  local helper="$SBIN_DIR/vouch" directory mode
   [ -f "$helper" ] && [ ! -L "$helper" ] || return 1
   path_is_root_owned_and_tight "$helper" || return 1
   mode="$(padded_mode "$helper")" || return 1
@@ -1060,9 +1060,9 @@ pam_fingerprint_ok() {
     return 1
   fi
   [ "$(printf '%s\n' "$view" | grep -Eci '^[[:space:]]*@include[[:space:]]+common-auth$')" = 1 ] || return 1
-  # A liboshioki_pam reference outside our marker pair belongs to someone
+  # A libvouch_pam reference outside our marker pair belongs to someone
   # else; we never adopt it and never write a second one next to it.
-  if printf '%s\n' "$view" | grep -Fq liboshioki_pam; then
+  if printf '%s\n' "$view" | grep -Fq libvouch_pam; then
     return 1
   fi
   return 0
@@ -1212,7 +1212,7 @@ remove_pam_block() {
   # not a licence to delete arbitrary text.
   awk -v begin="$PAM_BEGIN_MARK" -v end="$PAM_END_MARK" -v authline="$line" '
     $0 == begin || $0 == end || $0 == authline { next }
-    tolower($0) ~ /^[[:space:]]*auth[[:space:]]+sufficient[[:space:]]+([^[:space:]]*\/)?liboshioki_pam\.dylib$/ { next }
+    tolower($0) ~ /^[[:space:]]*auth[[:space:]]+sufficient[[:space:]]+([^[:space:]]*\/)?libvouch_pam\.dylib$/ { next }
     { print }
   ' "$file" > "$tmp" ||
     { rm -f "$tmp"; die "could not rewrite $file"; }
@@ -1249,7 +1249,7 @@ capture_pam_backups() {
   for file in "$@"; do
     if [ -e "$file" ]; then
       regular_or_absent "$file"
-      tmp="$(mktemp "${file}.oshioki-backup.XXXXXX")" ||
+      tmp="$(mktemp "${file}.vouch-backup.XXXXXX")" ||
         die "could not create a PAM rollback backup for $file"
       if ! cp -p "$file" "$tmp"; then
         rm -f "$tmp"
@@ -1286,7 +1286,7 @@ restore_pam_backups() {
 $entries
 EOF
   if [ "$status" -ne 0 ]; then
-    echo "install-oshioki-hook: rollback could not fully restore the PAM configuration" >&2
+    echo "install-vouch-hook: rollback could not fully restore the PAM configuration" >&2
   fi
   return "$status"
 }
@@ -1325,11 +1325,11 @@ commit_pam_migration() {
 $pam_entries
 EOF
   if [ -n "$old_backup" ] && ! rm -f "$old_backup"; then
-    echo "install-oshioki-hook: could not remove its sudo.conf rollback backup" >&2
+    echo "install-vouch-hook: could not remove its sudo.conf rollback backup" >&2
     status=1
   fi
   if [ -n "$old_dropin_backup" ] && ! rm -f "$old_dropin_backup"; then
-    echo "install-oshioki-hook: could not remove its sudoers rollback backup" >&2
+    echo "install-vouch-hook: could not remove its sudoers rollback backup" >&2
     status=1
   fi
   return "$status"
@@ -1363,9 +1363,9 @@ classify_pam_services() {
 # tarball ship it next to the installer; a Homebrew keg puts it in the
 # libexec beside this script's bin. Next-to-the-installer is probed before
 # the libexec so the .deb, whose SERVICE_DIR is the shared /usr/share, finds
-# its own /usr/share/oshioki/SHA256SUMS rather than reaching first for a
+# its own /usr/share/vouch/SHA256SUMS rather than reaching first for a
 # /usr/share/libexec that belongs to nobody. Install and status share this
-# list, so a packaged install needs no OSHIOKI_CHECKSUMS override either
+# list, so a packaged install needs no VOUCH_CHECKSUMS override either
 # way. Status must not pass a module it never verified, so callers treat
 # "not found" as a failure rather than a waiver.
 default_checksums() {
@@ -1394,7 +1394,7 @@ pam_module_checksum_ok() {
 # Asserted after every edit rather than trusted.
 assert_common_auth_clean() {
   [ -f "$PAM_D/common-auth" ] || return 0
-  if grep -F liboshioki_pam "$PAM_D/common-auth" >/dev/null 2>&1; then
+  if grep -F libvouch_pam "$PAM_D/common-auth" >/dev/null 2>&1; then
     return 1
   fi
   return 0
@@ -1412,7 +1412,7 @@ if [ "$MODE" = prelaunch-status ]; then
   # design: --prelaunch installs the artifacts there and says it is leaving
   # the lane alone. Answering "disabled" is a true statement about the
   # plugin and a false one about the install, and it is what made
-  # `oshioki-laptop-setup --contextual-pam` fail its own final verify before
+  # `vouch-laptop-setup --contextual-pam` fail its own final verify before
   # it ever reached the migration. Name the lane and point at the status
   # command that applies to it.
   # A half-written managed block is a broken edit of /etc/sudo.conf whichever
@@ -1440,11 +1440,11 @@ if [ "$MODE" = prelaunch-status ]; then
     [ -z "$lane_dir" ] || lane_module="$(pam_module_dest "$lane_dir")"
     if [ -z "$lane_module" ] || [ ! -f "$lane_module" ] || [ -L "$lane_module" ] ||
        [ ! -r "$lane_module" ]; then
-      echo "FAIL  contextual PAM lane: entry present but module missing at ${lane_module:-$PAM_MODULE_NAME}; run install-oshioki-hook --contextual-pam or --disable-contextual-pam"
+      echo "FAIL  contextual PAM lane: entry present but module missing at ${lane_module:-$PAM_MODULE_NAME}; run install-vouch-hook --contextual-pam or --disable-contextual-pam"
       exit 1
     fi
     if [ "$(stat_owner "$lane_module" 2>/dev/null || true)" != 0 ]; then
-      echo "FAIL  contextual PAM lane: entry present but module at $lane_module is not root-owned; run install-oshioki-hook --contextual-pam or --disable-contextual-pam"
+      echo "FAIL  contextual PAM lane: entry present but module at $lane_module is not root-owned; run install-vouch-hook --contextual-pam or --disable-contextual-pam"
       exit 1
     fi
     echo "contextual PAM lane active; the approval plugin is intentionally not enabled (see --contextual-pam-status)"
@@ -1474,7 +1474,7 @@ if [ "$MODE" = prelaunch-status ]; then
     no*)
       # A drop-in with no loaded plugin is passwordless root with no approval.
       if [ "$dropin_present" -eq 1 ]; then
-        echo "FAIL  passwordless sudoers rule without the approval plugin: $SUDOERS_FILE; run install-oshioki-hook --prelaunch to re-check, or --remove-sudoers-dropin"
+        echo "FAIL  passwordless sudoers rule without the approval plugin: $SUDOERS_FILE; run install-vouch-hook --prelaunch to re-check, or --remove-sudoers-dropin"
         status_exit 1
       fi
       ;;
@@ -1483,12 +1483,12 @@ if [ "$MODE" = prelaunch-status ]; then
   # when the sudo on PATH is classic sudo.
   if [ "$dropin_present" -eq 1 ] && [ "$(id -u)" -eq 0 ] &&
      sudo_rs_evidence="$(sudo_rs_installed)"; then
-    echo "FAIL  passwordless sudoers rule while sudo-rs is installed ($sudo_rs_evidence), which honours it without the approval plugin: $SUDOERS_FILE; remove sudo-rs, then run install-oshioki-hook --prelaunch"
+    echo "FAIL  passwordless sudoers rule while sudo-rs is installed ($sudo_rs_evidence), which honours it without the approval plugin: $SUDOERS_FILE; remove sudo-rs, then run install-vouch-hook --prelaunch"
     status_exit 1
   fi
   case "$plugin_loaded" in
     no\ \(sudo-rs*)
-      echo "unsupported: sudo-rs cannot load the approval plugin; remove sudo-rs and use classic sudo 1.9 (install-oshioki-hook --contextual-pam may work with sudo-rs but has not been validated)"
+      echo "unsupported: sudo-rs cannot load the approval plugin; remove sudo-rs and use classic sudo 1.9 (install-vouch-hook --contextual-pam may work with sudo-rs but has not been validated)"
       status_exit 1
       ;;
   esac
@@ -1515,7 +1515,7 @@ if [ "$MODE" = prelaunch-status ]; then
   fi
   # Malformed blocks already died above; anything left here has no block.
   if [ "$dropin_present" -eq 1 ]; then
-    echo "FAIL  passwordless sudoers rule without the approval plugin: $SUDOERS_FILE; run install-oshioki-hook --prelaunch to re-check, or --remove-sudoers-dropin"
+    echo "FAIL  passwordless sudoers rule without the approval plugin: $SUDOERS_FILE; run install-vouch-hook --prelaunch to re-check, or --remove-sudoers-dropin"
     status_exit 1
   fi
   echo "disabled"
@@ -1524,7 +1524,7 @@ fi
 
 # Drift check for the passwordless rule between installer runs: sudo.conf
 # losing the plugin line, the sudo alternative switching, sudo-rs arriving.
-# The Debian package's oshioki-sudo-reconcile.path unit runs it whenever
+# The Debian package's vouch-sudo-reconcile.path unit runs it whenever
 # those paths change. It removes the rule only on positive evidence that
 # the rule is unguarded: PAM lane, a sudo-rs PATH sudo or installed sudo-rs,
 # the plugin line gone from sudo.conf, or a sudo -V that runs and lists no
@@ -1535,11 +1535,11 @@ if [ "$MODE" = reconcile-plugin-rule ]; then
   [ "$(id -u)" -eq 0 ] || [ "$DRY_RUN" -eq 1 ] || die "must run as root"
   safe_directory "$SUDOERS_D"
   if [ ! -e "$SUDOERS_FILE" ] && [ ! -L "$SUDOERS_FILE" ]; then
-    echo "install-oshioki-hook: no passwordless sudoers rule at $SUDOERS_FILE; nothing to reconcile"
+    echo "install-vouch-hook: no passwordless sudoers rule at $SUDOERS_FILE; nothing to reconcile"
     exit 0
   fi
   if ! owned_sudoers_dropin_user >/dev/null 2>&1; then
-    echo "install-oshioki-hook: $SUDOERS_FILE is not an Oshioki rule; leaving it alone" >&2
+    echo "install-vouch-hook: $SUDOERS_FILE is not an Vouch rule; leaving it alone" >&2
     exit 0
   fi
   reconcile_reason=""
@@ -1553,27 +1553,27 @@ if [ "$MODE" = reconcile-plugin-rule ]; then
     reconcile_reason="sudo-rs is installed ($reconcile_evidence), which honours the rule without the approval plugin; remove the sudo-rs package"
   else
     # Only positive evidence removes the rule, as in rollback: sudo -V ran
-    # and listed no Oshioki plugin. A sudo -V that does not run at all (a
+    # and listed no Vouch plugin. A sudo -V that does not run at all (a
     # mid-upgrade library mismatch, say) proves nothing, and removing the
     # rule then could lock out an account whose only sudo path it is. Ask
     # once more after a short pause, then keep the rule and say so.
-    # OSHIOKI_RECONCILE_RETRY_DELAY is a test seam.
+    # VOUCH_RECONCILE_RETRY_DELAY is a test seam.
     if ! reconcile_text="$(sudo_version_text)"; then
-      sleep "${OSHIOKI_RECONCILE_RETRY_DELAY:-2}"
+      sleep "${VOUCH_RECONCILE_RETRY_DELAY:-2}"
       if ! reconcile_text="$(sudo_version_text)"; then
-        echo "install-oshioki-hook: sudo -V did not run; keeping $SUDOERS_FILE until sudo answers (the next change re-checks)" >&2
+        echo "install-vouch-hook: sudo -V did not run; keeping $SUDOERS_FILE until sudo answers (the next change re-checks)" >&2
         exit 0
       fi
     fi
     if ! grep -Fq "$PLUGIN_BANNER" <<<"$reconcile_text"; then
-      reconcile_reason="root's sudo -V does not list the Oshioki approval plugin, so this sudo is not running it"
+      reconcile_reason="root's sudo -V does not list the Vouch approval plugin, so this sudo is not running it"
     fi
   fi
   if [ -z "$reconcile_reason" ]; then
-    echo "install-oshioki-hook: the approval plugin is loaded; $SUDOERS_FILE kept"
+    echo "install-vouch-hook: the approval plugin is loaded; $SUDOERS_FILE kept"
     exit 0
   fi
-  echo "install-oshioki-hook: removing $SUDOERS_FILE: $reconcile_reason; sudo keeps asking for passwords" >&2
+  echo "install-vouch-hook: removing $SUDOERS_FILE: $reconcile_reason; sudo keeps asking for passwords" >&2
   remove_sudoers_dropin
   exit 0
 fi
@@ -1602,7 +1602,7 @@ esac
 [ "$(id -u)" -eq 0 ] || [ "$DRY_RUN" -eq 1 ] || die "must run as root"
 safe_directory "$(dirname "$STATE_DIR")"; safe_directory "$STATE_DIR"; regular_or_absent "$SUDO_CONF"
 case "$MODE" in prelaunch|contextual-pam) validate_state_directory ;; esac
-safe_directory "$SBIN_DIR"; safe_directory "$PLUGIN_DIR"; regular_or_absent "$SBIN_DIR/oshioki"; regular_or_absent "$PLUGIN_DEST"
+safe_directory "$SBIN_DIR"; safe_directory "$PLUGIN_DIR"; regular_or_absent "$SBIN_DIR/vouch"; regular_or_absent "$PLUGIN_DEST"
 regular_or_absent "$STATE_DIR/config.env"; regular_or_absent "$STATE_DIR/hook.json"; regular_or_absent "$STATE_DIR/devices.json"
 
 if [ "$DRY_RUN" -eq 0 ] && [ "$MODE" != contextual-pam-status ]; then
@@ -1665,7 +1665,7 @@ rewrite_partial_block() {
   local source="$1" destination="$2" tmp
   tmp="$(mktemp "${destination}.XXXXXX")"
   # A damaged marker pair is not enough to justify deleting arbitrary text.
-  # Remove only the exact Oshioki plugin directive and our marker comments;
+  # Remove only the exact Vouch plugin directive and our marker comments;
   # preserve every other sudo configuration line byte-for-byte in order.
   awk -v begin="$BEGIN_MARK" -v end="$END_MARK" -v plugin="Plugin approval_exec $PLUGIN_DEST" \
     '$0 != begin && $0 != end && $0 != plugin { print }' "$source" > "$tmp"
@@ -1708,7 +1708,7 @@ pam_module_removal_targets() {
   # The refresh path's staging names go too: nothing ever references them,
   # and one left behind by an interrupted refresh is a stray copy of the
   # module in the security directory.
-  for suffix in "" .oshioki-new .oshioki-previous; do
+  for suffix in "" .vouch-new .vouch-previous; do
     [ -z "$dir" ] || printf '%s%s\n' "$(pam_module_dest "$dir")" "$suffix"
   done
   # An explicit PAM_SECURITY_DIR is a staging root or a test fixture; stray
@@ -1716,7 +1716,7 @@ pam_module_removal_targets() {
   if [ "$(uname -s)" != Darwin ] && [ -z "$PAM_SECURITY_DIR" ]; then
     for candidate in "/usr/lib/$(uname -m)-linux-gnu/security" /lib/security /usr/lib/security; do
       [ "$candidate" != "$dir" ] || continue
-      for suffix in "" .oshioki-new .oshioki-previous; do
+      for suffix in "" .vouch-new .vouch-previous; do
         [ -f "$candidate/$PAM_MODULE_NAME$suffix" ] || continue
         printf '%s/%s%s\n' "$candidate" "$PAM_MODULE_NAME" "$suffix"
       done
@@ -1740,7 +1740,7 @@ if [ "$MODE" = contextual-pam-status ]; then
   if [ -z "$status_module" ] || [ ! -f "$status_module" ]; then
     pam_status_bad "module: not installed${status_dir:+ in $status_dir}"
   else
-    status_manifest="${OSHIOKI_CHECKSUMS:-$(default_checksums || true)}"
+    status_manifest="${VOUCH_CHECKSUMS:-$(default_checksums || true)}"
     if [ -z "$status_manifest" ] || [ ! -f "$status_manifest" ] || [ -L "$status_manifest" ]; then
       # An unverified module is not an OK status line. Reporting success here
       # would mean `--contextual-pam-status` exits 0 on a host where the file
@@ -1799,16 +1799,16 @@ if [ "$MODE" = contextual-pam-status ]; then
 
   # 4. common-auth, which we must never have touched.
   if assert_common_auth_clean; then
-    pam_status_ok "common-auth: clean (no liboshioki_pam reference)"
+    pam_status_ok "common-auth: clean (no libvouch_pam reference)"
   else
-    pam_status_bad "common-auth: references liboshioki_pam; the module reaches every service on this host"
+    pam_status_bad "common-auth: references libvouch_pam; the module reaches every service on this host"
   fi
 
   # 5. the helper the module execs, and every parent on its path.
   if helper_path_secure; then
-    pam_status_ok "helper: $SBIN_DIR/oshioki root-owned, executable, not writable by others, not setuid"
+    pam_status_ok "helper: $SBIN_DIR/vouch root-owned, executable, not writable by others, not setuid"
   else
-    pam_status_bad "helper: $SBIN_DIR/oshioki is missing, not root-owned, not executable, writable by others, or setuid; the module refuses it and every sudo then fails without a password prompt (fix: install -o root -g root -m 0755 the hook binary at $SBIN_DIR/oshioki)"
+    pam_status_bad "helper: $SBIN_DIR/vouch is missing, not root-owned, not executable, writable by others, or setuid; the module refuses it and every sudo then fails without a password prompt (fix: install -o root -g root -m 0755 the hook binary at $SBIN_DIR/vouch)"
   fi
 
   # 6. something that can actually answer an authentication.
@@ -1844,12 +1844,12 @@ if [ "$MODE" = contextual-pam ]; then
   # name marks one step of the migration so the rollback chain can be
   # asserted from the outside; none of them is a supported operator control.
   # This installer runs as root, so the four names below are only read at all
-  # when OSHIOKI_INSTALL_FAULT_INJECTION=1 is set explicitly -- one opt-in
+  # when VOUCH_INSTALL_FAULT_INJECTION=1 is set explicitly -- one opt-in
   # that the test harness sets and nothing else does. Without it they are
   # forced inert here regardless of what the environment carried in, so a
   # stray FAIL_PAM_* or SIGNAL_AFTER_PAM_EDIT can neither abort a real
   # migration nor make it signal itself.
-  if [ "${OSHIOKI_INSTALL_FAULT_INJECTION:-0}" = 1 ]; then
+  if [ "${VOUCH_INSTALL_FAULT_INJECTION:-0}" = 1 ]; then
     FAIL_PAM_MODULE_INSTALL="${FAIL_PAM_MODULE_INSTALL:-0}"
     FAIL_PAM_SELFTEST="${FAIL_PAM_SELFTEST:-0}"
     FAIL_PAM_EDIT="${FAIL_PAM_EDIT:-}"
@@ -1867,7 +1867,7 @@ if [ "$MODE" = contextual-pam ]; then
   PAM_MODULE_BIN="$(canonicalize "$PAM_MODULE_BIN")"
   { [ -f "$PAM_MODULE_BIN" ] && [ ! -L "$PAM_MODULE_BIN" ]; } ||
     die "missing or unsafe PAM module artifact: $PAM_MODULE_BIN"
-  PAM_CHECKSUMS="${OSHIOKI_CHECKSUMS:-$(default_checksums || true)}"
+  PAM_CHECKSUMS="${VOUCH_CHECKSUMS:-$(default_checksums || true)}"
   [ -n "$PAM_CHECKSUMS" ] || die "no artifact checksum manifest found"
   PAM_CHECKSUMS="$(canonicalize "$PAM_CHECKSUMS")"
   { [ -f "$PAM_CHECKSUMS" ] && [ ! -L "$PAM_CHECKSUMS" ]; } ||
@@ -1879,9 +1879,9 @@ if [ "$MODE" = contextual-pam ]; then
   safe_directory "$PAM_D"
   classify_pam_services "$security_dir"
   helper_path_secure ||
-    die "helper $SBIN_DIR/oshioki is missing, not executable, or on an unsafe path; install the hook (root-owned, mode 0755, on a root-owned path) before migrating"
+    die "helper $SBIN_DIR/vouch is missing, not executable, or on an unsafe path; install the hook (root-owned, mode 0755, on a root-owned path) before migrating"
   assert_common_auth_clean ||
-    die "$PAM_D/common-auth already references liboshioki_pam; refusing to touch this host"
+    die "$PAM_D/common-auth already references libvouch_pam; refusing to touch this host"
   pam_trace "pam:prereq-ok"
 
   # Every contextual-only path (including already-current refreshes and
@@ -1898,18 +1898,18 @@ if [ "$MODE" = contextual-pam ]; then
   if pam_lane_active && [ -f "$module_dest" ]; then
     if pam_module_checksum_ok "$module_dest" "$PAM_CHECKSUMS"; then
       pam_trace "pam:refresh:current"
-      echo "install-oshioki-hook: contextual PAM already current at $module_dest"
+      echo "install-vouch-hook: contextual PAM already current at $module_dest"
       exit 0
     fi
     if [ "$DRY_RUN" -eq 1 ]; then
       printf 'DRY: stage %s beside %s, self-test it, then rename it into place\n' \
         "$PAM_MODULE_BIN" "$module_dest"
-      printf 'DRY: %s pam-selftest --module %s.oshioki-new\n' "$SBIN_DIR/oshioki" "$module_dest"
+      printf 'DRY: %s pam-selftest --module %s.vouch-new\n' "$SBIN_DIR/vouch" "$module_dest"
       validate_sudo
       exit 0
     fi
-    pam_staged="$module_dest.oshioki-new"
-    pam_previous="$module_dest.oshioki-previous"
+    pam_staged="$module_dest.vouch-new"
+    pam_previous="$module_dest.vouch-previous"
     rm -f "$pam_staged" "$pam_previous"
     if [ "$FAIL_PAM_MODULE_INSTALL" = 1 ] ||
        ! install -m 0644 -o root -g "$ROOT_GROUP" "$PAM_MODULE_BIN" "$pam_staged"; then
@@ -1917,7 +1917,7 @@ if [ "$MODE" = contextual-pam ]; then
       die "could not stage the replacement PAM module at $pam_staged; $module_dest is unchanged"
     fi
     if [ "$FAIL_PAM_SELFTEST" = 1 ] ||
-       ! "$SBIN_DIR/oshioki" pam-selftest --module "$pam_staged"; then
+       ! "$SBIN_DIR/vouch" pam-selftest --module "$pam_staged"; then
       rm -f "$pam_staged"
       die "PAM module self-test failed for $pam_staged; $module_dest is unchanged"
     fi
@@ -1939,7 +1939,7 @@ if [ "$MODE" = contextual-pam ]; then
     rm -f "$pam_previous"
     pam_previous=""
     pam_trace "pam:refresh:committed"
-    echo "install-oshioki-hook: contextual PAM module refreshed at $module_dest"
+    echo "install-vouch-hook: contextual PAM module refreshed at $module_dest"
     exit 0
   fi
 
@@ -1950,8 +1950,8 @@ if [ "$MODE" = contextual-pam ]; then
   pam_lane_missing_module=0
   if pam_lane_active; then
     pam_lane_missing_module=1
-    echo "install-oshioki-hook: WARNING: the contextual PAM lane is configured but the module file is missing: $module_dest" >&2
-    echo "install-oshioki-hook: reinstalling it; sudo authenticates by password until this finishes" >&2
+    echo "install-vouch-hook: WARNING: the contextual PAM lane is configured but the module file is missing: $module_dest" >&2
+    echo "install-vouch-hook: reinstalling it; sudo authenticates by password until this finishes" >&2
   fi
 
   # --- Not yet, rather than a failure: the .deb's opt-in key can be
@@ -1974,11 +1974,11 @@ if [ "$MODE" = contextual-pam ]; then
       pam_trace "pam:not-yet"
       case "$pam_registry_state" in
         absent|empty)
-          echo "install-oshioki-hook: no approval device pinned yet; skipping the contextual PAM migration" >&2 ;;
+          echo "install-vouch-hook: no approval device pinned yet; skipping the contextual PAM migration" >&2 ;;
         software-only)
-          echo "install-oshioki-hook: only software approval devices are active; a hardware-backed device is required, so the contextual PAM migration was skipped" >&2 ;;
+          echo "install-vouch-hook: only software approval devices are active; a hardware-backed device is required, so the contextual PAM migration was skipped" >&2 ;;
       esac
-      echo "install-oshioki-hook: no active hardware-backed approval device yet; pin one, then re-run: $0 --contextual-pam" >&2
+      echo "install-vouch-hook: no active hardware-backed approval device yet; pin one, then re-run: $0 --contextual-pam" >&2
       exit 0 ;;
   esac
 
@@ -1987,16 +1987,16 @@ if [ "$MODE" = contextual-pam ]; then
     # that precede anything being installed.
     remove_sudoers_dropin
     if [ -f "$SUDO_CONF" ] && { grep -Fq "$BEGIN_MARK" "$SUDO_CONF" || has_our_plugin; }; then
-      echo "DRY: remove the managed Oshioki plugin block from $SUDO_CONF"
+      echo "DRY: remove the managed Vouch plugin block from $SUDO_CONF"
     fi
     validate_sudo
     if [ ! -e "$security_dir" ]; then
       printf 'DRY: create %s (root:%s mode 0755)\n' "$security_dir" "$ROOT_GROUP"
     fi
     printf 'DRY: install %s to %s\n' "$PAM_MODULE_BIN" "$module_dest"
-    printf 'DRY: %s pam-selftest --module %s\n' "$SBIN_DIR/oshioki" "$module_dest"
+    printf 'DRY: %s pam-selftest --module %s\n' "$SBIN_DIR/vouch" "$module_dest"
     for service in $pam_services_to_edit; do
-      printf 'DRY: insert the exact oshioki pam block into %s/%s\n' "$PAM_D" "$service"
+      printf 'DRY: insert the exact vouch pam block into %s/%s\n' "$PAM_D" "$service"
     done
     for service in $pam_services_inherited; do
       printf 'DRY: skip %s/%s (inherits the edit via @include sudo)\n' "$PAM_D" "$service"
@@ -2004,7 +2004,7 @@ if [ "$MODE" = contextual-pam ]; then
     for service in $pam_services_absent; do
       printf 'DRY: skip %s/%s (no such service file on this host)\n' "$PAM_D" "$service"
     done
-    printf 'DRY: assert %s/common-auth has no liboshioki_pam reference\n' "$PAM_D"
+    printf 'DRY: assert %s/common-auth has no libvouch_pam reference\n' "$PAM_D"
     validate_visudo
     validate_sudo
     exit 0
@@ -2055,7 +2055,7 @@ if [ "$MODE" = contextual-pam ]; then
   # --- Step 5: prove the file actually loads and exports the auth entry
   # points, while a failure still means no PAM file has been touched.
   if [ "$FAIL_PAM_SELFTEST" = 1 ] ||
-     ! "$SBIN_DIR/oshioki" pam-selftest --module "$module_dest"; then
+     ! "$SBIN_DIR/vouch" pam-selftest --module "$module_dest"; then
     pam_rollback_all
     die "PAM module self-test failed for $module_dest; no PAM configuration was changed"
   fi
@@ -2094,18 +2094,18 @@ if [ "$MODE" = contextual-pam ]; then
   # module end to end on the real stack.
   if [ "$SUPERVISED" -eq 1 ]; then
     if [ ! -t 0 ]; then
-      echo "install-oshioki-hook: warning: --supervised needs a TTY on stdin; skipping the live proof" >&2
+      echo "install-vouch-hook: warning: --supervised needs a TTY on stdin; skipping the live proof" >&2
     else
       proof_user="$(sudoers_user)"
       if [ -z "$proof_user" ]; then
         pam_rollback_all
-        die "--supervised needs OSHIOKI_SUDO_USER to name the account that proves the stack"
+        die "--supervised needs VOUCH_SUDO_USER to name the account that proves the stack"
       fi
       if ! valid_sudoers_user "$proof_user"; then
         pam_rollback_all
         die "invalid sudoers user: $proof_user"
       fi
-      echo "install-oshioki-hook: approve the device prompt for $proof_user to finish the migration" >&2
+      echo "install-vouch-hook: approve the device prompt for $proof_user to finish the migration" >&2
       if ! su -l "$proof_user" -c 'sudo -k && sudo true'; then
         pam_rollback_all
         die "the supervised sudo proof failed for $proof_user; restored the legacy configuration"
@@ -2117,13 +2117,13 @@ if [ "$MODE" = contextual-pam ]; then
   # --- Step 8: commit. All rollback state disarms come before any snapshot
   # deletion, so a signal in this window cannot restore half a migration.
   commit_pam_migration ||
-    echo "install-oshioki-hook: could not remove all migration rollback backups" >&2
+    echo "install-vouch-hook: could not remove all migration rollback backups" >&2
   pam_trace "pam:committed"
-  echo "install-oshioki-hook: contextual PAM installed ($module_dest; services ${pam_services_to_edit% })"
+  echo "install-vouch-hook: contextual PAM installed ($module_dest; services ${pam_services_to_edit% })"
   [ -z "$pam_services_inherited" ] ||
-    echo "install-oshioki-hook: ${pam_services_inherited% } inherits the edit via @include sudo"
+    echo "install-vouch-hook: ${pam_services_inherited% } inherits the edit via @include sudo"
   [ -z "$pam_services_absent" ] ||
-    echo "install-oshioki-hook: ${pam_services_absent% } does not exist on this host and was skipped"
+    echo "install-vouch-hook: ${pam_services_absent% } does not exist on this host and was skipped"
   exit 0
 fi
 
@@ -2145,7 +2145,7 @@ if [ "$MODE" = disable-contextual-pam ]; then
   if [ "$DRY_RUN" -eq 1 ]; then
     for service in $PAM_SERVICES; do
       [ -f "$PAM_D/$service" ] || continue
-      printf 'DRY: remove the exact oshioki pam block from %s/%s\n' "$PAM_D" "$service"
+      printf 'DRY: remove the exact vouch pam block from %s/%s\n' "$PAM_D" "$service"
     done
     validate_sudo
     while IFS= read -r target; do
@@ -2186,9 +2186,9 @@ EOF
   for service in $PAM_SERVICES; do
     disable_excludes+=(--exclude="${service}.*")
   done
-  disable_referrers="$(grep -rl "${disable_excludes[@]}" liboshioki_pam "$PAM_D" 2>/dev/null || true)"
+  disable_referrers="$(grep -rl "${disable_excludes[@]}" libvouch_pam "$PAM_D" 2>/dev/null || true)"
   if [ -n "$disable_referrers" ]; then
-    echo "install-oshioki-hook: $PAM_D still references the module; leaving it installed:" >&2
+    echo "install-vouch-hook: $PAM_D still references the module; leaving it installed:" >&2
     printf '%s\n' "$disable_referrers" | sed 's/^/  /' >&2
     exit 1
   fi
@@ -2200,7 +2200,7 @@ EOF
   done <<EOF
 $(pam_module_removal_targets)
 EOF
-  echo "install-oshioki-hook: contextual PAM disabled and sudo validated"
+  echo "install-vouch-hook: contextual PAM disabled and sudo validated"
   exit 0
 fi
 
@@ -2216,7 +2216,7 @@ if [ "$MODE" = disable-prelaunch ]; then
   if ! validate_block "$SUDO_CONF"; then
     # Marker comments identify the managed artifact even when one marker is
     # missing, duplicated, or reversed. rewrite_partial_block removes only
-    # those comments and the exact Oshioki directive, preserving all other
+    # those comments and the exact Vouch directive, preserving all other
     # administrator content.
     partial_block=1
   else
@@ -2224,14 +2224,14 @@ if [ "$MODE" = disable-prelaunch ]; then
     if [ "$begin_count" -ne 1 ] && has_our_plugin; then
       # The exact plugin directive remains even though its marker pair was
       # removed. Treat that directive as the independently identifiable
-      # Oshioki artifact.
+      # Vouch artifact.
       partial_block=1
     fi
   fi
   if [ "$DRY_RUN" -eq 1 ]; then
     # Keep the reviewable plan in the same order as the real cleanup.
     remove_sudoers_dropin
-    if [ "$partial_block" -eq 1 ]; then echo "DRY: remove exact Oshioki plugin directive from $SUDO_CONF"; else echo "DRY: remove exact managed block from $SUDO_CONF"; fi
+    if [ "$partial_block" -eq 1 ]; then echo "DRY: remove exact Vouch plugin directive from $SUDO_CONF"; else echo "DRY: remove exact managed block from $SUDO_CONF"; fi
     exit 0
   fi
   capture_dropin_backup
@@ -2243,11 +2243,11 @@ if [ "$MODE" = disable-prelaunch ]; then
     die "sudo -V failed after disable; restored prior configuration"
   fi
   drop_sudo_backups
-  echo "install-oshioki-hook: prelaunch disabled and sudo validated"; exit 0
+  echo "install-vouch-hook: prelaunch disabled and sudo validated"; exit 0
 fi
 
-[ -n "$ORIGIN" ] || die "OSHIOKI_ORIGIN is required"
-[ -n "$RP_ID" ] || die "OSHIOKI_RP_ID is required"
+[ -n "$ORIGIN" ] || die "VOUCH_ORIGIN is required"
+[ -n "$RP_ID" ] || die "VOUCH_RP_ID is required"
 # Transports are explicit: an empty NATS_URL means socket-only (no NATS
 # keys are written at all, never placeholders), and an empty socket with an
 # empty URL means nothing could approve, which fails here rather than at
@@ -2258,16 +2258,16 @@ if [ -z "$NATS_URL" ]; then
   if [ -n "$NATS_USER" ] || [ -n "$NATS_PASS" ]; then
     die "NATS_USER/NATS_PASS are set but NATS_URL is not; set all three or none"
   fi
-  [ -n "$AGENT_SOCKET" ] || die "no approval transports: NATS_URL is empty and OSHIOKI_AGENT_SOCKET is not set"
+  [ -n "$AGENT_SOCKET" ] || die "no approval transports: NATS_URL is empty and VOUCH_AGENT_SOCKET is not set"
 else
   if [ -n "$NATS_PASS" ]; then
-    [ -n "$NATS_USER" ] || NATS_USER="oshioki"
+    [ -n "$NATS_USER" ] || NATS_USER="vouch"
   elif [ -n "$NATS_USER" ]; then
     die "NATS_USER is set but NATS_PASS is not; set both or neither"
   fi
 fi
 if needs_tls_warning; then
-  echo "install-oshioki-hook: warning: NATS_URL is plaintext to a non-loopback host, and the hook will refuse it: use tls://, or set OSHIOKI_ALLOW_PLAINTEXT_NATS=1 (testing only; see README.md)" >&2
+  echo "install-vouch-hook: warning: NATS_URL is plaintext to a non-loopback host, and the hook will refuse it: use tls://, or set VOUCH_ALLOW_PLAINTEXT_NATS=1 (testing only; see README.md)" >&2
 fi
 
 for artifact in "$HOOK_BIN" "$PLUGIN_BIN"; do
@@ -2282,7 +2282,7 @@ case "$architecture" in
   *) die "unsupported architecture: $architecture" ;;
 esac
 
-CHECKSUMS="${OSHIOKI_CHECKSUMS:-$(default_checksums || true)}"
+CHECKSUMS="${VOUCH_CHECKSUMS:-$(default_checksums || true)}"
 [ -n "$CHECKSUMS" ] || die "no artifact checksum manifest found"
 CHECKSUMS="$(canonicalize "$CHECKSUMS")"
 if [ ! -f "$CHECKSUMS" ] || [ -L "$CHECKSUMS" ]; then
@@ -2297,17 +2297,17 @@ done
 prepare_upgrade
 
 run install -d -m 0755 "$SBIN_DIR" "$PLUGIN_DIR"
-run install -m 0755 -o root -g "$ROOT_GROUP" "$HOOK_BIN" "$SBIN_DIR/oshioki"
+run install -m 0755 -o root -g "$ROOT_GROUP" "$HOOK_BIN" "$SBIN_DIR/vouch"
 run install -m 0755 -o root -g "$ROOT_GROUP" "$PLUGIN_BIN" "$PLUGIN_DEST"
 prepare_state_directory
 
 if [ "$DRY_RUN" -eq 1 ]; then
   if [ -n "$NATS_URL" ]; then printf 'DRY: write %s/config.env with NATS_PASS=<redacted>\n' "$STATE_DIR"; else printf 'DRY: write %s/config.env without NATS (socket-only)\n' "$STATE_DIR"; fi
-  [ -z "$ALLOW_PLAINTEXT" ] || printf 'DRY: write OSHIOKI_ALLOW_PLAINTEXT_NATS=%s to config.env\n' "$ALLOW_PLAINTEXT"
-  [ -z "$AGENT_SOCKET" ] || printf 'DRY: write OSHIOKI_AGENT_SOCKET=%s to config.env\n' "$AGENT_SOCKET"
+  [ -z "$ALLOW_PLAINTEXT" ] || printf 'DRY: write VOUCH_ALLOW_PLAINTEXT_NATS=%s to config.env\n' "$ALLOW_PLAINTEXT"
+  [ -z "$AGENT_SOCKET" ] || printf 'DRY: write VOUCH_AGENT_SOCKET=%s to config.env\n' "$AGENT_SOCKET"
   printf 'DRY: write %s/hook.json for origin %s and RP ID %s\n' "$STATE_DIR" "$ORIGIN" "$RP_ID"
 else
-  tmp="$(mktemp "$STATE_DIR/config.env.XXXXXX")"; [ -z "$NATS_URL" ] || printf 'NATS_URL=%s\n' "$NATS_URL" > "$tmp"; [ -z "$NATS_URL" ] || [ -z "$NATS_PASS" ] || printf 'NATS_USER=%s\nNATS_PASS=%s\n' "$NATS_USER" "$NATS_PASS" >> "$tmp"; [ -z "$ALLOW_PLAINTEXT" ] || printf 'OSHIOKI_ALLOW_PLAINTEXT_NATS=%s\n' "$ALLOW_PLAINTEXT" >> "$tmp"; [ -z "$AGENT_SOCKET" ] || printf 'OSHIOKI_AGENT_SOCKET=%s\n' "$AGENT_SOCKET" >> "$tmp"; chmod 0600 "$tmp"; chown "root:$ROOT_GROUP" "$tmp"; mv -f "$tmp" "$STATE_DIR/config.env"
+  tmp="$(mktemp "$STATE_DIR/config.env.XXXXXX")"; [ -z "$NATS_URL" ] || printf 'NATS_URL=%s\n' "$NATS_URL" > "$tmp"; [ -z "$NATS_URL" ] || [ -z "$NATS_PASS" ] || printf 'NATS_USER=%s\nNATS_PASS=%s\n' "$NATS_USER" "$NATS_PASS" >> "$tmp"; [ -z "$ALLOW_PLAINTEXT" ] || printf 'VOUCH_ALLOW_PLAINTEXT_NATS=%s\n' "$ALLOW_PLAINTEXT" >> "$tmp"; [ -z "$AGENT_SOCKET" ] || printf 'VOUCH_AGENT_SOCKET=%s\n' "$AGENT_SOCKET" >> "$tmp"; chmod 0600 "$tmp"; chown "root:$ROOT_GROUP" "$tmp"; mv -f "$tmp" "$STATE_DIR/config.env"
   tmp="$(mktemp "$STATE_DIR/hook.json.XXXXXX")"; printf '{"version":1,"origin":"%s","rp_id":"%s","server_base_url":"%s"}\n' "$ORIGIN" "$RP_ID" "$ORIGIN" > "$tmp"; chmod 0600 "$tmp"; chown "root:$ROOT_GROUP" "$tmp"; mv -f "$tmp" "$STATE_DIR/hook.json"
   if [ ! -e "$STATE_DIR/devices.json" ]; then printf '{"version":1,"devices":[]}\n' > "$STATE_DIR/devices.json"; chmod 0600 "$STATE_DIR/devices.json"; chown "root:$ROOT_GROUP" "$STATE_DIR/devices.json"; fi
 fi
@@ -2337,7 +2337,7 @@ if pam_lane_active; then
     validate_sudo
     exit 0
   fi
-  echo "install-oshioki-hook: this host is on the contextual PAM lane; not enabling the approval plugin or the blanket sudoers rule" >&2
+  echo "install-vouch-hook: this host is on the contextual PAM lane; not enabling the approval plugin or the blanket sudoers rule" >&2
   capture_dropin_backup
   [ ! -f "$SUDO_CONF" ] || capture_sudo_conf_backup
   remove_sudoers_dropin
@@ -2349,7 +2349,7 @@ if pam_lane_active; then
     die "sudo -V failed; restored prior configuration"
   fi
   drop_sudo_backups
-  echo "install-oshioki-hook: $MODE installed; the contextual PAM lane is unchanged"
+  echo "install-vouch-hook: $MODE installed; the contextual PAM lane is unchanged"
   exit 0
 fi
 # sudo-rs reads sudoers.d but has no approval-plugin API and ignores
@@ -2379,7 +2379,7 @@ if sudo_is_sudo_rs; then
     die "sudo -V failed; restored prior configuration"
   fi
   drop_sudo_backups
-  echo "install-oshioki-hook: $MODE installed the hook and config only; the approval plugin lane is not enabled on sudo-rs" >&2
+  echo "install-vouch-hook: $MODE installed the hook and config only; the approval plugin lane is not enabled on sudo-rs" >&2
   exit "$EXIT_PLUGIN_REFUSED"
 fi
 if [ "$DRY_RUN" -eq 1 ]; then
@@ -2396,7 +2396,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
   validate_sudo; exit 0
 fi
 if ! registry_has_active_devices; then
-  echo "install-oshioki-hook: warning: no active approval devices; $SUDO_CONF keeps no managed block (pin a device, then re-run)" >&2
+  echo "install-vouch-hook: warning: no active approval devices; $SUDO_CONF keeps no managed block (pin a device, then re-run)" >&2
   # An enabled block with an empty registry fails every sudo closed,
   # including the sudo that would pin the first device: take it back out.
   if [ -f "$SUDO_CONF" ] && grep -qF "$BEGIN_MARK" "$SUDO_CONF"; then
@@ -2425,7 +2425,7 @@ fi
 drop_sudo_backups
 fi
 if [ "$plugin_refused" -eq 1 ]; then
-  echo "install-oshioki-hook: $MODE installed and sudo validated, without passwordless sudo (the approval plugin is not loaded)" >&2
+  echo "install-vouch-hook: $MODE installed and sudo validated, without passwordless sudo (the approval plugin is not loaded)" >&2
   exit "$EXIT_PLUGIN_REFUSED"
 fi
-echo "install-oshioki-hook: $MODE installed and sudo validated"
+echo "install-vouch-hook: $MODE installed and sudo validated"

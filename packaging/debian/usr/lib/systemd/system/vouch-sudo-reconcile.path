@@ -1,5 +1,5 @@
 [Unit]
-Description=Watch sudo for changes that would leave the Oshioki passwordless rule unguarded
+Description=Watch sudo for changes that would leave the Vouch passwordless rule unguarded
 
 [Path]
 # sudo.conf losing the plugin line, the sudo alternative switching, the sudo
@@ -10,7 +10,7 @@ PathChanged=/etc/alternatives/sudo
 PathChanged=/usr/bin/sudo
 PathChanged=/usr/bin/sudo-rs
 PathChanged=/usr/lib/cargo/bin/sudo
-Unit=oshioki-sudo-reconcile.service
+Unit=vouch-sudo-reconcile.service
 
 [Install]
 WantedBy=paths.target

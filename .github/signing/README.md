@@ -1,6 +1,6 @@
 # Release signing policy
 
-The prospective signing checkpoint is Oshioki **v0.4.1**. New commits and
+The prospective signing checkpoint is Vouch **v0.4.1**. New commits and
 annotated release tags use cryptographic signatures; existing history and
 older unsigned tags remain unchanged.
 

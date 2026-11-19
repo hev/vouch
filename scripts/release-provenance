@@ -31,7 +31,7 @@ def process(mode, key, fingerprint, identity_path, *paths):
     fingerprint = fingerprint.upper()
     identity = json.loads(pathlib.Path(identity_path).read_text())
     require(set(identity) == {"schema_version", "tag", "version", "source_commit", "tag_object"}, "invalid source identity")
-    with tempfile.TemporaryDirectory(prefix="oshioki-provenance-") as directory:
+    with tempfile.TemporaryDirectory(prefix="vouch-provenance-") as directory:
         home = pathlib.Path(directory)
         home.chmod(0o700)
         run_gpg(home, "--import", key)
@@ -42,7 +42,7 @@ def process(mode, key, fingerprint, identity_path, *paths):
             require(len(paths) == 1, "sign requires an artifacts directory")
             assets = pathlib.Path(paths[0])
             version = identity["version"]
-            names = [f"oshioki_{version}_amd64.deb", f"oshioki-macos-arm64-{version}.tar.gz", "SHA256SUMS"]
+            names = [f"vouch_{version}_amd64.deb", f"vouch-macos-arm64-{version}.tar.gz", "SHA256SUMS"]
             manifest = {**identity, "repository": "epsalmond/oshioki",
                         "sha256": {name: digest(assets / name) for name in names}}
             unsigned = home / "provenance.json"
@@ -62,7 +62,7 @@ def process(mode, key, fingerprint, identity_path, *paths):
             require(all(manifest.get(name) == value for name, value in identity.items()), "provenance source identity mismatch")
             require(manifest.get("repository") == "epsalmond/oshioki", "provenance repository mismatch")
             hashes = manifest["sha256"]
-            require(package.name == f"oshioki_{identity['version']}_amd64.deb", "package filename mismatch")
+            require(package.name == f"vouch_{identity['version']}_amd64.deb", "package filename mismatch")
             require(hashes.get(package.name) == digest(package), "provenance package hash mismatch")
             require(hashes.get("SHA256SUMS") == digest(checksums), "provenance checksum hash mismatch")
 

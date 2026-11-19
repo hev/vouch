@@ -11,13 +11,13 @@ import tempfile
 import unittest
 
 
-SCRIPT = Path(__file__).with_name("oshioki-google-login-setup").resolve()
-BYPASS_ENV = "OSHIOKI_GCLOUD_WRAPPER_BYPASS"
+SCRIPT = Path(__file__).with_name("vouch-google-login-setup").resolve()
+BYPASS_ENV = "VOUCH_GCLOUD_WRAPPER_BYPASS"
 
 
 class GoogleLoginSetupTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="oshioki-google-login-")
+        self.temp = tempfile.TemporaryDirectory(prefix="vouch-google-login-")
         self.root = Path(self.temp.name).resolve()
         self.real_log = self.root / "real.json"
         self.relay_log = self.root / "relay.json"
@@ -37,24 +37,24 @@ class GoogleLoginSetupTests(unittest.TestCase):
     def real_source(self):
         return '''import json, os, sys
 with open(os.environ["REAL_LOG"], "w") as stream:
-    json.dump({"args": sys.argv[1:], "bypass": os.getenv("OSHIOKI_GCLOUD_WRAPPER_BYPASS"),
-               "socket": os.getenv("OSHIOKI_BROWSER_SOCKET")}, stream)
+    json.dump({"args": sys.argv[1:], "bypass": os.getenv("VOUCH_GCLOUD_WRAPPER_BYPASS"),
+               "socket": os.getenv("VOUCH_BROWSER_SOCKET")}, stream)
 raise SystemExit(int(os.getenv("REAL_EXIT", "41")))
 '''
 
     def relay_source(self):
         return '''import json, os, sys
 with open(os.environ["RELAY_LOG"], "w") as stream:
-    json.dump({"args": sys.argv[1:], "bypass": os.getenv("OSHIOKI_GCLOUD_WRAPPER_BYPASS"),
-               "socket": os.getenv("OSHIOKI_BROWSER_SOCKET")}, stream)
+    json.dump({"args": sys.argv[1:], "bypass": os.getenv("VOUCH_GCLOUD_WRAPPER_BYPASS"),
+               "socket": os.getenv("VOUCH_BROWSER_SOCKET")}, stream)
 child = os.getenv("RELAY_CHILD")
 if child:
     env = os.environ.copy()
     if child == "requester":
-        env.pop("OSHIOKI_GCLOUD_WRAPPER_BYPASS", None)
-        env["OSHIOKI_BROWSER_SOCKET"] = "/tmp/fake-browser-socket"
+        env.pop("VOUCH_GCLOUD_WRAPPER_BYPASS", None)
+        env["VOUCH_BROWSER_SOCKET"] = "/tmp/fake-browser-socket"
     else:
-        env.pop("OSHIOKI_BROWSER_SOCKET", None)
+        env.pop("VOUCH_BROWSER_SOCKET", None)
     os.execve(env["TEST_WRAPPER"], ["gcloud", "auth", "login"], env)
 raise SystemExit(int(os.getenv("RELAY_EXIT", "37")))
 '''
@@ -86,7 +86,7 @@ raise SystemExit(int(os.getenv("RELAY_EXIT", "37")))
         env = os.environ.copy()
         env.update({"REAL_LOG": str(self.real_log), "RELAY_LOG": str(self.relay_log),
                     "TEST_WRAPPER": str(wrapper), "REAL_EXIT": "41", "RELAY_EXIT": "37"})
-        env.pop("OSHIOKI_BROWSER_SOCKET", None)
+        env.pop("VOUCH_BROWSER_SOCKET", None)
         env.pop(BYPASS_ENV, None)
         env.update(extra_env)
         return subprocess.run([str(wrapper), *arguments], env=env, capture_output=True,
@@ -107,7 +107,7 @@ raise SystemExit(int(os.getenv("RELAY_EXIT", "37")))
 
         self.relay_log.unlink()
         result = self.run_wrapper(wrapper, ["auth", "login"],
-                                  OSHIOKI_BROWSER_SOCKET="/tmp/child-socket")
+                                  VOUCH_BROWSER_SOCKET="/tmp/child-socket")
         self.assertEqual(result.returncode, 41, result.stderr.decode())
         self.assertEqual(self.read_json(self.real_log)["args"], ["auth", "login"])
         self.assertFalse(self.relay_log.exists())
@@ -160,7 +160,7 @@ raise SystemExit(int(os.getenv("RELAY_EXIT", "37")))
     def test_optional_relay_resolves_from_controlled_path(self):
         relay_dir = self.root / "controlled relay path"
         relay_dir.mkdir()
-        resolved_relay = self.make_executable(relay_dir / "oshioki-browser-relay", self.relay_source())
+        resolved_relay = self.make_executable(relay_dir / "vouch-browser-relay", self.relay_source())
         bin_dir = self.root / "path-resolved-bin"
         result = subprocess.run(
             [sys.executable, str(SCRIPT), "install", "--mode", "requester",
@@ -220,7 +220,7 @@ raise SystemExit(int(os.getenv("RELAY_EXIT", "37")))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("writable non-sticky parent", result.stderr)
         self.assertFalse((bin_dir / "gcloud").exists())
-        self.assertFalse((bin_dir / ".oshioki-google-login-setup.json").exists())
+        self.assertFalse((bin_dir / ".vouch-google-login-setup.json").exists())
 
     def test_rejects_wrapper_recursion_through_direct_and_symlink_pins(self):
         owned = self.install(self.root / "owned-bin")
@@ -234,14 +234,14 @@ raise SystemExit(int(os.getenv("RELAY_EXIT", "37")))
                                  "--gcloud", pin, "--relay", self.relay, "--bin-dir", bin_dir)
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse((bin_dir / "gcloud").exists())
-            self.assertFalse((bin_dir / ".oshioki-google-login-setup.json").exists())
+            self.assertFalse((bin_dir / ".vouch-google-login-setup.json").exists())
 
     def test_repeat_uninstall_and_preserve_modified_artifacts(self):
         bin_dir = self.root / "managed-bin"
         wrapper = self.install(bin_dir)
         original = wrapper.read_bytes()
         self.assertEqual(self.install(bin_dir).read_bytes(), original)
-        state = bin_dir / ".oshioki-google-login-setup.json"
+        state = bin_dir / ".vouch-google-login-setup.json"
         self.assertEqual(state.stat().st_mode & 0o777, 0o600)
 
         removed = self.invoke("uninstall", "--bin-dir", bin_dir)

@@ -11,15 +11,15 @@ use async_nats::jetstream::{
     stream,
 };
 use futures::StreamExt as _;
-use oshioki_transport::{
+use vouch_transport::{
     ServerTransport as _,
     nats::{NatsTransport, REQUEST_CONSUMER, REQUEST_CONSUMER_FILTERS, REQUEST_STREAM},
 };
 
 #[tokio::test]
 async fn a_legacy_stream_and_consumer_gain_authentication_and_tool_lanes() -> Result<()> {
-    if std::env::var_os("OSHIOKI_TEST_NATS_LANE").is_none() {
-        eprintln!("skipping: set OSHIOKI_TEST_NATS_LANE=1 and NATS_URL for a throwaway broker");
+    if std::env::var_os("VOUCH_TEST_NATS_LANE").is_none() {
+        eprintln!("skipping: set VOUCH_TEST_NATS_LANE=1 and NATS_URL for a throwaway broker");
         return Ok(());
     }
     let url = match std::env::var("NATS_URL") {
@@ -125,8 +125,8 @@ async fn a_legacy_stream_and_consumer_gain_authentication_and_tool_lanes() -> Re
 
 #[tokio::test]
 async fn a_covering_wildcard_stream_is_left_alone() -> Result<()> {
-    if std::env::var_os("OSHIOKI_TEST_NATS_LANE").is_none() {
-        eprintln!("skipping: set OSHIOKI_TEST_NATS_LANE=1 and NATS_URL for a throwaway broker");
+    if std::env::var_os("VOUCH_TEST_NATS_LANE").is_none() {
+        eprintln!("skipping: set VOUCH_TEST_NATS_LANE=1 and NATS_URL for a throwaway broker");
         return Ok(());
     }
     let url = match std::env::var("NATS_URL") {

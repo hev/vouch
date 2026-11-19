@@ -2,7 +2,7 @@
 
 ## Our pledge
 
-We pledge to make participation in Oshioki a harassment-free experience for
+We pledge to make participation in Vouch a harassment-free experience for
 everyone, regardless of age, body size, visible or invisible disability,
 ethnicity, sex characteristics, gender identity and expression, level of
 experience, education, socioeconomic status, nationality, personal appearance,

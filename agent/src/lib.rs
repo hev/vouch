@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use x25519_dalek::{PublicKey, StaticSecret};
 
-use oshioki_protocol::{
+use vouch_protocol::{
     AUTH_WIRE_VERSION, ApproveNativeV1, AuthApproveNativeV1, AuthDecisionV1, AuthEnvelopeV1,
     DecisionV1, DenyV1, DeviceKindV1, DevicePublicRecordV1, NativeEnrollmentSubmissionV1,
     OpenedAuthRequestV1, RequestEnvelopeV1, RequestV1, VERSION_V1, approve_challenge,
@@ -79,7 +79,7 @@ impl Signer for SoftwareSigner {
 
 /// A P-256 key in this Mac's Secure Enclave, used only after Touch ID.
 #[cfg(target_os = "macos")]
-struct EnclaveBackend(oshioki_enclave::EnclaveSigner);
+struct EnclaveBackend(vouch_enclave::EnclaveSigner);
 
 #[cfg(target_os = "macos")]
 impl Signer for EnclaveBackend {
@@ -141,7 +141,7 @@ impl BrowserRelaySigner {
 
     pub fn sign_browser_relay(&self, challenge: &[u8], reason: &str) -> Result<Vec<u8>> {
         self.0.sign_der(
-            &oshioki_protocol::browser_relay_signature_payload(challenge),
+            &vouch_protocol::browser_relay_signature_payload(challenge),
             reason,
         )
     }
@@ -229,7 +229,7 @@ impl Identity {
 
     pub fn load(path: &Path) -> Result<Self> {
         #[cfg(target_os = "macos")]
-        return Self::load_with(path, &secret_store::KeychainStore::oshioki());
+        return Self::load_with(path, &secret_store::KeychainStore::vouch());
         #[cfg(not(target_os = "macos"))]
         return Self::load_embedded(path);
     }
@@ -354,7 +354,7 @@ impl Identity {
     /// Writes the identity with mode 0600. Fails if the file exists.
     pub fn save_new(&self, path: &Path) -> Result<()> {
         #[cfg(target_os = "macos")]
-        return self.save_new_with(path, &secret_store::KeychainStore::oshioki());
+        return self.save_new_with(path, &secret_store::KeychainStore::vouch());
         #[cfg(not(target_os = "macos"))]
         return self.save_embedded(path);
     }
@@ -416,7 +416,7 @@ impl Identity {
     /// checked when the key signs, not when it is made.
     pub fn generate_to(path: &Path, kind: SignerKind) -> Result<Self> {
         #[cfg(target_os = "macos")]
-        return Self::generate_to_with(path, kind, &secret_store::KeychainStore::oshioki());
+        return Self::generate_to_with(path, kind, &secret_store::KeychainStore::vouch());
         #[cfg(not(target_os = "macos"))]
         return Self::generate_embedded(path, kind);
     }
@@ -483,7 +483,7 @@ impl Identity {
             bail!("a software identity cannot approve a browser relay ceremony");
         }
         self.signer.sign_der(
-            &oshioki_protocol::browser_relay_signature_payload(challenge),
+            &vouch_protocol::browser_relay_signature_payload(challenge),
             reason,
         )
     }
@@ -707,7 +707,7 @@ pub struct OpenedRequest {
     pub raw: Vec<u8>,
 }
 
-/// Parses the enrollment URL printed by `oshioki enroll`:
+/// Parses the enrollment URL printed by `vouch enroll`:
 /// `<base>/enroll/<id>#<secret>`.
 pub fn parse_enrollment_url(url: &str) -> Result<(String, [u8; 32])> {
     let (path, fragment) = url
@@ -751,7 +751,7 @@ fn new_signer(kind: SignerKind) -> Result<(Box<dyn Signer + Send + Sync>, Signin
 
 #[cfg(target_os = "macos")]
 fn new_enclave_signer() -> Result<(Box<dyn Signer + Send + Sync>, SigningFileV1)> {
-    let signer = oshioki_enclave::EnclaveSigner::create().context("create a Secure Enclave key")?;
+    let signer = vouch_enclave::EnclaveSigner::create().context("create a Secure Enclave key")?;
     let file = SigningFileV1::Enclave {
         blob: encode_base64url(signer.blob()),
     };
@@ -766,7 +766,7 @@ fn new_enclave_signer() -> Result<(Box<dyn Signer + Send + Sync>, SigningFileV1)
 #[cfg(target_os = "macos")]
 fn enclave_signer(blob: Vec<u8>) -> Result<Box<dyn Signer + Send + Sync>> {
     Ok(Box::new(EnclaveBackend(
-        oshioki_enclave::EnclaveSigner::from_blob(blob)
+        vouch_enclave::EnclaveSigner::from_blob(blob)
             .context("reattach this Mac's Secure Enclave key")?,
     )))
 }
@@ -897,7 +897,7 @@ fn write_identity_file(path: &Path, file: &IdentityFileV1, create_new: bool) -> 
 mod tests {
     use super::*;
     use crate::secret_store::SecretStore as _;
-    use oshioki_protocol::{
+    use vouch_protocol::{
         DeviceRegistryV1, seal_v1, verify_deny_v1, verify_native_approval_v1,
         verify_native_enrollment_v1, verify_software_native_enrollment_v1,
     };
@@ -940,7 +940,7 @@ mod tests {
     #[test]
     fn browser_relay_loader_rejects_software_before_box_store_access() {
         let path = std::path::PathBuf::from(format!(
-            "/tmp/oshioki-browser-relay-loader-{}",
+            "/tmp/vouch-browser-relay-loader-{}",
             std::process::id()
         ));
         let file = IdentityFileV1 {
@@ -1043,15 +1043,15 @@ mod tests {
         }
     }
 
-    fn auth_request() -> oshioki_protocol::AuthRequestV1 {
-        oshioki_protocol::AuthRequestV1 {
-            message_type: oshioki_protocol::AUTH_REQUEST_TYPE.into(),
-            version: oshioki_protocol::AUTH_WIRE_VERSION,
+    fn auth_request() -> vouch_protocol::AuthRequestV1 {
+        vouch_protocol::AuthRequestV1 {
+            message_type: vouch_protocol::AUTH_REQUEST_TYPE.into(),
+            version: vouch_protocol::AUTH_WIRE_VERSION,
             request_id: "auth-1".into(),
             nonce: encode_base64url(&[9; 16]),
             issued_at: 1_000,
             expires_at: 1_075,
-            trusted: oshioki_protocol::TrustedAuthContextV1 {
+            trusted: vouch_protocol::TrustedAuthContextV1 {
                 host: "host.example".into(),
                 service: "sudo".into(),
                 pam_user: "root".into(),
@@ -1060,10 +1060,10 @@ mod tests {
                 invoking_user: Some("eric".into()),
                 tty: Some("/dev/pts/3".into()),
             },
-            submitted: oshioki_protocol::SubmittedAuthContextV1 {
+            submitted: vouch_protocol::SubmittedAuthContextV1 {
                 session: None,
                 agent_label: None,
-                invocation: oshioki_protocol::AuthInvocationV1::Truncated {
+                invocation: vouch_protocol::AuthInvocationV1::Truncated {
                     command: None,
                     argv: vec!["apt".into(), "upgrade".into()],
                     cwd: None,
@@ -1074,18 +1074,18 @@ mod tests {
     }
 
     fn auth_envelope(
-        request: &oshioki_protocol::AuthRequestV1,
+        request: &vouch_protocol::AuthRequestV1,
         devices: &[DevicePublicRecordV1],
-    ) -> (oshioki_protocol::AuthEnvelopeV1, Vec<u8>) {
+    ) -> (vouch_protocol::AuthEnvelopeV1, Vec<u8>) {
         let raw = request.raw_json().unwrap();
         let sealed = devices
             .iter()
             .map(|device| seal_v1(&raw, device).unwrap())
             .collect();
         (
-            oshioki_protocol::AuthEnvelopeV1 {
-                message_type: oshioki_protocol::AUTH_ENVELOPE_TYPE.into(),
-                version: oshioki_protocol::AUTH_WIRE_VERSION,
+            vouch_protocol::AuthEnvelopeV1 {
+                message_type: vouch_protocol::AUTH_ENVELOPE_TYPE.into(),
+                version: vouch_protocol::AUTH_WIRE_VERSION,
                 request_id: request.request_id.clone(),
                 host: request.trusted.host.clone(),
                 issued_at: request.issued_at,
@@ -1121,11 +1121,11 @@ mod tests {
         assert_eq!(approval.version, AUTH_WIRE_VERSION);
         assert_eq!(approval.request_id, request.request_id);
         assert_eq!(approval.device_fingerprint, device.fingerprint);
-        oshioki_protocol::verify_native_authentication_v1(&approval, &raw, &device, 1_000).unwrap();
+        vouch_protocol::verify_native_authentication_v1(&approval, &raw, &device, 1_000).unwrap();
         // The signature is over these bytes and this domain only: neither a
         // different request nor the command lane's challenge satisfies it.
         assert!(
-            oshioki_protocol::verify_native_authentication_v1(&approval, b"{}", &device, 1_000)
+            vouch_protocol::verify_native_authentication_v1(&approval, b"{}", &device, 1_000)
                 .is_err()
         );
         // Domain separation, over identical bytes: a command approval
@@ -1211,14 +1211,14 @@ mod tests {
         let now = 1_000;
         for (issued_at, expires_at) in [
             (
-                now + oshioki_protocol::MAX_REQUEST_ISSUANCE_SKEW_SECS + 1,
-                now + oshioki_protocol::MAX_REQUEST_ISSUANCE_SKEW_SECS + 91,
+                now + vouch_protocol::MAX_REQUEST_ISSUANCE_SKEW_SECS + 1,
+                now + vouch_protocol::MAX_REQUEST_ISSUANCE_SKEW_SECS + 91,
             ),
             (
-                now - oshioki_protocol::MAX_REQUEST_ISSUANCE_SKEW_SECS - 1,
+                now - vouch_protocol::MAX_REQUEST_ISSUANCE_SKEW_SECS - 1,
                 now + 1,
             ),
-            (now, now + oshioki_protocol::MAX_REQUEST_LIFETIME_SECS + 1),
+            (now, now + vouch_protocol::MAX_REQUEST_LIFETIME_SECS + 1),
         ] {
             let mut request = request();
             request.issued_at = issued_at;
@@ -1271,7 +1271,7 @@ mod tests {
 
     #[test]
     fn identity_file_round_trips_and_refuses_overwrite() {
-        let dir = std::env::temp_dir().join(format!("oshioki-agent-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vouch-agent-{}", std::process::id()));
         let path = dir.join("agent.json");
         let _ = fs::remove_dir_all(&dir);
         let store = secret_store::MemoryStore::new();
@@ -1296,7 +1296,7 @@ mod tests {
     /// keychain entry that no file can ever reference.
     #[test]
     fn identity_file_failure_rolls_back_the_new_secret() {
-        let dir = std::env::temp_dir().join(format!("oshioki-rollback-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vouch-rollback-{}", std::process::id()));
         let path = dir.join("agent.json");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
@@ -1322,7 +1322,7 @@ mod tests {
     /// it. A file that only carried bytes could not describe an enclave key.
     #[test]
     fn the_identity_file_names_its_signing_backend() {
-        let dir = std::env::temp_dir().join(format!("oshioki-tagged-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vouch-tagged-{}", std::process::id()));
         let path = dir.join("agent.json");
         let _ = fs::remove_dir_all(&dir);
         let store = secret_store::MemoryStore::new();
@@ -1354,7 +1354,7 @@ mod tests {
     /// device keeps its fingerprint.
     #[test]
     fn a_legacy_file_migrates_its_secret_into_the_store() {
-        let dir = std::env::temp_dir().join(format!("oshioki-migrate-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vouch-migrate-{}", std::process::id()));
         let path = dir.join("agent.json");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
@@ -1407,7 +1407,7 @@ mod tests {
     /// fingerprint, which is what a rolled-back agent needs.
     #[test]
     fn restoring_agent_json_prev_recovers_the_legacy_identity() {
-        let dir = std::env::temp_dir().join(format!("oshioki-restore-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vouch-restore-{}", std::process::id()));
         let path = dir.join("agent.json");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
@@ -1439,7 +1439,7 @@ mod tests {
     /// guess about which secret to use.
     #[test]
     fn an_ambiguous_or_empty_secret_form_is_refused() {
-        let dir = std::env::temp_dir().join(format!("oshioki-ambiguous-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vouch-ambiguous-{}", std::process::id()));
         let path = dir.join("agent.json");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
@@ -1474,7 +1474,7 @@ mod tests {
     /// knows the fix instead of seeing a keychain error.
     #[test]
     fn a_missing_store_entry_names_repairing() {
-        let dir = std::env::temp_dir().join(format!("oshioki-gone-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vouch-gone-{}", std::process::id()));
         let path = dir.join("agent.json");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
@@ -1503,7 +1503,7 @@ mod tests {
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn an_enclave_key_is_refused_off_macos() {
-        let dir = std::env::temp_dir().join(format!("oshioki-noenclave-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vouch-noenclave-{}", std::process::id()));
         let path = dir.join("agent.json");
         let _ = fs::remove_dir_all(&dir);
         let store = secret_store::MemoryStore::new();

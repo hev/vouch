@@ -128,7 +128,7 @@ impl EnclaveSigner {
     /// Reattaches a stored blob and reads back its public key. No sheet: only
     /// signing needs biometry.
     pub fn from_blob(blob: Vec<u8>) -> Result<Self> {
-        let (key, _context) = key_from_blob(&blob, "use the oshioki approval key")?;
+        let (key, _context) = key_from_blob(&blob, "use the vouch approval key")?;
         let public_key_sec1 = public_key_sec1(&key)?;
         Ok(Self {
             blob,
@@ -154,7 +154,7 @@ impl EnclaveSigner {
 
     /// Signs `message` after Touch ID, and returns a DER ECDSA signature.
     ///
-    /// The sheet reads "Oshioki is trying to `<reason>`. Touch ID to allow
+    /// The sheet reads "Vouch is trying to `<reason>`. Touch ID to allow
     /// this." This blocks for the whole interaction, so callers run it off the
     /// async runtime.
     pub fn sign_der(&self, message: &[u8], reason: &str) -> Result<Vec<u8>, SignError> {
@@ -182,7 +182,7 @@ impl EnclaveSigner {
     /// Whether the enclave refuses to hand out the private key, which it always
     /// should. Exists so a test can assert it on real hardware.
     pub fn export_is_refused(&self) -> Result<bool> {
-        let (key, _context) = key_from_blob(&self.blob, "use the oshioki approval key")?;
+        let (key, _context) = key_from_blob(&self.blob, "use the vouch approval key")?;
         Ok(key.external_representation().is_none())
     }
 }

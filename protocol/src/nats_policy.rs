@@ -15,7 +15,7 @@ use crate::Error;
 /// Opts one host out of the TLS requirement. Testing and loopback-adjacent
 /// development only (the Compose `nats` hostname, a tailnet address without
 /// a server certificate yet); production connections use `tls://`.
-pub const ALLOW_PLAINTEXT_NATS_ENV: &str = "OSHIOKI_ALLOW_PLAINTEXT_NATS";
+pub const ALLOW_PLAINTEXT_NATS_ENV: &str = "VOUCH_ALLOW_PLAINTEXT_NATS";
 
 /// Truthy values for the opt-out: `1`, `true`, or `yes` in any letter case
 /// around optional whitespace. Anything else, including unset, means TLS.

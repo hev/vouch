@@ -37,7 +37,7 @@ DEAD_PORT="$(free_port)"
 while [ "$DEAD_PORT" = "$NATS_PORT" ] || [ "$DEAD_PORT" = "$SERVER_PORT" ]; do DEAD_PORT="$(free_port)"; done
 
 TEMP_ROOT="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
-STATE_ROOT="$(mktemp -d "$TEMP_ROOT/oshioki-ntfy.XXXXXX")"
+STATE_ROOT="$(mktemp -d "$TEMP_ROOT/vouch-ntfy.XXXXXX")"
 NATS_PID=""
 SERVER_PID=""
 SUB_PID=""
@@ -65,10 +65,10 @@ fail() {
 }
 
 mkdir -p "$STATE_ROOT/nats" "$STATE_ROOT/server"
-cargo build --manifest-path "$REPO_ROOT/Cargo.toml" -p oshioki-server --locked
+cargo build --manifest-path "$REPO_ROOT/Cargo.toml" -p vouch-server --locked
 
 nats-server -js -sd "$STATE_ROOT/nats" -p "$NATS_PORT" \
-  --user oshioki --pass test-only >"$STATE_ROOT/nats.log" 2>&1 &
+  --user vouch --pass test-only >"$STATE_ROOT/nats.log" 2>&1 &
 NATS_PID=$!
 for _ in $(seq 1 50); do
   if (exec 3<>"/dev/tcp/127.0.0.1/$NATS_PORT") 2>/dev/null; then
@@ -170,18 +170,18 @@ elif mode == "subscribe":
     print("verdict ok")
 PYEOF
 
-NATS_ARGS=(127.0.0.1 "$NATS_PORT" oshioki test-only)
+NATS_ARGS=(127.0.0.1 "$NATS_PORT" vouch test-only)
 python3 "$STATE_ROOT/nats_helper.py" "${NATS_ARGS[@]}" create-stream OSHIOKI "$STATE_ROOT" \
   || fail "stream create failed"
 
 NATS_URL="nats://127.0.0.1:$NATS_PORT" \
-NATS_USER=oshioki \
+NATS_USER=vouch \
 NATS_PASS=test-only \
-OSHIOKI_STATE_PATH="$STATE_ROOT/server/state.sqlite3" \
-OSHIOKI_LISTEN="127.0.0.1:$SERVER_PORT" \
-OSHIOKI_ORIGIN="https://sudo.test" \
-OSHIOKI_RP_ID=sudo.test \
-  "$REPO_ROOT/target/debug/oshioki-server" >"$STATE_ROOT/server.log" 2>&1 &
+VOUCH_STATE_PATH="$STATE_ROOT/server/state.sqlite3" \
+VOUCH_LISTEN="127.0.0.1:$SERVER_PORT" \
+VOUCH_ORIGIN="https://sudo.test" \
+VOUCH_RP_ID=sudo.test \
+  "$REPO_ROOT/target/debug/vouch-server" >"$STATE_ROOT/server.log" 2>&1 &
 SERVER_PID=$!
 for _ in $(seq 1 100); do
   if curl --fail --silent "http://127.0.0.1:$SERVER_PORT/healthz" >/dev/null; then

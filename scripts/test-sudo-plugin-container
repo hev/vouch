@@ -3,7 +3,7 @@
 # approval-plugin payload-binding contract.
 #
 # Local mode creates a private Docker network containing NATS, the subscriber,
-# and the sudo test container. Compose sets OSHIOKI_E2E_IN_CONTAINER=1;
+# and the sudo test container. Compose sets VOUCH_E2E_IN_CONTAINER=1;
 # its runner already reaches the project NATS service by DNS name.
 #
 # Usage: test-sudo-plugin-container
@@ -15,28 +15,28 @@ WORKSPACE="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
 IMAGE="${IMAGE:-ubuntu:24.04}"
 PY_IMAGE="${PY_IMAGE:-python:3.12-slim}"
 NATS_IMAGE="${NATS_IMAGE:-nats:2.10}"
-IN_CONTAINER="${OSHIOKI_E2E_IN_CONTAINER:-0}"
-SKIP_BUILD="${OSHIOKI_E2E_SKIP_BUILD:-0}"
-KEEP_ARTIFACTS="${OSHIOKI_E2E_KEEP_ARTIFACTS:-0}"
-ORIGIN_VALUE="${OSHIOKI_ORIGIN:-https://sudo.test}"
-RP_ID_VALUE="${OSHIOKI_RP_ID:-sudo.test}"
+IN_CONTAINER="${VOUCH_E2E_IN_CONTAINER:-0}"
+SKIP_BUILD="${VOUCH_E2E_SKIP_BUILD:-0}"
+KEEP_ARTIFACTS="${VOUCH_E2E_KEEP_ARTIFACTS:-0}"
+ORIGIN_VALUE="${VOUCH_ORIGIN:-https://sudo.test}"
+RP_ID_VALUE="${VOUCH_RP_ID:-sudo.test}"
 # One valid-verdict sudo run, plus two hostile-caller-environment runs below.
 REQUEST_COUNT=3
 
-SHARE="$(mktemp -d -t oshioki-test.XXXXXX)"
+SHARE="$(mktemp -d -t vouch-test.XXXXXX)"
 SHARE="$(cd "$SHARE" && pwd -P)"
 RUN_ID="${SHARE##*.}"
-NETWORK_NAME="oshioki-test-${RUN_ID}"
-NATS_NAME="oshioki-test-nats-${RUN_ID}"
-SUB_NAME="oshioki-test-sub-${RUN_ID}"
-SUDO_NAME="oshioki-test-sudo-${RUN_ID}"
+NETWORK_NAME="vouch-test-${RUN_ID}"
+NATS_NAME="vouch-test-nats-${RUN_ID}"
+SUB_NAME="vouch-test-sub-${RUN_ID}"
+SUDO_NAME="vouch-test-sudo-${RUN_ID}"
 
 TEST_SUCCEEDED=0
 NETWORK_CREATED=0
 SUBSCRIBER_PID=""
 
 run_docker() {
-  if [ "${OSHIOKI_E2E_DOCKER_SUDO:-0}" = "1" ]; then
+  if [ "${VOUCH_E2E_DOCKER_SUDO:-0}" = "1" ]; then
     sudo -n docker "$@"
   else
     docker "$@"
@@ -82,8 +82,8 @@ echo "* share:     $SHARE"
 # A normal local run rebuilds immediately before exercising sudo. A caller may
 # skip this duplicate build only with the commit receipt written by its
 # prerequisite build step and a clean service checkout.
-BUILD_RECEIPT="$WORKSPACE/target/release/.oshioki-e2e-commit"
-if [ "$SKIP_BUILD" = "1" ] && [ "${OSHIOKI_E2E_PREBUILT:-0}" = "1" ]; then
+BUILD_RECEIPT="$WORKSPACE/target/release/.vouch-e2e-commit"
+if [ "$SKIP_BUILD" = "1" ] && [ "${VOUCH_E2E_PREBUILT:-0}" = "1" ]; then
   echo "* release:   using image-built E2E artifacts"
 elif [ "$SKIP_BUILD" = "1" ]; then
   EXPECTED_COMMIT="$(git -C "$WORKSPACE" rev-parse HEAD)"
@@ -96,27 +96,27 @@ elif [ "$SKIP_BUILD" = "1" ]; then
     exit 2
   }
   [ -z "$(git -C "$WORKSPACE" status --porcelain --untracked-files=all -- .)" ] || {
-    echo "cannot reuse CI build artifacts with a dirty oshioki checkout" >&2
+    echo "cannot reuse CI build artifacts with a dirty vouch checkout" >&2
     exit 2
   }
   echo "* release:   verified CI build receipt for $EXPECTED_COMMIT"
 else
-  echo "* release:   rebuilding current oshioki workspace"
+  echo "* release:   rebuilding current vouch workspace"
   (cd "$WORKSPACE" && cargo build --workspace --release)
   git -C "$WORKSPACE" rev-parse HEAD >"$BUILD_RECEIPT"
 fi
 
-for artifact in "$WORKSPACE/target/release/oshioki" \
-                "$WORKSPACE/target/release/liboshioki_plugin.so"; do
+for artifact in "$WORKSPACE/target/release/vouch" \
+                "$WORKSPACE/target/release/libvouch_plugin.so"; do
   [ -f "$artifact" ] || {
     echo "missing build artifact after release build: $artifact" >&2
     exit 2
   }
 done
-if [ "${OSHIOKI_E2E_PREBUILT:-0}" != "1" ]; then
+if [ "${VOUCH_E2E_PREBUILT:-0}" != "1" ]; then
   (
     cd "$WORKSPACE/target/release"
-    sha256sum oshioki liboshioki_plugin.so > SHA256SUMS
+    sha256sum vouch libvouch_plugin.so > SHA256SUMS
   )
 fi
 
@@ -133,7 +133,7 @@ else
   NETWORK_CREATED=1
   run_docker run -d --name "$NATS_NAME" --network "$NETWORK_NAME" \
     "$NATS_IMAGE" -js \
-    --user "${NATS_USER:-oshioki}" \
+    --user "${NATS_USER:-vouch}" \
     --pass "${NATS_PASS:-test}" >/dev/null
   NATS_HOST_VALUE="$NATS_NAME"
   NATS_PORT_VALUE=4222
@@ -174,10 +174,10 @@ if [ "$IN_CONTAINER" = "1" ]; then
   SHARE_DIR="$SHARE" \
   NATS_HOST="$NATS_HOST_VALUE" \
   NATS_PORT="$NATS_PORT_VALUE" \
-  NATS_USER="${NATS_USER:-oshioki}" \
+  NATS_USER="${NATS_USER:-vouch}" \
   NATS_PASS="${NATS_PASS:-test}" \
-  OSHIOKI_ORIGIN="$ORIGIN_VALUE" \
-  OSHIOKI_RP_ID="$RP_ID_VALUE" \
+  VOUCH_ORIGIN="$ORIGIN_VALUE" \
+  VOUCH_RP_ID="$RP_ID_VALUE" \
   TIMEOUT=180 \
   REQUEST_COUNT="$REQUEST_COUNT" \
     python3 "$SHARE/test-sudo-plugin-subscriber.py" \
@@ -189,10 +189,10 @@ else
     -e SHARE_DIR=/share \
     -e NATS_HOST="$NATS_HOST_VALUE" \
     -e NATS_PORT="$NATS_PORT_VALUE" \
-    -e NATS_USER="${NATS_USER:-oshioki}" \
+    -e NATS_USER="${NATS_USER:-vouch}" \
     -e NATS_PASS="${NATS_PASS:-test}" \
-    -e OSHIOKI_ORIGIN="$ORIGIN_VALUE" \
-    -e OSHIOKI_RP_ID="$RP_ID_VALUE" \
+    -e VOUCH_ORIGIN="$ORIGIN_VALUE" \
+    -e VOUCH_RP_ID="$RP_ID_VALUE" \
     -e TIMEOUT=180 \
     -e REQUEST_COUNT="$REQUEST_COUNT" \
     -v "$SHARE":/share \
@@ -241,7 +241,7 @@ if [ "$IN_CONTAINER" = "1" ]; then
   INNER_SERVICE_DIR="$WORKSPACE"
   INNER_SHARE_DIR="$SHARE"
 else
-  INNER_SERVICE_DIR=/oshioki
+  INNER_SERVICE_DIR=/vouch
   INNER_SHARE_DIR=/share
 fi
 
@@ -266,35 +266,35 @@ if ! command -v sudo >/dev/null 2>&1 || ! command -v file >/dev/null 2>&1; then
   apt-get install -y -qq sudo file >/dev/null
 fi
 
-install -d -m 0700 -o root -g root /etc/oshioki
-install -m 0600 -o root -g root "$SHARE_DIR/devices.json" /etc/oshioki/devices.json
+install -d -m 0700 -o root -g root /etc/vouch
+install -m 0600 -o root -g root "$SHARE_DIR/devices.json" /etc/vouch/devices.json
 echo "[inner] devices.json planted"
 
 # The installer enables the hook only when a device is already active, so
 # the registry is planted first; otherwise sudo falls back to NOPASSWD and
 # the hook never publishes the request over NATS.
-"$SERVICE_DIR/scripts/install-oshioki-hook" --standalone-e2e
-echo "[inner] install-oshioki-hook OK"
+"$SERVICE_DIR/scripts/install-vouch-hook" --standalone-e2e
+echo "[inner] install-vouch-hook OK"
 
 # The installer's proof that sudo loads the plugin, against real sudo: root's
 # `sudo -V` must print the plugin's show_version banner.
 sudo_version="$(sudo -V)"
 printf '%s\n' "$sudo_version"
-if ! grep -Fq 'Oshioki approval plugin version ' <<<"$sudo_version"; then
-  echo "[inner] FAIL: root's sudo -V does not list the Oshioki approval plugin" >&2
+if ! grep -Fq 'Vouch approval plugin version ' <<<"$sudo_version"; then
+  echo "[inner] FAIL: root's sudo -V does not list the Vouch approval plugin" >&2
   exit 1
 fi
 
 cleanup_e2e_sudoers() {
-  rm -f /etc/sudoers.d/oshioki-e2e
+  rm -f /etc/sudoers.d/vouch-e2e
 }
 cleanup_e2e_sudoers
 trap cleanup_e2e_sudoers EXIT
 
 useradd --uid "$EXPECTED_UID" --create-home --shell /bin/bash "$EXPECTED_USER"
 printf '%s ALL=(root) NOPASSWD: %s\n' "$EXPECTED_USER" "$EXPECTED_CMD" \
-  > /etc/sudoers.d/oshioki-e2e
-chmod 0440 /etc/sudoers.d/oshioki-e2e
+  > /etc/sudoers.d/vouch-e2e
+chmod 0440 /etc/sudoers.d/vouch-e2e
 echo "[inner] caller $EXPECTED_USER uid=$EXPECTED_UID created"
 
 sudo -k || true
@@ -395,23 +395,23 @@ chmod +x "$INNER_SCRIPT"
 run_sudo() {
   if [ "$IN_CONTAINER" = "1" ]; then
     NATS_URL="$NATS_URL_VALUE" \
-    NATS_USER="${NATS_USER:-oshioki}" \
+    NATS_USER="${NATS_USER:-vouch}" \
     NATS_PASS="${NATS_PASS:-test}" \
-    OSHIOKI_ALLOW_PLAINTEXT_NATS=1 \
-    OSHIOKI_ORIGIN="$ORIGIN_VALUE" \
-    OSHIOKI_RP_ID="$RP_ID_VALUE" \
+    VOUCH_ALLOW_PLAINTEXT_NATS=1 \
+    VOUCH_ORIGIN="$ORIGIN_VALUE" \
+    VOUCH_RP_ID="$RP_ID_VALUE" \
       bash -x "$INNER_SCRIPT" >"$SHARE/sudo-run.log" 2>&1
   else
     run_docker run --name "$SUDO_NAME" --network "$NETWORK_NAME" \
       -e NATS_URL="$NATS_URL_VALUE" \
-      -e NATS_USER="${NATS_USER:-oshioki}" \
+      -e NATS_USER="${NATS_USER:-vouch}" \
       -e NATS_PASS="${NATS_PASS:-test}" \
-      -e OSHIOKI_ALLOW_PLAINTEXT_NATS=1 \
-      -e OSHIOKI_ORIGIN="$ORIGIN_VALUE" \
-      -e OSHIOKI_RP_ID="$RP_ID_VALUE" \
+      -e VOUCH_ALLOW_PLAINTEXT_NATS=1 \
+      -e VOUCH_ORIGIN="$ORIGIN_VALUE" \
+      -e VOUCH_RP_ID="$RP_ID_VALUE" \
       -v "$SHARE":/share \
-      -v "$WORKSPACE":/oshioki \
-      -w /oshioki \
+      -v "$WORKSPACE":/vouch \
+      -w /vouch \
       "$IMAGE" \
       bash -x /share/sudo-inner.sh \
       >"$SHARE/sudo-run.log" 2>&1

@@ -2,7 +2,7 @@
 # shellcheck disable=SC2015,SC2034
 # One-command laptop setup for local sudo approvals.
 #
-# brew install epsalmond/oshioki/oshioki && oshioki-laptop-setup
+# brew install epsalmond/oshioki/vouch && vouch-laptop-setup
 #
 # Idempotent: re-running after a brew upgrade reinstalls the hook and plugin
 # from the new bottle and restarts the agent. Everything needing privilege
@@ -17,15 +17,15 @@
 # placeholders. A stale placeholder install migrates with --reconfigure.
 #
 # The Mac agent's autostart plist gets its own NATS role, never the hook's:
-# server mode prompts for it separately (persisted as OSHIOKI_AGENT_NATS_URL/
+# server mode prompts for it separately (persisted as VOUCH_AGENT_NATS_URL/
 # USER/PASS in install.env, defaulting the URL to the hook's own but every
 # field independently overridable); --local stages the same three names from
 # the environment, unpersisted. An existing plist that already names a NATS
 # is left alone on an ordinary re-run -- only --reconfigure replaces it. See
 # RUNBOOK.md.
 # On macOS --local also wraps the agent in
-# Oshioki.app (scripts/mac/bundle-agent) so the Touch ID sheet shows the
-# Oshioki name and logo instead of a bare binary; set OSHIOKI_SIGN_IDENTITY
+# Vouch.app (scripts/mac/bundle-agent) so the Touch ID sheet shows the
+# Vouch name and logo instead of a bare binary; set VOUCH_SIGN_IDENTITY
 # to sign the bundle too.
 #
 # One elevation per run: --local does all of its privileged work (config,
@@ -44,10 +44,10 @@ set -euo pipefail
 # briefly world-readable before its explicit chmod runs.
 umask 077
 
-die() { echo "oshioki-laptop-setup: $*" >&2; exit 1; }
+die() { echo "vouch-laptop-setup: $*" >&2; exit 1; }
 # Everything human-facing goes to stderr: the privileged phase's stdout is a
 # machine-readable value block the outer run parses.
-info() { echo "oshioki-laptop-setup: $*" >&2; }
+info() { echo "vouch-laptop-setup: $*" >&2; }
 # agent.env is read back by shell sourcing, so every value has to survive the
 # shell: a password holding a space, $, backtick, # or quote would otherwise
 # be split or expanded. Single quotes suppress all of that, and a literal
@@ -64,9 +64,9 @@ VALUES_FILE=""
 # Opt-in, never the default: the contextual PAM lane replaces the approval
 # plugin and the blanket NOPASSWD rule with a PAM auth entry, and a laptop
 # that gets it by surprise is a laptop whose sudo changed shape without its
-# owner asking. Same spelling as the .deb's /etc/oshioki/install.env key so
+# owner asking. Same spelling as the .deb's /etc/vouch/install.env key so
 # one name covers both lanes.
-CONTEXTUAL_PAM="${OSHIOKI_CONTEXTUAL_PAM:-0}"
+CONTEXTUAL_PAM="${VOUCH_CONTEXTUAL_PAM:-0}"
 [ "$CONTEXTUAL_PAM" = 1 ] || CONTEXTUAL_PAM=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -80,18 +80,18 @@ while [ "$#" -gt 0 ]; do
       VALUES_FILE="$2"; shift
       ;;
     -h|--help)
-      echo "usage: oshioki-laptop-setup [--yes] [--reconfigure] [--local] [--contextual-pam]" >&2
+      echo "usage: vouch-laptop-setup [--yes] [--reconfigure] [--local] [--contextual-pam]" >&2
       echo "  --yes          accept defaults and prompts without asking" >&2
-      echo "  --reconfigure  re-enter /etc/oshioki/install.env from scratch;" >&2
+      echo "  --reconfigure  re-enter /etc/vouch/install.env from scratch;" >&2
       echo "                 also rewrites the agent autostart (LaunchAgent" >&2
       echo "                 plist / agent.env)" >&2
       echo "  --local        pair this machine with itself; no server needed" >&2
       echo "  --contextual-pam  after the install, migrate sudo to the PAM lane" >&2
-      echo "                    (same as OSHIOKI_CONTEXTUAL_PAM=1); keep a second" >&2
+      echo "                    (same as VOUCH_CONTEXTUAL_PAM=1); keep a second" >&2
       echo "                    root shell open while it runs" >&2
       exit 0
       ;;
-    *) echo "oshioki-laptop-setup: unknown argument: $1" >&2; exit 2 ;;
+    *) echo "vouch-laptop-setup: unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
 done
@@ -106,8 +106,8 @@ fi
 # Absolute path to this script, with every symlink in the chain walked out.
 # `pwd -P` alone resolves symlinked *directories* but not a symlinked
 # *file*, and Homebrew puts this script on PATH as
-# /opt/homebrew/bin/oshioki-laptop-setup -> ../Cellar/oshioki/<version>/bin/
-# oshioki-laptop-setup. Without this the keg probe below would look for
+# /opt/homebrew/bin/vouch-laptop-setup -> ../Cellar/vouch/<version>/bin/
+# vouch-laptop-setup. Without this the keg probe below would look for
 # /opt/homebrew/libexec/SHA256SUMS, miss it, and leave the installer to fall
 # back on a repo-relative build path that does not exist (issue #91). It is
 # also the path the privileged phase re-invokes under sudo, where a bare
@@ -139,28 +139,28 @@ SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 PARENT_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 AGENT_BIN_EXPLICIT="${AGENT_BIN:-}"
 LAPTOP_USER="${SUDO_USER:-$(id -un)}"
-INSTALLER="${INSTALLER:-$SCRIPT_DIR/install-oshioki-hook}"
-AGENT_BIN="${AGENT_BIN:-$SCRIPT_DIR/oshioki-agent}"
+INSTALLER="${INSTALLER:-$SCRIPT_DIR/install-vouch-hook}"
+AGENT_BIN="${AGENT_BIN:-$SCRIPT_DIR/vouch-agent}"
 # Repo checkout layout keeps the built agent next to the source tree.
-if [ ! -x "$AGENT_BIN" ] && [ -x "$PARENT_DIR/target/release/oshioki-agent" ]; then
-  AGENT_BIN="$PARENT_DIR/target/release/oshioki-agent"
+if [ ! -x "$AGENT_BIN" ] && [ -x "$PARENT_DIR/target/release/vouch-agent" ]; then
+  AGENT_BIN="$PARENT_DIR/target/release/vouch-agent"
 fi
 # Brew layout keeps binaries next to this script and data one level up in
 # libexec. HOOK_BIN and friends stay empty outside that layout so the
 # installer falls back to its own repo defaults.
 HOOK_BIN=""
 PLUGIN_BIN=""
-OSHIOKI_CHECKSUMS=""
-if [ -x "$SCRIPT_DIR/oshioki" ] && [ -f "$PARENT_DIR/libexec/SHA256SUMS" ]; then
-  HOOK_BIN="${HOOK_BIN:-$SCRIPT_DIR/oshioki}"
-  PLUGIN_BIN="${PLUGIN_BIN:-$PARENT_DIR/libexec/oshioki.dylib}"
-  OSHIOKI_CHECKSUMS="${OSHIOKI_CHECKSUMS:-$PARENT_DIR/libexec/SHA256SUMS}"
+VOUCH_CHECKSUMS=""
+if [ -x "$SCRIPT_DIR/vouch" ] && [ -f "$PARENT_DIR/libexec/SHA256SUMS" ]; then
+  HOOK_BIN="${HOOK_BIN:-$SCRIPT_DIR/vouch}"
+  PLUGIN_BIN="${PLUGIN_BIN:-$PARENT_DIR/libexec/vouch.dylib}"
+  VOUCH_CHECKSUMS="${VOUCH_CHECKSUMS:-$PARENT_DIR/libexec/SHA256SUMS}"
 fi
 HOOK_BIN="${HOOK_BIN:-}"
 PLUGIN_BIN="${PLUGIN_BIN:-}"
-OSHIOKI_CHECKSUMS="${OSHIOKI_CHECKSUMS:-}"
+VOUCH_CHECKSUMS="${VOUCH_CHECKSUMS:-}"
 # A bare binary makes the Touch ID sheet show a file name and the generic
-# executable badge; the same bytes inside Oshioki.app make it show the Oshioki
+# executable badge; the same bytes inside Vouch.app make it show the Vouch
 # name and logo. Releases from 0.1.12 ship the bundle in the keg root beside
 # bin/, hashed in the same SHA256SUMS under its bundle-relative name. Prefer
 # it when it is there and verifies; older kegs have no bundle and keep the
@@ -175,14 +175,14 @@ sha256_of() {
 # (an older manifest, which is not a failure -- it simply cannot answer).
 checksum_status() {
   local want have
-  want="$(awk -v n="$1" '$2 == n || $2 == "*" n {print $1; exit}' "$OSHIOKI_CHECKSUMS")"
+  want="$(awk -v n="$1" '$2 == n || $2 == "*" n {print $1; exit}' "$VOUCH_CHECKSUMS")"
   [ -n "$want" ] || return 2
   have="$(sha256_of "$2")"
   [ "$want" = "$have" ]
 }
-AGENT_BUNDLE_REL="Oshioki.app/Contents/MacOS/oshioki-agent"
+AGENT_BUNDLE_REL="Vouch.app/Contents/MacOS/vouch-agent"
 if [ -z "$AGENT_BIN_EXPLICIT" ] && [ "$(uname -s)" = Darwin ] \
-  && [ -n "$OSHIOKI_CHECKSUMS" ] && [ -f "$OSHIOKI_CHECKSUMS" ]; then
+  && [ -n "$VOUCH_CHECKSUMS" ] && [ -f "$VOUCH_CHECKSUMS" ]; then
   bundle_bin="$PARENT_DIR/$AGENT_BUNDLE_REL"
   if [ -x "$bundle_bin" ]; then
     bundle_rc=0
@@ -198,13 +198,13 @@ if [ -z "$AGENT_BIN_EXPLICIT" ] && [ "$(uname -s)" = Darwin ] \
   fi
   if [ "$AGENT_BIN" != "$bundle_bin" ] && [ -x "$AGENT_BIN" ]; then
     flat_rc=0
-    checksum_status "oshioki-agent" "$AGENT_BIN" || flat_rc=$?
+    checksum_status "vouch-agent" "$AGENT_BIN" || flat_rc=$?
     # A keg whose flat agent does not match its own manifest has been
     # tampered with or half-written. There is nothing safe left to fall back
     # to, so stop rather than install an unverified agent as the thing that
     # answers every sudo on this machine.
     [ "$flat_rc" -ne 1 ] ||
-      die "$AGENT_BIN does not match $OSHIOKI_CHECKSUMS; reinstall the package before re-running"
+      die "$AGENT_BIN does not match $VOUCH_CHECKSUMS; reinstall the package before re-running"
   fi
 fi
 # <prefix>/Cellar/<formula>/<version>/... is the path `brew upgrade` plus
@@ -238,8 +238,8 @@ stable_keg_path() {
 # only --contextual-pam needs it, and the installer's own error is clearer
 # than one invented here. The release artifact and the brew libexec keep the
 # module under its exact SHA256SUMS name, so the name never varies.
-pam_module_name=liboshioki_pam.so
-[ "$(uname -s)" != Darwin ] || pam_module_name=liboshioki_pam.dylib
+pam_module_name=libvouch_pam.so
+[ "$(uname -s)" != Darwin ] || pam_module_name=libvouch_pam.dylib
 PAM_MODULE_BIN="${PAM_MODULE_BIN:-}"
 if [ -z "$PAM_MODULE_BIN" ]; then
   for candidate in \
@@ -251,11 +251,11 @@ if [ -z "$PAM_MODULE_BIN" ]; then
     break
   done
 fi
-INSTALLED_HOOK="${INSTALLED_HOOK:-/usr/local/sbin/oshioki}"
-# Seconds to wait for `oshioki enroll` to print its URL. Deliberately longer
+INSTALLED_HOOK="${INSTALLED_HOOK:-/usr/local/sbin/vouch}"
+# Seconds to wait for `vouch enroll` to print its URL. Deliberately longer
 # than the hook's own transport timeouts so a reachability problem is
 # reported by the hook, in its own words, rather than by this poll.
-ENROLL_URL_TIMEOUT="${OSHIOKI_ENROLL_URL_TIMEOUT:-60}"
+ENROLL_URL_TIMEOUT="${VOUCH_ENROLL_URL_TIMEOUT:-60}"
 # The agent keeps its box secret in the macOS login keychain, which only a
 # graphical login session has unlocked. Over ssh, or from a launchd job with
 # no session, the Security framework refuses with errSecInteractionNotAllowed
@@ -278,10 +278,10 @@ LAUNCHCTL="${LAUNCHCTL:-launchctl}"
 SYSTEMCTL="${SYSTEMCTL:-systemctl}"
 PLUTIL="${PLUTIL:-plutil}"
 
-INSTALL_ENV="${OSHIOKI_INSTALL_ENV:-/etc/oshioki/install.env}"
-AGENT_STATE="${OSHIOKI_AGENT_STATE:-$HOME/.config/oshioki}"
+INSTALL_ENV="${VOUCH_INSTALL_ENV:-/etc/vouch/install.env}"
+AGENT_STATE="${VOUCH_AGENT_STATE:-$HOME/.config/vouch}"
 DEFAULT_SOCKET="$AGENT_STATE/agent.sock"
-LABEL="com.oshioki.agent"
+LABEL="com.hev.vouch.agent"
 # The agent's own NATS bus and role, kept apart from NATS_URL_V/NATS_USER_V/
 # NATS_PASS_V (the hook's) everywhere below. Writing the hook's credentials
 # into the agent's environment authenticates it as the wrong NATS user,
@@ -307,31 +307,31 @@ if [ "$LOCAL" -eq 1 ]; then
   repo_root="$PARENT_DIR"
   if [ -f "$repo_root/Cargo.toml" ]; then
     release="$repo_root/target/release"
-    if [ ! -x "$release/oshioki" ] || [ ! -x "$release/oshioki-agent" ]; then
+    if [ ! -x "$release/vouch" ] || [ ! -x "$release/vouch-agent" ]; then
       command -v cargo >/dev/null 2>&1 || die "cargo not found; install Rust or set AGENT_BIN"
       info "building release artifacts (one time)"
-      ( cd "$repo_root" && cargo build --release -p oshioki-hook -p oshioki-plugin -p oshioki-agent )
+      ( cd "$repo_root" && cargo build --release -p vouch-hook -p vouch-plugin -p vouch-agent )
     fi
-    plugin="$release/liboshioki_plugin.dylib"
-    [ "$(uname -s)" = Darwin ] || plugin="$release/liboshioki_plugin.so"
-    if [ -f "$release/oshioki" ] && [ -f "$plugin" ]; then
+    plugin="$release/libvouch_plugin.dylib"
+    [ "$(uname -s)" = Darwin ] || plugin="$release/libvouch_plugin.so"
+    if [ -f "$release/vouch" ] && [ -f "$plugin" ]; then
       if command -v sha256sum >/dev/null 2>&1; then
-        ( cd "$release" && sha256sum oshioki "$(basename "$plugin")" > SHA256SUMS )
+        ( cd "$release" && sha256sum vouch "$(basename "$plugin")" > SHA256SUMS )
       else
-        ( cd "$release" && shasum -a 256 oshioki "$(basename "$plugin")" > SHA256SUMS )
+        ( cd "$release" && shasum -a 256 vouch "$(basename "$plugin")" > SHA256SUMS )
       fi
     fi
-    [ -x "$AGENT_BIN" ] || AGENT_BIN="$release/oshioki-agent"
+    [ -x "$AGENT_BIN" ] || AGENT_BIN="$release/vouch-agent"
     [ -x "$AGENT_BIN" ] || die "agent not found after build: $AGENT_BIN"
     # A bare binary makes the Touch ID sheet show a file name and the
-    # generic executable badge. The bundle makes it show the Oshioki
+    # generic executable badge. The bundle makes it show the Vouch
     # name with the logo; every later step (identity, plist) uses
     # AGENT_BIN, so switching it here switches all of them. An
     # explicitly chosen agent binary is left alone.
     if [ -z "$AGENT_BIN_EXPLICIT" ] && [ "$(uname -s)" = Darwin ] \
       && [ -x "$repo_root/scripts/mac/bundle-agent" ]; then
-      if [ -n "${OSHIOKI_SIGN_IDENTITY:-}" ]; then
-        bundle_bin="$("$repo_root/scripts/mac/bundle-agent" --sign "$OSHIOKI_SIGN_IDENTITY")"
+      if [ -n "${VOUCH_SIGN_IDENTITY:-}" ]; then
+        bundle_bin="$("$repo_root/scripts/mac/bundle-agent" --sign "$VOUCH_SIGN_IDENTITY")"
       else
         bundle_bin="$("$repo_root/scripts/mac/bundle-agent")"
       fi
@@ -405,7 +405,7 @@ INSTALL_ENV_SNAPSHOT=""
 # needs no bookkeeping: whatever lands in it goes when the trap fires.
 # 0700 on the directory, 0600 on each file: both matter, because these carry
 # the NATS password.
-TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/oshioki-run.XXXXXX")" ||
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/vouch-run.XXXXXX")" ||
   die "cannot create a temp directory"
 chmod 0700 "$TMP_DIR"
 # One EXIT trap for the whole run. Nothing relies on reaching an inline `rm`:
@@ -426,7 +426,7 @@ run_tmp() {
 
 snapshot_install_env() {
   [ -z "$INSTALL_ENV_SNAPSHOT" ] || return 0
-  INSTALL_ENV_SNAPSHOT="$(run_tmp oshioki-env)"
+  INSTALL_ENV_SNAPSHOT="$(run_tmp vouch-env)"
   if [ "$(id -u)" -eq 0 ] || [ -z "${SUDO:-}" ]; then
     cat "$INSTALL_ENV" > "$INSTALL_ENV_SNAPSHOT" 2>/dev/null || true
   else
@@ -452,7 +452,7 @@ env_key() {
 
 # Does install.env exist? Ask through sudo, the same way the snapshot above
 # takes it -- and as one plain top-level command, so it rides the same ticket.
-# /etc/oshioki is
+# /etc/vouch is
 # root-owned 0700 and install.env inside it 0600, so a bare `[ -f ]` run as
 # the laptop user answers "missing" for a file that is there (issue #88): the
 # run then takes the write branch and overwrites a good config, or dies
@@ -469,38 +469,38 @@ install_env_exists() {
 # Parse the privileged phase's value block into the config globals.
 read_markers() {
   local block line key value
-  block="$(printf '%s\n' "$1" | sed -n '/^OSHIOKI_SETUP_VALUES_BEGIN$/,/^OSHIOKI_SETUP_VALUES_END$/p')"
+  block="$(printf '%s\n' "$1" | sed -n '/^VOUCH_SETUP_VALUES_BEGIN$/,/^VOUCH_SETUP_VALUES_END$/p')"
   [ -n "$block" ] || die "privileged phase reported no configuration"
   ORIGIN=""; RP_ID=""; NATS_URL_V=""; NATS_USER_V=""; NATS_PASS_V=""; AGENT_SOCKET_V=""
   while IFS= read -r line; do
     case "$line" in
-      OSHIOKI_SETUP_VALUES_BEGIN|OSHIOKI_SETUP_VALUES_END) continue ;;
+      VOUCH_SETUP_VALUES_BEGIN|VOUCH_SETUP_VALUES_END) continue ;;
       *=*) ;;
       *) continue ;;
     esac
     key="${line%%=*}"; value="${line#*=}"
     case "$key" in
-      OSHIOKI_ORIGIN) ORIGIN="$value" ;;
-      OSHIOKI_RP_ID) RP_ID="$value" ;;
+      VOUCH_ORIGIN) ORIGIN="$value" ;;
+      VOUCH_RP_ID) RP_ID="$value" ;;
       NATS_URL) NATS_URL_V="$value" ;;
       NATS_USER) NATS_USER_V="$value" ;;
       NATS_PASS) NATS_PASS_V="$value" ;;
-      OSHIOKI_AGENT_SOCKET) AGENT_SOCKET_V="$value" ;;
-      OSHIOKI_REUSED) ;;
+      VOUCH_AGENT_SOCKET) AGENT_SOCKET_V="$value" ;;
+      VOUCH_REUSED) ;;
       *) die "unknown value from privileged phase: $key" ;;
     esac
   done <<<"$block"
 }
 
 check_config() {
-  [ -n "$ORIGIN" ] || die "$INSTALL_ENV has no OSHIOKI_ORIGIN"
+  [ -n "$ORIGIN" ] || die "$INSTALL_ENV has no VOUCH_ORIGIN"
   [ -n "$AGENT_SOCKET_V" ] || AGENT_SOCKET_V="$DEFAULT_SOCKET"
   # The agent's own bus, checked independently of the hook's below: an
   # install.env from before this field existed carries neither, which is
   # the valid socket-only shape, not an error.
   if [ -z "$AGENT_NATS_URL_V" ]; then
     if [ -n "$AGENT_NATS_USER_V" ] || [ -n "$AGENT_NATS_PASS_V" ]; then
-      die "$INSTALL_ENV has agent NATS credentials without OSHIOKI_AGENT_NATS_URL; remove them or set a URL"
+      die "$INSTALL_ENV has agent NATS credentials without VOUCH_AGENT_NATS_URL; remove them or set a URL"
     fi
     # A hook that talks to a real NATS but an agent with no credentials at
     # all (an install.env written by 0.1.10 or earlier, or an operator who
@@ -508,12 +508,12 @@ check_config() {
     # still gets written, just socket-only -- but approvals from other hosts
     # can never reach this Mac. Say so loudly instead of leaving that silent.
     if [ -n "$NATS_URL_V" ]; then
-      info "warning: agent will be socket-only; approvals from other hosts will not reach this Mac; set OSHIOKI_AGENT_NATS_URL/USER/PASS and re-run with --reconfigure"
+      info "warning: agent will be socket-only; approvals from other hosts will not reach this Mac; set VOUCH_AGENT_NATS_URL/USER/PASS and re-run with --reconfigure"
     fi
   else
     case "$AGENT_NATS_URL_V" in
       [Tt][Ll][Ss]://*|[Nn][Aa][Tt][Ss]://localhost*|[Nn][Aa][Tt][Ss]://127.*|[Nn][Aa][Tt][Ss]://\[::1\]*|[Nn][Aa][Tt][Ss]://:*) ;;
-      [Nn][Aa][Tt][Ss]://*) info "warning: OSHIOKI_AGENT_NATS_URL is plaintext to a non-loopback host; add OSHIOKI_ALLOW_PLAINTEXT_NATS=1 to $INSTALL_ENV (testing only) or switch to tls:// (see README.md)" ;;
+      [Nn][Aa][Tt][Ss]://*) info "warning: VOUCH_AGENT_NATS_URL is plaintext to a non-loopback host; add VOUCH_ALLOW_PLAINTEXT_NATS=1 to $INSTALL_ENV (testing only) or switch to tls:// (see README.md)" ;;
     esac
   fi
   if [ -z "$NATS_URL_V" ]; then
@@ -528,7 +528,7 @@ check_config() {
   # now rather than failing the first sudo afterwards. Production uses tls://.
   case "$NATS_URL_V" in
     [Tt][Ll][Ss]://*|[Nn][Aa][Tt][Ss]://localhost*|[Nn][Aa][Tt][Ss]://127.*|[Nn][Aa][Tt][Ss]://\[::1\]*|[Nn][Aa][Tt][Ss]://:*) ;;
-    [Nn][Aa][Tt][Ss]://*) info "warning: NATS_URL is plaintext to a non-loopback host; add OSHIOKI_ALLOW_PLAINTEXT_NATS=1 to $INSTALL_ENV (testing only) or switch to tls:// (see README.md)" ;;
+    [Nn][Aa][Tt][Ss]://*) info "warning: NATS_URL is plaintext to a non-loopback host; add VOUCH_ALLOW_PLAINTEXT_NATS=1 to $INSTALL_ENV (testing only) or switch to tls:// (see README.md)" ;;
   esac
 }
 
@@ -537,19 +537,19 @@ run_installer() {
   # empty (it tries to run the first VAR= as a command), so the unprivileged
   # call spells its environment out instead of prefixing nothing.
   if [ -n "${SUDO:-}" ]; then
-    $SUDO HOOK_BIN="$HOOK_BIN" PLUGIN_BIN="$PLUGIN_BIN" OSHIOKI_CHECKSUMS="$OSHIOKI_CHECKSUMS" \
+    $SUDO HOOK_BIN="$HOOK_BIN" PLUGIN_BIN="$PLUGIN_BIN" VOUCH_CHECKSUMS="$VOUCH_CHECKSUMS" \
       PAM_MODULE_BIN="$PAM_MODULE_BIN" \
-      OSHIOKI_SUDO_USER="${OSHIOKI_SUDO_USER:-$LAPTOP_USER}" \
+      VOUCH_SUDO_USER="${VOUCH_SUDO_USER:-$LAPTOP_USER}" \
       "$INSTALLER" "$@" --config-file "$INSTALL_ENV"
   else
-    HOOK_BIN="$HOOK_BIN" PLUGIN_BIN="$PLUGIN_BIN" OSHIOKI_CHECKSUMS="$OSHIOKI_CHECKSUMS" \
+    HOOK_BIN="$HOOK_BIN" PLUGIN_BIN="$PLUGIN_BIN" VOUCH_CHECKSUMS="$VOUCH_CHECKSUMS" \
       PAM_MODULE_BIN="$PAM_MODULE_BIN" \
-      OSHIOKI_SUDO_USER="${OSHIOKI_SUDO_USER:-$LAPTOP_USER}" \
+      VOUCH_SUDO_USER="${VOUCH_SUDO_USER:-$LAPTOP_USER}" \
       "$INSTALLER" "$@" --config-file "$INSTALL_ENV"
   fi
 }
 
-# `install-oshioki-hook --prelaunch` exits 3 when it refused the plugin
+# `install-vouch-hook --prelaunch` exits 3 when it refused the plugin
 # lane's passwordless rule (sudo-rs on the host, or a sudo that does not load
 # the plugin) and left sudo on its password path. That is a finished, safe
 # state rather than a failed install: warn and carry on, so that a
@@ -708,10 +708,10 @@ nats_probe_reachable() {
 # no further approvals.
 privileged_phase_local() {
   [ "$LOCAL" -eq 1 ] || die "the privileged phase supports --local only"
-  [ "$(id -u)" -eq 0 ] || echo "oshioki-laptop-setup: warning: privileged phase running unprivileged; writes will fail" >&2
+  [ "$(id -u)" -eq 0 ] || echo "vouch-laptop-setup: warning: privileged phase running unprivileged; writes will fail" >&2
   [ -n "$VALUES_FILE" ] && [ -f "$VALUES_FILE" ] || die "--values-file is required"
   [ -x "$INSTALLER" ] || die "installer not found: $INSTALLER"
-  [ -n "${OSHIOKI_RECORD:-}" ] && [ -f "$OSHIOKI_RECORD" ] || die "device record is required (set OSHIOKI_RECORD)"
+  [ -n "${VOUCH_RECORD:-}" ] && [ -f "$VOUCH_RECORD" ] || die "device record is required (set VOUCH_RECORD)"
   local line key value
   while IFS= read -r line || [ -n "$line" ]; do
     [ -n "$line" ] || continue
@@ -719,17 +719,17 @@ privileged_phase_local() {
     key="${line%%=*}"
     value="${line#*=}"
     case "$key" in
-      OSHIOKI_ORIGIN) PHASE_ORIGIN="$value" ;;
-      OSHIOKI_RP_ID) PHASE_RP_ID="$value" ;;
+      VOUCH_ORIGIN) PHASE_ORIGIN="$value" ;;
+      VOUCH_RP_ID) PHASE_RP_ID="$value" ;;
       NATS_URL) PHASE_NATS_URL="$value" ;;
       NATS_USER) PHASE_NATS_USER="$value" ;;
       NATS_PASS) PHASE_NATS_PASS="$value" ;;
-      OSHIOKI_AGENT_SOCKET) PHASE_AGENT_SOCKET="$value" ;;
+      VOUCH_AGENT_SOCKET) PHASE_AGENT_SOCKET="$value" ;;
       *) die "unknown values key: $key" ;;
     esac
   done < "$VALUES_FILE"
   rm -f "$VALUES_FILE"
-  [ -n "${PHASE_ORIGIN:-}" ] || die "values file has no OSHIOKI_ORIGIN"
+  [ -n "${PHASE_ORIGIN:-}" ] || die "values file has no VOUCH_ORIGIN"
   # No NATS keys in the values means socket-only: the outer flow probes a
   # staged NATS before writing it here, so whatever arrives verified stays,
   # and whatever is absent is omitted rather than placeholdered.
@@ -745,7 +745,7 @@ privileged_phase_local() {
     if [ "$(reused_key NATS_URL)" != "${PHASE_NATS_URL:-}" ] \
       || [ "$(reused_key NATS_USER)" != "${PHASE_NATS_USER:-}" ] \
       || [ "$(reused_key NATS_PASS)" != "${PHASE_NATS_PASS:-}" ] \
-      || [ "$(reused_key OSHIOKI_AGENT_SOCKET)" != "${PHASE_AGENT_SOCKET:-$DEFAULT_SOCKET}" ]; then
+      || [ "$(reused_key VOUCH_AGENT_SOCKET)" != "${PHASE_AGENT_SOCKET:-$DEFAULT_SOCKET}" ]; then
       die "existing $INSTALL_ENV names different transports than this run staged (stale NATS placeholders?); re-run with --reconfigure to rewrite it"
     fi
     info "reusing existing $INSTALL_ENV (pass --reconfigure to redo it)"
@@ -754,15 +754,15 @@ privileged_phase_local() {
     info "writing $INSTALL_ENV"
     mkdir -p "$(dirname "$INSTALL_ENV")"
     {
-      printf 'OSHIOKI_ORIGIN=%s\n' "$PHASE_ORIGIN"
-      printf 'OSHIOKI_RP_ID=%s\n' "${PHASE_RP_ID:-localhost}"
+      printf 'VOUCH_ORIGIN=%s\n' "$PHASE_ORIGIN"
+      printf 'VOUCH_RP_ID=%s\n' "${PHASE_RP_ID:-localhost}"
       if [ -n "${PHASE_NATS_URL:-}" ]; then
         printf 'NATS_URL=%s\n' "$PHASE_NATS_URL"
         printf 'NATS_USER=%s\n' "${PHASE_NATS_USER:-}"
         printf 'NATS_PASS=%s\n' "${PHASE_NATS_PASS:-}"
       fi
-      printf 'OSHIOKI_AGENT_SOCKET=%s\n' "${PHASE_AGENT_SOCKET:-$DEFAULT_SOCKET}"
-      printf 'OSHIOKI_LOCAL=1\n'
+      printf 'VOUCH_AGENT_SOCKET=%s\n' "${PHASE_AGENT_SOCKET:-$DEFAULT_SOCKET}"
+      printf 'VOUCH_LOCAL=1\n'
     } > "$INSTALL_ENV"
     chmod 0600 "$INSTALL_ENV"
     PHASE_REUSED=0
@@ -777,8 +777,8 @@ privileged_phase_local() {
   [ -x "$INSTALLED_HOOK" ] || die "installed hook not found: $INSTALLED_HOOK (set INSTALLED_HOOK)"
   # The outer run exported the record and answers the confirmation itself,
   # so pinning never types the fingerprint.
-  printf '%s\n' "${OSHIOKI_FINGERPRINT:-}" | "$INSTALLED_HOOK" pin-record "$OSHIOKI_RECORD" >&2
-  rm -f "$OSHIOKI_RECORD"
+  printf '%s\n' "${VOUCH_FINGERPRINT:-}" | "$INSTALLED_HOOK" pin-record "$VOUCH_RECORD" >&2
+  rm -f "$VOUCH_RECORD"
   info "device paired locally"
   if ! SUDO="" run_installer --prelaunch-status >&2; then
     info "enabling the sudo plugin now that a device is active"
@@ -792,17 +792,17 @@ privileged_phase_local() {
   else
     SUDO="" run_installer --prelaunch-status >&2 || die "plugin is not enabled after install"
   fi
-  printf '%s\n' 'OSHIOKI_SETUP_VALUES_BEGIN'
-  printf 'OSHIOKI_ORIGIN=%s\n' "$PHASE_ORIGIN"
-  printf 'OSHIOKI_RP_ID=%s\n' "${PHASE_RP_ID:-localhost}"
+  printf '%s\n' 'VOUCH_SETUP_VALUES_BEGIN'
+  printf 'VOUCH_ORIGIN=%s\n' "$PHASE_ORIGIN"
+  printf 'VOUCH_RP_ID=%s\n' "${PHASE_RP_ID:-localhost}"
   if [ -n "${PHASE_NATS_URL:-}" ]; then
     printf 'NATS_URL=%s\n' "$PHASE_NATS_URL"
     printf 'NATS_USER=%s\n' "${PHASE_NATS_USER:-}"
     printf 'NATS_PASS=%s\n' "${PHASE_NATS_PASS:-}"
   fi
-  printf 'OSHIOKI_AGENT_SOCKET=%s\n' "${PHASE_AGENT_SOCKET:-$DEFAULT_SOCKET}"
-  printf 'OSHIOKI_REUSED=%s\n' "$PHASE_REUSED"
-  printf '%s\n' 'OSHIOKI_SETUP_VALUES_END'
+  printf 'VOUCH_AGENT_SOCKET=%s\n' "${PHASE_AGENT_SOCKET:-$DEFAULT_SOCKET}"
+  printf 'VOUCH_REUSED=%s\n' "$PHASE_REUSED"
+  printf '%s\n' 'VOUCH_SETUP_VALUES_END'
 }
 
 if [ "$PRIVILEGED" -eq 1 ]; then
@@ -826,7 +826,7 @@ if [ "$LOCAL" -eq 1 ]; then
   fi
   # Exported here, pinned by the privileged phase: the record crosses the
   # boundary as a file, never as arguments.
-  record="$(run_tmp oshioki-record)"
+  record="$(run_tmp vouch-record)"
   "$AGENT_BIN" device-record --label "$(hostname -s 2>/dev/null || hostname)" > "$record"
   fingerprint="$(grep '"fingerprint":' "$record" | sed -e 's/^[^:]*:[[:space:]]*"//' -e 's/".*$//' || true)"
   [ -n "$fingerprint" ] || { rm -f "$record"; die "device record has no fingerprint"; }
@@ -853,39 +853,39 @@ if [ "$LOCAL" -eq 1 ]; then
   # environment each run). Left unset, the agent goes socket-only, same as
   # the hook; it never inherits NATS_USER/NATS_PASS above, which name the
   # hook's own role.
-  if [ -n "${OSHIOKI_AGENT_NATS_URL:-}" ] || [ -n "${OSHIOKI_AGENT_NATS_USER:-}" ] || [ -n "${OSHIOKI_AGENT_NATS_PASS:-}" ]; then
-    AGENT_NATS_URL_V="${OSHIOKI_AGENT_NATS_URL:-$NATS_URL}"
-    AGENT_NATS_USER_V="${OSHIOKI_AGENT_NATS_USER:-}"
-    AGENT_NATS_PASS_V="${OSHIOKI_AGENT_NATS_PASS:-}"
-    [ -n "$AGENT_NATS_URL_V" ] || die "OSHIOKI_AGENT_NATS_URL is required when agent NATS credentials are staged (no hook NATS_URL to fall back on)"
+  if [ -n "${VOUCH_AGENT_NATS_URL:-}" ] || [ -n "${VOUCH_AGENT_NATS_USER:-}" ] || [ -n "${VOUCH_AGENT_NATS_PASS:-}" ]; then
+    AGENT_NATS_URL_V="${VOUCH_AGENT_NATS_URL:-$NATS_URL}"
+    AGENT_NATS_USER_V="${VOUCH_AGENT_NATS_USER:-}"
+    AGENT_NATS_PASS_V="${VOUCH_AGENT_NATS_PASS:-}"
+    [ -n "$AGENT_NATS_URL_V" ] || die "VOUCH_AGENT_NATS_URL is required when agent NATS credentials are staged (no hook NATS_URL to fall back on)"
     nats_probe "$AGENT_NATS_URL_V" "$AGENT_NATS_USER_V" "$AGENT_NATS_PASS_V" \
-      || die "agent NATS verification failed; fix OSHIOKI_AGENT_NATS_URL/USER/PASS or unset them for a socket-only agent"
+      || die "agent NATS verification failed; fix VOUCH_AGENT_NATS_URL/USER/PASS or unset them for a socket-only agent"
     info "agent NATS verified at $AGENT_NATS_URL_V"
   fi
   # Staged for the privileged phase, which writes install.env itself (or
   # reuses it) and reports the effective values back.
-  values="$(run_tmp oshioki-values)"
+  values="$(run_tmp vouch-values)"
   {
-    printf 'OSHIOKI_ORIGIN=%s\n' "${OSHIOKI_ORIGIN:-https://localhost}"
-    printf 'OSHIOKI_RP_ID=%s\n' "${OSHIOKI_RP_ID:-localhost}"
+    printf 'VOUCH_ORIGIN=%s\n' "${VOUCH_ORIGIN:-https://localhost}"
+    printf 'VOUCH_RP_ID=%s\n' "${VOUCH_RP_ID:-localhost}"
     if [ -n "$NATS_URL" ]; then
       printf 'NATS_URL=%s\n' "$NATS_URL"
       printf 'NATS_USER=%s\n' "$NATS_USER"
       printf 'NATS_PASS=%s\n' "$NATS_PASS"
     fi
-    printf 'OSHIOKI_AGENT_SOCKET=%s\n' "${OSHIOKI_AGENT_SOCKET:-$DEFAULT_SOCKET}"
+    printf 'VOUCH_AGENT_SOCKET=%s\n' "${VOUCH_AGENT_SOCKET:-$DEFAULT_SOCKET}"
   } > "$values"
 fi
 if [ "$LOCAL" -eq 0 ]; then
 info "step 1/$TOTAL_STEPS: installer configuration in $INSTALL_ENV"
 $SUDO mkdir -p "$(dirname "$INSTALL_ENV")"
 if ! install_env_exists || [ "$RECONFIGURE" -eq 1 ]; then
-  prompt "WebAuthn origin" "${OSHIOKI_ORIGIN:-}" ORIGIN 0
-  prompt "WebAuthn RP ID" "${OSHIOKI_RP_ID:-}" RP_ID 0
+  prompt "WebAuthn origin" "${VOUCH_ORIGIN:-}" ORIGIN 0
+  prompt "WebAuthn RP ID" "${VOUCH_RP_ID:-}" RP_ID 0
   prompt "NATS URL" "${NATS_URL:-nats://127.0.0.1:4222}" NATS_URL_V 0
-  prompt "NATS user" "${NATS_USER:-oshioki}" NATS_USER_V 0
+  prompt "NATS user" "${NATS_USER:-vouch}" NATS_USER_V 0
   prompt "NATS password" "${NATS_PASS:-}" NATS_PASS_V 1
-  prompt "Agent socket" "${OSHIOKI_AGENT_SOCKET:-$DEFAULT_SOCKET}" AGENT_SOCKET_V 0
+  prompt "Agent socket" "${VOUCH_AGENT_SOCKET:-$DEFAULT_SOCKET}" AGENT_SOCKET_V 0
   # The Mac agent's own NATS role -- deliberately asked separately from the
   # hook's above. Reusing the hook's NATS_USER/NATS_PASS here is the bug
   # this guards against: the agent then authenticates as the hook's role,
@@ -897,29 +897,29 @@ if ! install_env_exists || [ "$RECONFIGURE" -eq 1 ]; then
   # socket-only -- the agent then gets no NATS keys at all, and
   # check_config's own warning covers telling the operator what that costs.
   # Only when a password IS given are the URL and user asked, defaulting to
-  # the same bus as the hook (the common case) and "oshioki-agent"; every
+  # the same bus as the hook (the common case) and "vouch-agent"; every
   # field stays independently overridable, since a laptop can run a local
   # hook-side NATS (e.g. a phone-bridge broker) while the agent talks to a
   # different, real bus.
-  prompt "Agent NATS password (blank leaves the agent socket-only)" "${OSHIOKI_AGENT_NATS_PASS:-}" AGENT_NATS_PASS_V 1 1
+  prompt "Agent NATS password (blank leaves the agent socket-only)" "${VOUCH_AGENT_NATS_PASS:-}" AGENT_NATS_PASS_V 1 1
   if [ -n "$AGENT_NATS_PASS_V" ]; then
-    prompt "Agent NATS URL" "${OSHIOKI_AGENT_NATS_URL:-$NATS_URL_V}" AGENT_NATS_URL_V 0
-    prompt "Agent NATS user" "${OSHIOKI_AGENT_NATS_USER:-oshioki-agent}" AGENT_NATS_USER_V 0
+    prompt "Agent NATS URL" "${VOUCH_AGENT_NATS_URL:-$NATS_URL_V}" AGENT_NATS_URL_V 0
+    prompt "Agent NATS user" "${VOUCH_AGENT_NATS_USER:-vouch-agent}" AGENT_NATS_USER_V 0
   else
     AGENT_NATS_URL_V=""
     AGENT_NATS_USER_V=""
   fi
-  env_tmp="$(run_tmp oshioki-install-env)"
+  env_tmp="$(run_tmp vouch-install-env)"
   {
-    printf 'OSHIOKI_ORIGIN=%s\n' "$ORIGIN"
-    printf 'OSHIOKI_RP_ID=%s\n' "$RP_ID"
+    printf 'VOUCH_ORIGIN=%s\n' "$ORIGIN"
+    printf 'VOUCH_RP_ID=%s\n' "$RP_ID"
     printf 'NATS_URL=%s\n' "$NATS_URL_V"
     printf 'NATS_USER=%s\n' "$NATS_USER_V"
     printf 'NATS_PASS=%s\n' "$NATS_PASS_V"
-    printf 'OSHIOKI_AGENT_SOCKET=%s\n' "$AGENT_SOCKET_V"
-    printf 'OSHIOKI_AGENT_NATS_URL=%s\n' "$AGENT_NATS_URL_V"
-    printf 'OSHIOKI_AGENT_NATS_USER=%s\n' "$AGENT_NATS_USER_V"
-    printf 'OSHIOKI_AGENT_NATS_PASS=%s\n' "$AGENT_NATS_PASS_V"
+    printf 'VOUCH_AGENT_SOCKET=%s\n' "$AGENT_SOCKET_V"
+    printf 'VOUCH_AGENT_NATS_URL=%s\n' "$AGENT_NATS_URL_V"
+    printf 'VOUCH_AGENT_NATS_USER=%s\n' "$AGENT_NATS_USER_V"
+    printf 'VOUCH_AGENT_NATS_PASS=%s\n' "$AGENT_NATS_PASS_V"
   } > "$env_tmp"
   # Staged through a 0600 temp file rather than piped into `$SUDO tee`: sudo
   # on the far side of a pipeline is forked from this shell like any other
@@ -942,14 +942,14 @@ fi
 if [ "$LOCAL" -eq 0 ]; then
 # One elevation for the whole file, from this shell, before any key is read.
 snapshot_install_env
-ORIGIN="$(env_key OSHIOKI_ORIGIN)"
+ORIGIN="$(env_key VOUCH_ORIGIN)"
 NATS_URL_V="$(env_key NATS_URL)"
 NATS_USER_V="$(env_key NATS_USER)"
 NATS_PASS_V="$(env_key NATS_PASS)"
-AGENT_SOCKET_V="$(env_key OSHIOKI_AGENT_SOCKET)"
-AGENT_NATS_URL_V="$(env_key OSHIOKI_AGENT_NATS_URL)"
-AGENT_NATS_USER_V="$(env_key OSHIOKI_AGENT_NATS_USER)"
-AGENT_NATS_PASS_V="$(env_key OSHIOKI_AGENT_NATS_PASS)"
+AGENT_SOCKET_V="$(env_key VOUCH_AGENT_SOCKET)"
+AGENT_NATS_URL_V="$(env_key VOUCH_AGENT_NATS_URL)"
+AGENT_NATS_USER_V="$(env_key VOUCH_AGENT_NATS_USER)"
+AGENT_NATS_PASS_V="$(env_key VOUCH_AGENT_NATS_PASS)"
 check_config
 # Server installs name a NATS, so verify it before any elevation: a dead
 # or miscredentialed server must fail here, not at the first sudo. An
@@ -984,13 +984,13 @@ if [ "$LOCAL" -eq 1 ]; then
   # whose parent is that subshell cannot reuse a timestamp ticket keyed by
   # parent pid (which is how sudo keys it with no tty). Redirecting instead
   # keeps this sudo a plain top-level command of the main shell.
-  phase_file="$(run_tmp oshioki-phase)"
+  phase_file="$(run_tmp vouch-phase)"
   # phase_flags intentionally splits on word boundaries.
   # shellcheck disable=SC2086
-  $SUDO HOOK_BIN="$HOOK_BIN" PLUGIN_BIN="$PLUGIN_BIN" OSHIOKI_CHECKSUMS="$OSHIOKI_CHECKSUMS" \
-    OSHIOKI_SUDO_USER="$LAPTOP_USER" OSHIOKI_INSTALL_ENV="$INSTALL_ENV" \
-    INSTALLER="$INSTALLER" INSTALLED_HOOK="$INSTALLED_HOOK" OSHIOKI_RECORD="$record" \
-    OSHIOKI_FINGERPRINT="$fingerprint" \
+  $SUDO HOOK_BIN="$HOOK_BIN" PLUGIN_BIN="$PLUGIN_BIN" VOUCH_CHECKSUMS="$VOUCH_CHECKSUMS" \
+    VOUCH_SUDO_USER="$LAPTOP_USER" VOUCH_INSTALL_ENV="$INSTALL_ENV" \
+    INSTALLER="$INSTALLER" INSTALLED_HOOK="$INSTALLED_HOOK" VOUCH_RECORD="$record" \
+    VOUCH_FINGERPRINT="$fingerprint" \
     "$SCRIPT_PATH" --privileged-phase --local --values-file "$values" $phase_flags > "$phase_file"
   phase_out="$(cat "$phase_file")"
   rm -f "$values" "$record" "$phase_file"
@@ -1024,7 +1024,7 @@ if [ "$agent_show_ok" -eq 0 ]; then
   # for a second approval. Anything more complex behind `&` (a pipeline, a
   # brace group, a subshell) would not, and must not be introduced here.
   $SUDO -v
-  enroll_log="$(run_tmp oshioki-enroll)"
+  enroll_log="$(run_tmp vouch-enroll)"
   $SUDO "$INSTALLED_HOOK" enroll >"$enroll_log" 2>&1 &
   enroll_pid=$!
   url=""
@@ -1069,7 +1069,7 @@ fi
 # Not `$SUDO ... | grep`: every sudo in this script is a plain top-level
 # command so the whole run rides one timestamp ticket (see
 # snapshot_install_env).
-status_out="$(run_tmp oshioki-status)"
+status_out="$(run_tmp vouch-status)"
 $SUDO "$INSTALLED_HOOK" status > "$status_out" 2>/dev/null || true
 if grep -q 'active=true' "$status_out"; then
   info "host has active devices"
@@ -1175,8 +1175,8 @@ case "$(uname -s)" in
             printf '    <key>NATS_PASS</key><string>%s</string>\n' "$(xml_escape "$AGENT_NATS_PASS_V")"
           fi
         fi
-        printf '    <key>OSHIOKI_AGENT_SOCKET</key><string>%s</string>\n' "$(xml_escape "$AGENT_SOCKET_V")"
-        printf '    <key>OSHIOKI_AGENT_STATE</key><string>%s</string>\n' "$(xml_escape "$AGENT_STATE")"
+        printf '    <key>VOUCH_AGENT_SOCKET</key><string>%s</string>\n' "$(xml_escape "$AGENT_SOCKET_V")"
+        printf '    <key>VOUCH_AGENT_STATE</key><string>%s</string>\n' "$(xml_escape "$AGENT_STATE")"
         printf '%s\n' '  </dict>'
         printf '%s\n' '  <key>RunAtLoad</key><true/>'
         printf '%s\n' '  <key>KeepAlive</key><true/>'
@@ -1205,10 +1205,10 @@ case "$(uname -s)" in
     if [ "$preserving" -eq 1 ] || [ -n "$AGENT_NATS_URL_V" ]; then
       # A non-numeric (or empty) override must fall back to the default
       # rather than reach `seq`, which aborts the whole step on bad input.
-      verify_timeout="${OSHIOKI_AGENT_NATS_VERIFY_TIMEOUT:-5}"
+      verify_timeout="${VOUCH_AGENT_NATS_VERIFY_TIMEOUT:-5}"
       case "$verify_timeout" in
         ''|*[!0-9]*)
-          info "OSHIOKI_AGENT_NATS_VERIFY_TIMEOUT is not a positive number; using the default (5)"
+          info "VOUCH_AGENT_NATS_VERIFY_TIMEOUT is not a positive number; using the default (5)"
           verify_timeout=5
           ;;
       esac
@@ -1236,7 +1236,7 @@ case "$(uname -s)" in
         elapsed=$((elapsed + 1))
       done
       if [ "$violation" -eq 1 ]; then
-        die "agent logged a NATS permissions violation right after (re)starting -- it is very likely running with the wrong role's credentials; run this again with --reconfigure and correct OSHIOKI_AGENT_NATS_URL/USER/PASS, or see $agent_log"
+        die "agent logged a NATS permissions violation right after (re)starting -- it is very likely running with the wrong role's credentials; run this again with --reconfigure and correct VOUCH_AGENT_NATS_URL/USER/PASS, or see $agent_log"
       elif [ "$connected" -eq 1 ]; then
         info "agent connected to its NATS bus"
       else
@@ -1267,8 +1267,8 @@ case "$(uname -s)" in
           printf 'NATS_PASS=%s\n' "$(shell_quote "$AGENT_NATS_PASS_V")"
         fi
       fi
-      printf 'OSHIOKI_AGENT_SOCKET=%s\n' "$(shell_quote "$AGENT_SOCKET_V")"
-      printf 'OSHIOKI_AGENT_STATE=%s\n' "$(shell_quote "$AGENT_STATE")"
+      printf 'VOUCH_AGENT_SOCKET=%s\n' "$(shell_quote "$AGENT_SOCKET_V")"
+      printf 'VOUCH_AGENT_STATE=%s\n' "$(shell_quote "$AGENT_STATE")"
     } > "$agent_env"
     chmod 0600 "$agent_env"
     # An earlier setup installed such a unit. Leaving it enabled leaves it
@@ -1325,7 +1325,7 @@ if [ "$CONTEXTUAL_PAM" -eq 1 ]; then
     die "no $pam_module_name found next to this script (set PAM_MODULE_BIN)"
   info "contextual PAM migration requested (--contextual-pam):"
   info "  - installs $PAM_MODULE_BIN into this host's PAM security directory"
-  info "  - adds one oshioki auth entry to the sudo PAM stack"
+  info "  - adds one vouch auth entry to the sudo PAM stack"
   info "  - removes the approval plugin block and the NOPASSWD sudoers rule"
   info "  - roll back with: $INSTALLER --disable-contextual-pam"
   info "  - inspect with:   $INSTALLER --contextual-pam-status"

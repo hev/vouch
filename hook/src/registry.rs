@@ -1,7 +1,7 @@
 //! Hook-local registry transactions. Wire records and signed bytes are unchanged.
 use anyhow::{Context as _, Result, bail};
 use nix::fcntl::{Flock, FlockArg};
-use oshioki_protocol::{DevicePublicRecordV1, DeviceRegistryV1, VERSION_V1};
+use vouch_protocol::{DevicePublicRecordV1, DeviceRegistryV1, VERSION_V1};
 use serde::{Deserialize, Serialize};
 use std::{
     fs, io,

@@ -8,11 +8,11 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use futures::StreamExt as _;
-use oshioki_protocol::{
+use vouch_protocol::{
     AliveV1, DecisionV1, DeliveryV1, DenyV1, VERSION_V1,
     auth_v1::{AUTH_WIRE_VERSION, AuthApproveNativeV1, AuthDecisionV1},
 };
-use oshioki_transport::{HookTransport as _, HookTransportFailure, nats::NatsTransport};
+use vouch_transport::{HookTransport as _, HookTransportFailure, nats::NatsTransport};
 
 struct Broker {
     child: Child,
@@ -151,7 +151,7 @@ async fn injected_receipts_and_verdicts_are_skipped_on_the_command_lane() -> Res
         let request_id = fresh_request_id();
         let peer = async_nats::connect(&broker.url).await?;
         let first = deny(&request_id, "first");
-        let second = DecisionV1::ApproveNative(oshioki_protocol::ApproveNativeV1 {
+        let second = DecisionV1::ApproveNative(vouch_protocol::ApproveNativeV1 {
             version: VERSION_V1,
             request_id: request_id.clone(),
             device_fingerprint: "second".into(),

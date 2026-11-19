@@ -1,7 +1,7 @@
 {
   "id": "/setup",
-  "name": "Oshioki",
-  "short_name": "Oshioki",
+  "name": "Vouch",
+  "short_name": "Vouch",
   "start_url": "/setup",
   "scope": "/",
   "display": "standalone",

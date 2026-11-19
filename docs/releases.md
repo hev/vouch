@@ -20,7 +20,7 @@ annotated tag on the exact reviewed main commit, then verify it:
 
 ```sh
 git fetch origin main --tags
-git tag -s v0.4.1 REVIEWED_COMMIT_SHA -m 'Oshioki v0.4.1'
+git tag -s v0.4.1 REVIEWED_COMMIT_SHA -m 'Vouch v0.4.1'
 scripts/verify-release-tag v0.4.1 REVIEWED_COMMIT_SHA
 ```
 

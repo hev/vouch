@@ -1,5 +1,5 @@
 [package]
-name = "oshioki-enclave"
+name = "vouch-enclave"
 edition = { workspace = true }
 rust-version = { workspace = true }
 version = { workspace = true }

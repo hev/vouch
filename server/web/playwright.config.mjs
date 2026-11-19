@@ -3,7 +3,7 @@ import { createHash, X509Certificate } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 function disposableCertificatePin() {
-  const certificatePath = process.env.OSHIOKI_TLS_CERT;
+  const certificatePath = process.env.VOUCH_TLS_CERT;
   if (!certificatePath) return null;
   const certificate = new X509Certificate(readFileSync(certificatePath));
   const publicKey = certificate.publicKey.export({ type: "spki", format: "der" });

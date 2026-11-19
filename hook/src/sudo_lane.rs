@@ -24,7 +24,7 @@ pub const PATH: &str = "/usr/bin:/bin";
 /// Set on the one re-exec. A process that carries it has already been
 /// restarted, so a still-unclean environment is refused rather than
 /// restarted again.
-pub const REEXEC_MARKER: &str = "OSHIOKI_SUDO_LANE_REEXEC";
+pub const REEXEC_MARKER: &str = "VOUCH_SUDO_LANE_REEXEC";
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 
@@ -154,7 +154,7 @@ mod tests {
         assert_eq!(
             classify(pairs(&[
                 ("PATH", PATH),
-                ("OSHIOKI_CONFIG_DIR", "/tmp/attacker"),
+                ("VOUCH_CONFIG_DIR", "/tmp/attacker"),
             ])),
             Entry::Reexec
         );

@@ -1,7 +1,7 @@
 //! Frozen pre-upgrade credentials, produced once by the v0.4.3 dependencies.
 //! Never regenerate these values with the current crypto libraries.
 
-use oshioki_protocol::{
+use vouch_protocol::{
     ApproveV1, DevicePublicRecordV1, Error, HookConfigV1, decode_base64url, device_fingerprint,
     webauthn_v1::{cose_p256_verifying_key, verify_approval_v1},
 };

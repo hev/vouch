@@ -2,11 +2,11 @@
 
 use anyhow::{Context as _, Result, bail};
 use clap::{Subcommand, ValueEnum};
-use oshioki_protocol::{
+use vouch_protocol::{
     DeviceKindV1, HookConfigV1, ToolApprovalDecisionV1, ToolApprovalRequestV1, ToolContextV1,
     ToolDecisionActionV1, ToolHarnessV1, seal_tool_request_v1, verify_tool_decision_v1,
 };
-use oshioki_transport::{HookProgress, HookTransport, NatsTransport};
+use vouch_transport::{HookProgress, HookTransport, NatsTransport};
 use rand::RngCore as _;
 use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
@@ -22,21 +22,21 @@ use tokio::time::Instant;
 use url::Url;
 use uuid::Uuid;
 
-const PROFILE_ROOT_NAME: &str = "oshioki/approvals";
+const PROFILE_ROOT_NAME: &str = "vouch/approvals";
 const ACTIVE_PROFILE_FILE: &str = "active-profile";
 const CONFIG_ENV_FILE: &str = "config.env";
 const MAX_HARNESS_CONFIG_BYTES: usize = 4 * 1024 * 1024;
 const MAX_PROFILE_CONFIG_BYTES: usize = 64 * 1024;
 const MAX_PROFILE_REGISTRY_BYTES: usize = 128 * 1024;
 const MAX_PROFILE_CREDENTIAL_BYTES: usize = 16 * 1024;
-const MAX_NATIVE_EVENT_BYTES: usize = oshioki_protocol::v1::MAX_REQUEST_BYTES;
+const MAX_NATIVE_EVENT_BYTES: usize = vouch_protocol::v1::MAX_REQUEST_BYTES;
 const MAX_DECISION_BYTES: usize = 64 * 1024;
 const TOOL_REQUEST_LIFETIME_SECS: i64 = 90;
 const TOOL_DECISION_WAIT: Duration = Duration::from_secs(85);
 const ADAPTER_BUDGET: Duration = Duration::from_secs(105);
 const HOOK_TIMEOUT_SECONDS: u64 = 120;
-const OWNED_HOOK_TAG: &str = "oshioki-managed-hook-v1";
-const STATUS_APPROVAL: &str = "Waiting for Oshioki browser approval";
+const OWNED_HOOK_TAG: &str = "vouch-managed-hook-v1";
+const STATUS_APPROVAL: &str = "Waiting for Vouch browser approval";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(super) enum HarnessArg {
@@ -75,7 +75,7 @@ pub(super) enum ApprovalCommand {
         /// A short name for this user's independent approval profile.
         #[arg(long)]
         profile: String,
-        /// Public HTTPS origin of the Oshioki server.
+        /// Public HTTPS origin of the Vouch server.
         #[arg(long)]
         server_url: String,
         /// Owner-only NATS requester credentials for this user.
@@ -97,7 +97,7 @@ pub(super) enum ApprovalCommand {
         #[arg(long, hide = true)]
         managed_hook: Option<String>,
     },
-    /// Remove only Oshioki-owned permission hook entries.
+    /// Remove only Vouch-owned permission hook entries.
     Uninstall {
         /// Native agents to remove.
         #[arg(value_enum, required = true, num_args = 1..)]
@@ -118,7 +118,7 @@ pub(super) async fn run(command: ApprovalCommand) -> Result<()> {
             managed_hook,
         } => {
             // This is a native permission adapter. Every local error means
-            // “no Oshioki decision”; the host agent keeps its normal prompt.
+            // “no Vouch decision”; the host agent keeps its normal prompt.
             if managed_hook
                 .as_deref()
                 .is_some_and(|tag| tag != harness.all_marker())
@@ -126,7 +126,7 @@ pub(super) async fn run(command: ApprovalCommand) -> Result<()> {
                 return Ok(());
             }
             if let Err(error) = request_and_render(harness).await {
-                eprintln!("oshioki approvals: {}", super::display_error(&error));
+                eprintln!("vouch approvals: {}", super::display_error(&error));
             }
             Ok(())
         }
@@ -199,8 +199,8 @@ async fn setup(profile: &str, server_url: &str, nats_config: &Path) -> Result<()
     }
 
     write_active_profile(&root, profile)?;
-    println!("Oshioki approvals profile '{profile}' is ready.");
-    println!("Next: oshioki approvals install codex claude");
+    println!("Vouch approvals profile '{profile}' is ready.");
+    println!("Next: vouch approvals install codex claude");
     Ok(())
 }
 
@@ -211,7 +211,7 @@ fn install(harnesses: Vec<HarnessArg>) -> Result<()> {
         ensure_settings_parent(path.parent().context("settings file has no parent")?)?;
         install_harness_at(&path, harness)?;
         println!(
-            "Installed Oshioki PermissionRequest hook for {}.",
+            "Installed Vouch PermissionRequest hook for {}.",
             harness.as_str()
         );
     }
@@ -226,7 +226,7 @@ fn uninstall(harnesses: Vec<HarnessArg>) -> Result<()> {
         let path = user_settings_path(harness)?;
         if !path.exists() {
             println!(
-                "No Oshioki PermissionRequest hook found for {}.",
+                "No Vouch PermissionRequest hook found for {}.",
                 harness.as_str()
             );
             continue;
@@ -234,12 +234,12 @@ fn uninstall(harnesses: Vec<HarnessArg>) -> Result<()> {
         let changed = uninstall_harness_at(&path, harness)?;
         if changed {
             println!(
-                "Removed Oshioki PermissionRequest hook for {}.",
+                "Removed Vouch PermissionRequest hook for {}.",
                 harness.as_str()
             );
         } else {
             println!(
-                "No Oshioki PermissionRequest hook found for {}.",
+                "No Vouch PermissionRequest hook found for {}.",
                 harness.as_str()
             );
         }
@@ -347,7 +347,7 @@ fn is_owned_handler(handler: &Value, marker: &str) -> bool {
 }
 
 fn managed_command(harness: HarnessArg) -> Result<String> {
-    let executable = std::env::current_exe().context("locate the oshioki executable")?;
+    let executable = std::env::current_exe().context("locate the vouch executable")?;
     let marker = harness.all_marker();
     Ok(format!(
         "{} approvals request --harness {} --managed-hook={marker}",
@@ -393,14 +393,14 @@ async fn request_and_render(harness: HarnessArg) -> Result<()> {
         Ok(Ok(())) => Ok(()),
         Ok(Err(error)) => {
             eprintln!(
-                "Oshioki approval unavailable; continuing with the native permission flow: {}",
+                "Vouch approval unavailable; continuing with the native permission flow: {}",
                 super::display_error(&error)
             );
             Ok(())
         }
         Err(_) => {
             eprintln!(
-                "Oshioki approval exceeded the adapter deadline; continuing with the native permission flow."
+                "Vouch approval exceeded the adapter deadline; continuing with the native permission flow."
             );
             Ok(())
         }
@@ -423,7 +423,7 @@ fn native_output(action: Option<ToolDecisionActionV1>) -> Result<Option<Vec<u8>>
                 "hookEventName": "PermissionRequest",
                 "decision": {
                     "behavior": "deny",
-                    "message": "Denied by the enrolled Oshioki browser authenticator."
+                    "message": "Denied by the enrolled Vouch browser authenticator."
                 }
             }
         }),
@@ -467,13 +467,13 @@ async fn request_decision(harness: HarnessArg) -> Result<ToolDecisionActionV1> {
     // Connect before starting the signed lifetime so the 85-second wait and
     // verification fit inside the request's 90-second validity window.
     let profile_credentials = read_profile_credentials(&directory.join(CONFIG_ENV_FILE))?;
-    oshioki_protocol::check_nats_url(&profile_credentials["NATS_URL"], false)
+    vouch_protocol::check_nats_url(&profile_credentials["NATS_URL"], false)
         .context("invalid profile requester NATS URL")?;
     let transport = NatsTransport::from_config_dir(&directory).await?;
     let request = tool_request(harness, native_event)?;
     let (raw_request, envelope) = seal_tool_request_v1(&request, &devices)?;
     let payload = serde_json::to_vec(&envelope)?;
-    if payload.len() > oshioki_protocol::v1::MAX_ENVELOPE_BYTES {
+    if payload.len() > vouch_protocol::v1::MAX_ENVELOPE_BYTES {
         bail!("tool approval envelope exceeds 3 MiB");
     }
     let progress: std::sync::Arc<dyn Fn(HookProgress) + Send + Sync> = std::sync::Arc::new(|_| {});
@@ -554,10 +554,10 @@ fn tool_request(harness: HarnessArg, event: NativeEvent) -> Result<ToolApprovalR
     let mut nonce = [0_u8; 16];
     rand::thread_rng().fill_bytes(&mut nonce);
     let request = ToolApprovalRequestV1 {
-        message_type: oshioki_protocol::TOOL_REQUEST_TYPE.to_owned(),
-        version: oshioki_protocol::TOOL_WIRE_VERSION,
+        message_type: vouch_protocol::TOOL_REQUEST_TYPE.to_owned(),
+        version: vouch_protocol::TOOL_WIRE_VERSION,
         request_id: Uuid::new_v4().to_string(),
-        nonce: oshioki_protocol::encode_base64url(&nonce),
+        nonce: vouch_protocol::encode_base64url(&nonce),
         harness: harness.protocol(),
         event: "PermissionRequest".to_owned(),
         tool_name: event.tool_name,
@@ -662,7 +662,7 @@ fn load_profile_registry(directory: &Path) -> Result<super::DeviceRegistryV1> {
             Ok(registry)
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(super::DeviceRegistryV1 {
-            version: oshioki_protocol::VERSION_V1,
+            version: vouch_protocol::VERSION_V1,
             devices: Vec::new(),
         }),
         Err(error) => Err(error.into()),
@@ -751,7 +751,7 @@ fn hook_config(server_url: &str) -> Result<HookConfigV1> {
     let host = url.host_str().context("server URL has no hostname")?;
     let rp_id = host.trim_matches(['[', ']']).to_ascii_lowercase();
     let config = HookConfigV1 {
-        version: oshioki_protocol::VERSION_V1,
+        version: vouch_protocol::VERSION_V1,
         origin: origin.clone(),
         rp_id,
         server_base_url: origin,
@@ -794,7 +794,7 @@ fn read_nats_config(path: &Path) -> Result<HashMap<String, String>> {
         bail!("NATS config must contain exactly NATS_URL, NATS_USER, and NATS_PASS");
     }
     let url = &values["NATS_URL"];
-    oshioki_protocol::check_nats_url(url, false).context("invalid requester NATS URL")?;
+    vouch_protocol::check_nats_url(url, false).context("invalid requester NATS URL")?;
     Ok(values)
 }
 
@@ -1078,7 +1078,7 @@ fn write_atomic(path: &Path, contents: &[u8], mode: u32, private: bool) -> Resul
         Err(error) if error.kind() == io::ErrorKind::NotFound => None,
         Err(error) => return Err(error.into()),
     };
-    let temporary = parent.join(format!(".oshioki-{}.tmp", Uuid::new_v4()));
+    let temporary = parent.join(format!(".vouch-{}.tmp", Uuid::new_v4()));
     let mut options = OpenOptions::new();
     options.write(true).create_new(true).mode(0o600);
     let result = (|| -> Result<()> {
@@ -1122,7 +1122,7 @@ mod tests {
 
     impl TempDir {
         fn new() -> Self {
-            let path = std::env::temp_dir().join(format!("oshioki-approvals-{}", Uuid::new_v4()));
+            let path = std::env::temp_dir().join(format!("vouch-approvals-{}", Uuid::new_v4()));
             fs::create_dir(&path).unwrap();
             Self(path)
         }

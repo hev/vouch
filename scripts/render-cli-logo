@@ -3,8 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
-SVG="$ROOT/assets/oshioki.svg"
-OUTPUT="$ROOT/assets/oshioki-cli.png"
+SVG="$ROOT/assets/vouch.svg"
+OUTPUT="$ROOT/assets/vouch-cli.png"
 SIZE="${1:-256}"
 
 usage() {
@@ -67,7 +67,7 @@ find_browser() {
 }
 
 BROWSER="$(find_browser)"
-TEMP_DIR="$(mktemp -d "$ROOT/assets/.oshioki-cli.XXXXXX")"
+TEMP_DIR="$(mktemp -d "$ROOT/assets/.vouch-cli.XXXXXX")"
 trap 'rm -rf -- "$TEMP_DIR"' EXIT
 ulimit -c 0
 
@@ -84,7 +84,7 @@ CHROME_ARGS=(
   --force-device-scale-factor=1
   --default-background-color=00000000
   --window-size="${SIZE},${SIZE}"
-  --screenshot="$TEMP_DIR/oshioki-cli.png"
+  --screenshot="$TEMP_DIR/vouch-cli.png"
   --user-data-dir="$TEMP_DIR/profile"
   "file://$SVG"
 )
@@ -115,11 +115,11 @@ if ! "$BROWSER" "${SANDBOX_ARGS[@]}" "${CHROME_ARGS[@]}" >/dev/null 2>"$TEMP_DIR
   fi
 fi
 
-[ -s "$TEMP_DIR/oshioki-cli.png" ] || {
+[ -s "$TEMP_DIR/vouch-cli.png" ] || {
   echo "Chromium did not produce a PNG:" >&2
   sed -n '1,80p' "$TEMP_DIR/chrome.log" >&2
   exit 1
 }
 
-mv -- "$TEMP_DIR/oshioki-cli.png" "$OUTPUT"
+mv -- "$TEMP_DIR/vouch-cli.png" "$OUTPUT"
 echo "rendered $OUTPUT (${SIZE}x${SIZE}) from $SVG"

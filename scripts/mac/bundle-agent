@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Wraps oshioki-agent in an Oshioki.app, unsigned by default.
+# Wraps vouch-agent in an Vouch.app, unsigned by default.
 #
 # The Touch ID sheet takes its title and icon from the calling process's app
 # bundle. A bare binary gets its file name and the generic executable badge; the
-# bundle makes the sheet read "Oshioki is trying to run ... on ...". The name
+# bundle makes the sheet read "Vouch is trying to run ... on ...". The name
 # and the icon do not need signing; the keychain entitlement does, so --sign
-# applies scripts/mac/Oshioki.entitlements when an identity is given.
+# applies scripts/mac/Vouch.entitlements when an identity is given.
 #
 # Rebuilds the bundle from scratch on every run.
 set -euo pipefail
@@ -15,9 +15,9 @@ usage() {
 usage: scripts/mac/bundle-agent [--binary PATH] [--output DIR] [--sign IDENTITY]
                                [--version VERSION]
 
-  --binary PATH   agent binary to wrap (default: target/release/oshioki-agent,
-                  built with `cargo build --release -p oshioki-agent` if absent)
-  --output DIR    where Oshioki.app is written (default: target/mac)
+  --binary PATH   agent binary to wrap (default: target/release/vouch-agent,
+                  built with `cargo build --release -p vouch-agent` if absent)
+  --output DIR    where Vouch.app is written (default: target/mac)
   --sign IDENTITY codesign identity, e.g. "Developer ID Application: ...".
                   Signs the bundle with the hardened runtime and the keychain
                   entitlement. Absent, the bundle stays unsigned.
@@ -59,17 +59,17 @@ fi
 [ -n "$VERSION" ] || { echo "cannot read the workspace version from $ROOT/Cargo.toml" >&2; exit 1; }
 
 if [ -z "$BINARY" ]; then
-  BINARY="$ROOT/target/release/oshioki-agent"
+  BINARY="$ROOT/target/release/vouch-agent"
   if [ ! -x "$BINARY" ]; then
-    ( cd "$ROOT" && cargo build --release -p oshioki-agent )
+    ( cd "$ROOT" && cargo build --release -p vouch-agent )
   fi
 fi
 [ -x "$BINARY" ] || { echo "no agent binary at $BINARY" >&2; exit 1; }
 
-APP="$OUTPUT/Oshioki.app"
+APP="$OUTPUT/Vouch.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-install -m 0755 "$BINARY" "$APP/Contents/MacOS/oshioki-agent"
+install -m 0755 "$BINARY" "$APP/Contents/MacOS/vouch-agent"
 
 # Unquoted delimiter on purpose: $VERSION below is the only expansion wanted
 # and the rest of the document carries no $ or backtick of its own.
@@ -78,11 +78,11 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleIdentifier</key><string>dev.oshioki.agent</string>
-  <key>CFBundleName</key><string>Oshioki</string>
-  <key>CFBundleDisplayName</key><string>Oshioki</string>
-  <key>CFBundleExecutable</key><string>oshioki-agent</string>
-  <key>CFBundleIconFile</key><string>Oshioki</string>
+  <key>CFBundleIdentifier</key><string>dev.hev.vouch.agent</string>
+  <key>CFBundleName</key><string>Vouch</string>
+  <key>CFBundleDisplayName</key><string>Vouch</string>
+  <key>CFBundleExecutable</key><string>vouch-agent</string>
+  <key>CFBundleIconFile</key><string>Vouch</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
@@ -94,26 +94,26 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 PLIST
 
 # The icon is what the sheet shows next to the name. A renderer is preferred
-# so the icns always tracks the SVG, but assets/Oshioki.icns is checked in as
+# so the icns always tracks the SVG, but assets/Vouch.icns is checked in as
 # the last resort: a builder with no renderer (a CI image where qlmanage
 # cannot reach a window server, say) would otherwise ship a logo-less bundle.
-icon_source="$ROOT/assets/oshioki.svg"
-png="$(mktemp -d)/oshioki.png"
+icon_source="$ROOT/assets/vouch.svg"
+png="$(mktemp -d)/vouch.png"
 rendered=false
 if command -v rsvg-convert >/dev/null 2>&1; then
   rsvg-convert -w 1024 -h 1024 "$icon_source" -o "$png" && rendered=true
 elif command -v qlmanage >/dev/null 2>&1; then
   # qlmanage writes <name>.png into the output directory it is given.
   if qlmanage -t -s 1024 -o "$(dirname "$png")" "$icon_source" >/dev/null 2>&1 \
-    && [ -f "$(dirname "$png")/oshioki.svg.png" ]; then
-    mv "$(dirname "$png")/oshioki.svg.png" "$png"
+    && [ -f "$(dirname "$png")/vouch.svg.png" ]; then
+    mv "$(dirname "$png")/vouch.svg.png" "$png"
     rendered=true
   fi
 fi
 
-icns="$APP/Contents/Resources/Oshioki.icns"
+icns="$APP/Contents/Resources/Vouch.icns"
 if [ "$rendered" = true ]; then
-  iconset="$(dirname "$png")/Oshioki.iconset"
+  iconset="$(dirname "$png")/Vouch.iconset"
   mkdir -p "$iconset"
   for size in 16 32 128 256 512; do
     sips -z "$size" "$size" "$png" --out "$iconset/icon_${size}x${size}.png" >/dev/null
@@ -122,11 +122,11 @@ if [ "$rendered" = true ]; then
   done
   iconutil -c icns "$iconset" -o "$icns"
   echo "icon: rendered from $icon_source" >&2
-elif [ -f "$ROOT/assets/Oshioki.icns" ]; then
-  install -m 0644 "$ROOT/assets/Oshioki.icns" "$icns"
-  echo "icon: no SVG renderer here, using the checked-in assets/Oshioki.icns" >&2
+elif [ -f "$ROOT/assets/Vouch.icns" ]; then
+  install -m 0644 "$ROOT/assets/Vouch.icns" "$icns"
+  echo "icon: no SVG renderer here, using the checked-in assets/Vouch.icns" >&2
 else
-  echo "note: no SVG renderer and no assets/Oshioki.icns, so the sheet shows the name without the logo" >&2
+  echo "note: no SVG renderer and no assets/Vouch.icns, so the sheet shows the name without the logo" >&2
 fi
 rm -rf "$(dirname "$png")"
 
@@ -141,20 +141,20 @@ if [ -n "$SIGN" ]; then
     | openssl x509 -noout -subject \
     | sed -n 's/.*OU *= *\([^,]*\).*/\1/p')"
   [ -n "$team_id" ] || { echo "cannot find a Team ID in the $SIGN certificate" >&2; exit 1; }
-  entitlements="$(mktemp -t 'oshioki-entitlements.XXXXXX').plist"
+  entitlements="$(mktemp -t 'vouch-entitlements.XXXXXX').plist"
   # AppIdentifierPrefix carries its trailing dot by Apple convention; the
   # certificate field does not, so the replacement adds it.
   sed "s/\$(AppIdentifierPrefix)/$team_id./g" \
-    "$ROOT/scripts/mac/Oshioki.entitlements" > "$entitlements"
+    "$ROOT/scripts/mac/Vouch.entitlements" > "$entitlements"
   # The binary first, then the bundle, so the bundle seal covers a signed
   # executable. --options runtime opts into the hardened runtime, which the
   # notarization lane requires; --timestamp keeps the signature verifiable
   # once the certificate expires.
   codesign --force --options runtime --timestamp \
     --entitlements "$entitlements" \
-    --sign "$SIGN" "$APP/Contents/MacOS/oshioki-agent" "$APP"
+    --sign "$SIGN" "$APP/Contents/MacOS/vouch-agent" "$APP"
   rm -f "$entitlements"
   codesign --verify --strict --verbose=1 "$APP"
 fi
 
-echo "$APP/Contents/MacOS/oshioki-agent"
+echo "$APP/Contents/MacOS/vouch-agent"

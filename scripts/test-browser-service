@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Filesystem-only tests for oshioki-browser-service."""
+"""Filesystem-only tests for vouch-browser-service."""
 
 import contextlib
 import importlib.util
@@ -17,8 +17,8 @@ from types import SimpleNamespace
 from unittest import mock
 
 
-SCRIPT = Path(__file__).with_name("oshioki-browser-service")
-LOADER = SourceFileLoader("oshioki_browser_service", str(SCRIPT))
+SCRIPT = Path(__file__).with_name("vouch-browser-service")
+LOADER = SourceFileLoader("vouch_browser_service", str(SCRIPT))
 SPEC = importlib.util.spec_from_loader(LOADER.name, LOADER)
 service = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(service)
@@ -34,7 +34,7 @@ class ServiceTests(unittest.TestCase):
         self.config = self.home / 'private "$% config.json'
         self.config.write_text('{"password":"secret-marker"}\n')
         self.config.chmod(0o600)
-        self.relay = self.home / "bin dir" / "oshioki relay"
+        self.relay = self.home / "bin dir" / "vouch relay"
         self.relay.parent.mkdir()
         self.relay.write_text("binary\n")
         self.relay.chmod(0o700)
@@ -88,7 +88,7 @@ class ServiceTests(unittest.TestCase):
         self.assertNotIn("secret-marker", target.read_text())
         self.assertNotIn("secret-marker", out)
         self.assertTrue(out.count("Activate with:") == 1)
-        manifest = self.home / ".config/oshioki/browser-relay/services/manifest.json"
+        manifest = self.home / ".config/vouch/browser-relay/services/manifest.json"
         self.assertEqual(manifest.stat().st_mode & 0o077, 0)
 
     def test_tunnel_uses_loopback_batch_mode_and_rejects_option_destinations(self):
@@ -114,7 +114,7 @@ class ServiceTests(unittest.TestCase):
         code, out, _ = self.call("Linux", ["install", "broker", "--config", str(config),
                                             "--nats-server", str(binary)])
         self.assertEqual(code, 0)
-        unit = (self.home / ".config/systemd/user/oshioki-browser-relay-nats.service").read_text()
+        unit = (self.home / ".config/systemd/user/vouch-browser-relay-nats.service").read_text()
         self.assertIn('UMask=0077', unit)
         self.assertIn('ExecStart="/usr/bin/env"', unit)
         escaped_binary = str(binary).replace("\\", "\\\\").replace('"', '\\"')
@@ -129,7 +129,7 @@ class ServiceTests(unittest.TestCase):
         if analyzer is None:
             self.skipTest("systemd-analyze is unavailable")
         config, binary = self.broker_inputs("verify")
-        unit = self.root / "oshioki-browser-relay-nats.service"
+        unit = self.root / "vouch-browser-relay-nats.service"
         unit.write_bytes(service.systemd_unit(binary, config))
         result = subprocess.run([analyzer, "--user", "verify", str(unit)],
                                 text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -222,7 +222,7 @@ class ServiceTests(unittest.TestCase):
         old_config, old_binary = self.broker_inputs("old")
         args = ["install", "broker", "--config", str(old_config), "--nats-server", str(old_binary)]
         self.assertEqual(self.call("Linux", args)[0], 0)
-        target = self.home / ".config/systemd/user/oshioki-browser-relay-nats.service"
+        target = self.home / ".config/systemd/user/vouch-browser-relay-nats.service"
         new_config, new_binary = self.broker_inputs("new")
         calls = []
         def systemd(argv, **kwargs):
@@ -243,7 +243,7 @@ class ServiceTests(unittest.TestCase):
         config, binary = self.broker_inputs()
         args = ["install", "broker", "--config", str(config), "--nats-server", str(binary)]
         self.assertEqual(self.call("Linux", args)[0], 0)
-        target = self.home / ".config/systemd/user/oshioki-browser-relay-nats.service"
+        target = self.home / ".config/systemd/user/vouch-browser-relay-nats.service"
         observations = []
         def systemd(argv, **kwargs):
             if argv[2:3] == ["show"]:

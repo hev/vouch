@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check interactive CLI help output without contacting any Oshioki service."""
+"""Check interactive CLI help output without contacting any Vouch service."""
 
 from __future__ import annotations
 
@@ -144,9 +144,9 @@ def main() -> None:
     if not target.is_absolute():
         target = Path.cwd() / target
     binaries = [
-        (Path(os.environ.get("OSHIOKI_HOOK_BIN", target / "debug/oshioki")), "status"),
+        (Path(os.environ.get("VOUCH_HOOK_BIN", target / "debug/vouch")), "status"),
         (
-            Path(os.environ.get("OSHIOKI_AGENT_BIN", target / "debug/oshioki-agent")),
+            Path(os.environ.get("VOUCH_AGENT_BIN", target / "debug/vouch-agent")),
             "pair",
         ),
     ]

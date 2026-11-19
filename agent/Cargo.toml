@@ -1,5 +1,5 @@
 [package]
-name = "oshioki-agent"
+name = "vouch-agent"
 edition = { workspace = true }
 rust-version = { workspace = true }
 version = { workspace = true }
@@ -9,7 +9,7 @@ publish = { workspace = true }
 description = "Native approval agent: holds the device keys, watches for sudo requests, and signs approvals"
 
 [[bin]]
-name = "oshioki-agent"
+name = "vouch-agent"
 path = "src/main.rs"
 
 [features]
@@ -18,7 +18,7 @@ path = "src/main.rs"
 unattended = []
 
 [dependencies]
-oshioki-protocol = { path = "../protocol" }
+vouch-protocol = { path = "../protocol" }
 tokio = { workspace = true }
 async-nats = { workspace = true }
 serde = { workspace = true }
@@ -38,7 +38,7 @@ time = { workspace = true }
 # The Secure Enclave backend and the Touch ID sheet. Linux builds, including
 # the Compose E2E and the container image, never see it.
 [target.'cfg(target_os = "macos")'.dependencies]
-oshioki-enclave = { path = "../enclave" }
+vouch-enclave = { path = "../enclave" }
 # Login-keychain storage for the box secret (#23). macOS identities keep the
 # secret in the login keychain and the file keeps only a reference; anywhere
 # else the file keeps carrying the secret itself.

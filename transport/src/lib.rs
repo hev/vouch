@@ -1,8 +1,8 @@
-//! The seam between oshioki and how its messages travel. A transport owns
+//! The seam between vouch and how its messages travel. A transport owns
 //! connections, subject selection, and delivery semantics; what travels on
 //! those subjects, the v1 JSON envelopes and the sealed bodies inside them,
-//! is defined by `oshioki-protocol` and is identical on every transport.
-//! `OSHIOKI_TRANSPORT` selects the backend at startup; `nats` is the default
+//! is defined by `vouch-protocol` and is identical on every transport.
+//! `VOUCH_TRANSPORT` selects the backend at startup; `nats` is the default
 //! and the only one this crate ships today, and `mock` serves unit tests.
 
 pub mod mock;
@@ -16,7 +16,7 @@ use futures::Stream;
 
 pub use mock::MockTransport;
 pub use nats::NatsTransport;
-use oshioki_protocol::{
+use vouch_protocol::{
     ActivationV1, DecisionV1, EnrollmentIntentV1, EnrollmentSubmissionV1, ToolApprovalDecisionV1,
     auth_v1::AuthDecisionV1,
 };
@@ -169,7 +169,7 @@ pub trait HookTransport: Send + Sync {
     /// confirmation.
     fn revoke(&self, fingerprint: &str) -> BoxFuture<'_, ()>;
 
-    /// Streams one delivery per approval request, as `oshioki watch` prints
+    /// Streams one delivery per approval request, as `vouch watch` prints
     /// them, until the stream is dropped. The stream yields raw request
     /// subjects so a terminal viewer can show hosts.
     fn watch_requests(&self) -> BoxFuture<'_, InboundStream>;

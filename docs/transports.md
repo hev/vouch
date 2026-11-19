@@ -1,6 +1,6 @@
 # Transport contract
 
-NATS/JetStream is the only configured `oshioki-transport` backend.
+NATS/JetStream is the only configured `vouch-transport` backend.
 The native agent's local Unix socket is an additional hook-to-device path.
 Browser approvals need NATS and the server.
 
@@ -20,7 +20,7 @@ The hook waits live for a decision; its wait is not a durable outbox.
 
 ## Socket fallback
 
-With `OSHIOKI_AGENT_SOCKET` configured, the hook tries the socket first.
+With `VOUCH_AGENT_SOCKET` configured, the hook tries the socket first.
 
 | Socket outcome | Command approval behavior |
 | --- | --- |

@@ -11,11 +11,11 @@ is advisory. See [the mode comparison](local-sudo.md#sudo-authentication-through
 
 ## Start at login
 
-For a Mac whose own sudo is configured, use `oshioki-laptop-setup` in the
+For a Mac whose own sudo is configured, use `vouch-laptop-setup` in the
 [local](local-sudo.md) or [remote](remote-sudo.md) setup. It manages:
 
-- `~/Library/LaunchAgents/com.oshioki.agent.plist`
-- `~/.config/oshioki/agent.log`
+- `~/Library/LaunchAgents/com.hev.vouch.agent.plist`
+- `~/.config/vouch/agent.log`
 
 It verifies the packaged agent and uses Homebrew's stable `opt` path, so an
 upgrade followed by cleanup does not break the next login.
@@ -27,8 +27,8 @@ device-role NATS environment, then:
 scripts/mac/install-agent
 ```
 
-This separate installer manages `dev.oshioki.agent` and logs to
-`~/Library/Logs/oshioki-agent.log`. It requires NATS and builds the app bundle
+This separate installer manages `dev.hev.vouch.agent` and logs to
+`~/Library/Logs/vouch-agent.log`. It requires NATS and builds the app bundle
 if needed. `--dry-run` previews a redacted plist; `--uninstall` removes this
 LaunchAgent. Re-run it after rebuilding. Use only one installer/agent for an
 identity at a time.
@@ -36,12 +36,12 @@ identity at a time.
 Check the service you installed:
 
 ```sh
-launchctl print gui/$(id -u)/com.oshioki.agent
-oshioki-agent show
-tail -f ~/.config/oshioki/agent.log
+launchctl print gui/$(id -u)/com.hev.vouch.agent
+vouch-agent show
+tail -f ~/.config/vouch/agent.log
 ```
 
-For the source installer, substitute `dev.oshioki.agent` and its log path.
+For the source installer, substitute `dev.hev.vouch.agent` and its log path.
 
 ## Prompts and recovery
 

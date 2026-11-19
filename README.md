@@ -1,13 +1,13 @@
-# Oshioki
+# Vouch
 
-<p align="center"><img src="assets/oshioki.svg" alt="Oshioki logo" width="160"></p>
+<p align="center"><img src="assets/vouch.svg" alt="Vouch logo" width="160"></p>
 
-Oshioki (お仕置き) means punishment.
+Vouch (お仕置き) means punishment.
 
 Adds Touch ID, WebAuthn, or native device approval to `sudo`.
 
 WebAuthn runs in a WebAuthn-compatible browser. Native approvals use
-`oshioki-agent`.
+`vouch-agent`.
 
 The command and environment are entcrypted. Approvals are signed. 
 A local Unix socket is available for native approvals. 
@@ -19,8 +19,8 @@ phone or laptop.
 macOS (Apple Silicon):
 
 ```sh
-brew install epsalmond/oshioki/oshioki
-oshioki-laptop-setup --local
+brew install epsalmond/oshioki/vouch
+vouch-laptop-setup --local
 ```
 
 Debian or Ubuntu (amd64), configure the signed
@@ -28,12 +28,12 @@ Debian or Ubuntu (amd64), configure the signed
 
 ```sh
 sudo apt update
-sudo apt install oshioki
+sudo apt install vouch
 ```
 
 For a one-time install without configuring the repository, download the amd64
 `.deb` from the [latest release](https://github.com/epsalmond/oshioki/releases)
-and run `sudo apt install ./oshioki_X.Y.Z_amd64.deb`.
+and run `sudo apt install ./vouch_X.Y.Z_amd64.deb`.
 
 The Mac setup creates a Touch ID identity and starts the agent; no server is
 needed. On Linux, install the package, then choose an approval device below.
@@ -49,7 +49,7 @@ See [installation](docs/install.md) for source builds and host activation.
 | Approve Codex or Claude Code permission prompts from a browser | [Harness approvals](docs/harness-approvals.md) |
 | Approve a Google CLI login with Touch ID, locally or remotely | [Browser ceremonies](docs/browser-ceremony-relay.md) |
 | Update an existing installation | [Update and restore](docs/update.md) |
-| Build, change, or test Oshioki | [Contributing](CONTRIBUTING.md) |
+| Build, change, or test Vouch | [Contributing](CONTRIBUTING.md) |
 | Diagnose an approval or recover sudo | [Runbook](RUNBOOK.md) |
 
 An opt-in setup helper can route the exact `gcloud auth login` command through

@@ -1,4 +1,4 @@
-# Diagnose and recover Oshioki
+# Diagnose and recover Vouch
 
 For first-time setup, use [installation](docs/install.md),
 [local sudo](docs/local-sudo.md), [remote sudo](docs/remote-sudo.md), or
@@ -7,23 +7,23 @@ For an upgrade, use [update and restore](docs/update.md).
 
 ## Inspect the installation
 
-Host commands read root-owned state under `/etc/oshioki`:
+Host commands read root-owned state under `/etc/vouch`:
 
 ```sh
-sudo oshioki status
-sudo oshioki test
+sudo vouch status
+sudo vouch test
 ```
 
 `status` reports authentication mode and enrolled devices. `test` sends a
 synthetic command-approval request; it does not exercise the PAM stack.
 
-The installer is `install-oshioki-hook` on Homebrew,
-`/usr/share/oshioki/install-oshioki-hook` on Debian, and
-`scripts/install-oshioki-hook` in a checkout:
+The installer is `install-vouch-hook` on Homebrew,
+`/usr/share/vouch/install-vouch-hook` on Debian, and
+`scripts/install-vouch-hook` in a checkout:
 
 ```sh
-sudo install-oshioki-hook --prelaunch-status
-sudo install-oshioki-hook --contextual-pam-status
+sudo install-vouch-hook --prelaunch-status
+sudo install-vouch-hook --contextual-pam-status
 ```
 
 Use the check for the installed mode. PAM status must report every check as
@@ -41,7 +41,7 @@ is a broken installation. Missing checksums are a failure, not a skipped check.
 | Phone cannot enroll or receive push | Use the [phone troubleshooting table](docs/phone-enrollment.md#keep-it-working). |
 | Browser delivery receipt times out | Check that the device is active in both the host registry and server records. |
 | `User interaction is not allowed` | Run Mac setup in a logged-in graphical session with its login keychain unlocked. |
-| Old `local/local` NATS placeholder credentials | Re-run `oshioki-laptop-setup --local --reconfigure`. |
+| Old `local/local` NATS placeholder credentials | Re-run `vouch-laptop-setup --local --reconfigure`. |
 
 The hook can try a configured Unix socket before NATS. A socket-only host omits
 `NATS_URL`. A socket answer that fails signature/protocol validation is not a
@@ -53,19 +53,19 @@ The hook writes progress and errors to stderr and audit events to `authpriv`:
 
 ```sh
 # Linux
-journalctl -t oshioki
+journalctl -t vouch
 
 # macOS
-sudo log show --info --last 1h --predicate 'eventMessage BEGINSWITH "oshioki["'
+sudo log show --info --last 1h --predicate 'eventMessage BEGINSWITH "vouch["'
 ```
 
-For hook terminal diagnostics, set `OSHIOKI_LOG=info` or
-`OSHIOKI_LOG=audit=info` in `/etc/oshioki/config.env`.
+For hook terminal diagnostics, set `VOUCH_LOG=info` or
+`VOUCH_LOG=audit=info` in `/etc/vouch/config.env`.
 The sudo path ignores caller-controlled `RUST_LOG`.
 
-Laptop setup logs the agent to `~/.config/oshioki/agent.log`; the source
-Mac installer uses `~/Library/Logs/oshioki-agent.log`. Phone server logs and
-state are under `~/.local/share/oshioki/phone-server`.
+Laptop setup logs the agent to `~/.config/vouch/agent.log`; the source
+Mac installer uses `~/Library/Logs/vouch-agent.log`. Phone server logs and
+state are under `~/.local/share/vouch/phone-server`.
 
 ## Re-pairing
 
@@ -73,30 +73,30 @@ Use this only for a lost or invalid identity, such as a Touch ID fingerprint
 change. Re-pairing changes the device fingerprint on **every** host it serves.
 
 Keep a root recovery shell on affected hosts and stop the agent before replacing
-its identity. For a server-paired Mac, start a fresh `sudo oshioki enroll` on the
+its identity. For a server-paired Mac, start a fresh `sudo vouch enroll` on the
 host, then on the Mac:
 
 ```sh
-oshioki-agent pair '<enrollment-url>' --label my-mac --force
+vouch-agent pair '<enrollment-url>' --label my-mac --force
 ```
 
 Use ordinary `pair` (without `--force`) for each remaining host. Restart the
 agent, verify the new device, and revoke the old fingerprint on each host.
 
-For a socket-only Mac, use `oshioki-agent init --force`, then re-run
-`oshioki-laptop-setup --local` to pin the replacement.
+For a socket-only Mac, use `vouch-agent init --force`, then re-run
+`vouch-laptop-setup --local` to pin the replacement.
 Do not delete `agent.json` as an upgrade step.
 
 ## Device management
 
 | Host command | Purpose |
 | --- | --- |
-| `sudo oshioki enroll` | Start enrollment. |
-| `sudo oshioki enroll --resume <id>` | Resume pending enrollment. |
-| `sudo oshioki pin <fingerprint>` | Fetch a public device record from the server and pin it. |
-| `sudo oshioki pin-record <path>` | Pin an offline public record. |
-| `sudo oshioki revoke <fingerprint>` | Revoke on the server, then update the local registry. |
-| `sudo oshioki watch` | Open browser pages for incoming requests. |
+| `sudo vouch enroll` | Start enrollment. |
+| `sudo vouch enroll --resume <id>` | Resume pending enrollment. |
+| `sudo vouch pin <fingerprint>` | Fetch a public device record from the server and pin it. |
+| `sudo vouch pin-record <path>` | Pin an offline public record. |
+| `sudo vouch revoke <fingerprint>` | Revoke on the server, then update the local registry. |
+| `sudo vouch watch` | Open browser pages for incoming requests. |
 
 Revocation needs a reachable server and hook-role NATS credentials, even on a
 socket-only host. Configure those in the private root-owned hook configuration
@@ -110,10 +110,10 @@ Run only the command for the mode being removed, using your installer path:
 
 ```sh
 # Contextual PAM:
-sudo install-oshioki-hook --disable-contextual-pam
+sudo install-vouch-hook --disable-contextual-pam
 
 # Approval plugin:
-sudo install-oshioki-hook --disable-prelaunch
+sudo install-vouch-hook --disable-prelaunch
 
 sudo -V
 sudo -k
@@ -145,7 +145,7 @@ that previously held only command requests, the repair is:
 ```sh
 nats stream update OSHIOKI --subjects 'oshioki.request.>,oshioki.auth.>'
 nats consumer rm OSHIOKI oshioki-server-v1
-systemctl restart oshioki-server
+systemctl restart vouch-server
 ```
 
 Use the deployment's administrative NATS credentials. Deleting the durable

@@ -1514,176 +1514,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
-name = "oshioki-agent"
-version = "0.5.1"
-dependencies = [
- "anyhow",
- "async-nats",
- "base64",
- "clap",
- "futures",
- "oshioki-enclave",
- "oshioki-protocol",
- "p256",
- "rand 0.8.8",
- "security-framework",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "time",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "x25519-dalek",
-]
-
-[[package]]
-name = "oshioki-browser-relay"
-version = "0.5.1"
-dependencies = [
- "anyhow",
- "async-nats",
- "clap",
- "futures",
- "nix",
- "oshioki-agent",
- "oshioki-enclave",
- "oshioki-protocol",
- "p256",
- "percent-encoding",
- "rand 0.8.8",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tokio",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "oshioki-enclave"
-version = "0.5.1"
-dependencies = [
- "anyhow",
- "core-foundation",
- "core-foundation-sys",
- "objc2",
- "objc2-foundation",
- "objc2-local-authentication",
- "security-framework",
- "security-framework-sys",
-]
-
-[[package]]
-name = "oshioki-hook"
-version = "0.5.1"
-dependencies = [
- "anyhow",
- "base64",
- "ciborium",
- "clap",
- "futures",
- "libc",
- "nix",
- "oshioki-protocol",
- "oshioki-transport",
- "p256",
- "rand 0.8.8",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "time",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
- "x25519-dalek",
-]
-
-[[package]]
-name = "oshioki-pam"
-version = "0.5.1"
-dependencies = [
- "libc",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "oshioki-plugin"
-version = "0.5.1"
-dependencies = [
- "libc",
- "nix",
- "oshioki-protocol",
- "serde_json",
- "tracing",
-]
-
-[[package]]
-name = "oshioki-protocol"
-version = "0.5.1"
-dependencies = [
- "base64",
- "chacha20poly1305",
- "ciborium",
- "hmac 0.12.1",
- "p256",
- "rand 0.8.8",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "thiserror",
- "x25519-dalek",
-]
-
-[[package]]
-name = "oshioki-server"
-version = "0.5.1"
-dependencies = [
- "anyhow",
- "axum",
- "chrono",
- "ciborium",
- "futures",
- "jwt-compact",
- "oshioki-protocol",
- "oshioki-transport",
- "p256",
- "reqwest",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "time",
- "tokio",
- "tokio-util",
- "tower",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
- "web-push-native",
-]
-
-[[package]]
-name = "oshioki-transport"
-version = "0.5.1"
-dependencies = [
- "anyhow",
- "async-nats",
- "futures",
- "oshioki-protocol",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "time",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "p256"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2897,6 +2727,176 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "vouch-agent"
+version = "0.5.1"
+dependencies = [
+ "anyhow",
+ "async-nats",
+ "base64",
+ "clap",
+ "futures",
+ "p256",
+ "rand 0.8.8",
+ "security-framework",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "time",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "vouch-enclave",
+ "vouch-protocol",
+ "x25519-dalek",
+]
+
+[[package]]
+name = "vouch-browser-relay"
+version = "0.5.1"
+dependencies = [
+ "anyhow",
+ "async-nats",
+ "clap",
+ "futures",
+ "nix",
+ "p256",
+ "percent-encoding",
+ "rand 0.8.8",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "url",
+ "uuid",
+ "vouch-agent",
+ "vouch-enclave",
+ "vouch-protocol",
+]
+
+[[package]]
+name = "vouch-enclave"
+version = "0.5.1"
+dependencies = [
+ "anyhow",
+ "core-foundation",
+ "core-foundation-sys",
+ "objc2",
+ "objc2-foundation",
+ "objc2-local-authentication",
+ "security-framework",
+ "security-framework-sys",
+]
+
+[[package]]
+name = "vouch-hook"
+version = "0.5.1"
+dependencies = [
+ "anyhow",
+ "base64",
+ "ciborium",
+ "clap",
+ "futures",
+ "libc",
+ "nix",
+ "p256",
+ "rand 0.8.8",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "time",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "vouch-protocol",
+ "vouch-transport",
+ "x25519-dalek",
+]
+
+[[package]]
+name = "vouch-pam"
+version = "0.5.1"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "vouch-plugin"
+version = "0.5.1"
+dependencies = [
+ "libc",
+ "nix",
+ "serde_json",
+ "tracing",
+ "vouch-protocol",
+]
+
+[[package]]
+name = "vouch-protocol"
+version = "0.5.1"
+dependencies = [
+ "base64",
+ "chacha20poly1305",
+ "ciborium",
+ "hmac 0.12.1",
+ "p256",
+ "rand 0.8.8",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror",
+ "x25519-dalek",
+]
+
+[[package]]
+name = "vouch-server"
+version = "0.5.1"
+dependencies = [
+ "anyhow",
+ "axum",
+ "chrono",
+ "ciborium",
+ "futures",
+ "jwt-compact",
+ "p256",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "time",
+ "tokio",
+ "tokio-util",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "vouch-protocol",
+ "vouch-transport",
+ "web-push-native",
+]
+
+[[package]]
+name = "vouch-transport"
+version = "0.5.1"
+dependencies = [
+ "anyhow",
+ "async-nats",
+ "futures",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "time",
+ "tokio",
+ "tracing",
+ "vouch-protocol",
+]
 
 [[package]]
 name = "want"

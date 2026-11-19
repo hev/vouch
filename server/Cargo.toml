@@ -1,5 +1,5 @@
 [package]
-name = "oshioki-server"
+name = "vouch-server"
 edition = { workspace = true }
 rust-version = { workspace = true }
 version = { workspace = true }
@@ -10,12 +10,12 @@ publish = { workspace = true }
 # Binary: the approval service. NATS relay, ntfy broker, HTTP page, enrollment.
 
 [[bin]]
-name = "oshioki-server"
+name = "vouch-server"
 path = "src/main.rs"
 
 [dependencies]
-oshioki-protocol = { path = "../protocol" }
-oshioki-transport = { path = "../transport" }
+vouch-protocol = { path = "../protocol" }
+vouch-transport = { path = "../transport" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

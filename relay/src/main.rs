@@ -17,11 +17,11 @@ use std::{
 use anyhow::{Context as _, Result, bail, ensure};
 use clap::{Parser, Subcommand};
 use futures::StreamExt as _;
-use oshioki_agent::BrowserRelaySigner;
-use oshioki_browser_relay::{
+use vouch_agent::BrowserRelaySigner;
+use vouch_browser_relay::{
     Action, MAX_LIFETIME, Message, approval_challenge, google_callback_port, sign, verify,
 };
-use oshioki_protocol::{decode_base64url, encode_base64url};
+use vouch_protocol::{decode_base64url, encode_base64url};
 use p256::ecdsa::{Signature, SigningKey, VerifyingKey, signature::Verifier as _};
 use p256::elliptic_curve::Generate as _;
 use serde::Deserialize;
@@ -73,10 +73,10 @@ struct Config {
     /// Account selected for the headless credential reuse/refresh path.
     #[serde(default)]
     google_account: Option<String>,
-    /// Mac Oshioki credential public key, pinned on the NAS.
+    /// Mac Vouch credential public key, pinned on the NAS.
     #[serde(default)]
     approval_public_key: Option<String>,
-    /// Mac agent identity file used to show the Oshioki Touch ID prompt.
+    /// Mac agent identity file used to show the Vouch Touch ID prompt.
     #[serde(default)]
     approval_identity: Option<PathBuf>,
     /// Trusted local configuration, never copied from the message.
@@ -119,7 +119,7 @@ fn verify_browser_approval(
 ) -> Result<()> {
     let signature = Signature::from_der(&decode_base64url(signature)?)?;
     public_key.verify(
-        &oshioki_protocol::browser_relay_signature_payload(&approval_challenge(
+        &vouch_protocol::browser_relay_signature_payload(&approval_challenge(
             lane,
             &message.attempt,
             message.expires,
@@ -213,14 +213,14 @@ async fn authorize_account(
         &approval_public_key,
         &signature,
     )
-    .context("verify Mac Oshioki approval")?;
+    .context("verify Mac Vouch approval")?;
     Ok(())
 }
 
 fn nats_options(url: &str) -> Result<async_nats::ConnectOptions> {
     let parsed = url::Url::parse(url).context("parse NATS URL")?;
     let mut options =
-        async_nats::ConnectOptions::new().require_tls(oshioki_protocol::nats_url_is_tls(url));
+        async_nats::ConnectOptions::new().require_tls(vouch_protocol::nats_url_is_tls(url));
     if parsed.username().is_empty() {
         ensure!(
             parsed.password().is_none(),
@@ -260,7 +260,7 @@ async fn connect(config: &Config) -> Result<Peer> {
         uuid::Uuid::parse_str(&config.lane).is_ok_and(|id| id.to_string() == config.lane),
         "lane must be a canonical UUID"
     );
-    oshioki_protocol::check_nats_url(&config.nats_url, false)?;
+    vouch_protocol::check_nats_url(&config.nats_url, false)?;
     let secret = private_read(&config.private_key)?;
     let signing = SigningKey::from_slice(&decode_base64url(std::str::from_utf8(&secret)?.trim())?)?;
     let verifying = VerifyingKey::from_sec1_bytes(&decode_base64url(&config.peer_public_key)?)?;
@@ -392,7 +392,7 @@ async fn interrupted() -> Result<()> {
 
 async fn capture(url: &str) -> Result<()> {
     google_callback_port(url)?;
-    let mut socket = UnixStream::connect(std::env::var("OSHIOKI_BROWSER_SOCKET")?).await?;
+    let mut socket = UnixStream::connect(std::env::var("VOUCH_BROWSER_SOCKET")?).await?;
     socket.write_all(url.as_bytes()).await?;
     socket.shutdown().await?;
     let mut ready = [0];
@@ -489,7 +489,7 @@ async fn login_with_lifetime(
         "browser ceremony expired before launcher setup"
     );
     let dir = SocketDir(PathBuf::from(format!(
-        "/tmp/oshioki-browser-{}",
+        "/tmp/vouch-browser-{}",
         attempt.attempt
     )));
     std::fs::DirBuilder::new().mode(0o700).create(&dir.0)?;
@@ -523,8 +523,8 @@ async fn login_with_lifetime(
         .env("CLOUDSDK_AUTH_DISABLE_CODE_VERIFIER", "false")
         // gcloud checks DISPLAY even with a custom BROWSER on Linux. The
         // launcher uses our socket only; no X server is contacted.
-        .env("DISPLAY", "oshioki-browser-relay")
-        .env("OSHIOKI_BROWSER_SOCKET", dir.0.join("capture"))
+        .env("DISPLAY", "vouch-browser-relay")
+        .env("VOUCH_BROWSER_SOCKET", dir.0.join("capture"))
         .stdin(Stdio::null())
         .kill_on_drop(true);
     let mut child = ProcessGroup::spawn(command)?;
@@ -611,10 +611,10 @@ async fn local_login(config: LocalConfig) -> Result<()> {
             &nonce,
             &config.google_account,
             &config.local_label,
-        )) => result.context("local Oshioki approval timed out")??,
+        )) => result.context("local Vouch approval timed out")??,
         result = interrupted() => return result,
     }
-    .context("local Oshioki approval was denied or expired")?;
+    .context("local Vouch approval was denied or expired")?;
     let remaining = deadline.saturating_duration_since(Instant::now());
     run_local_after_approval(
         &config.google_account,
@@ -914,18 +914,18 @@ mod native_approval {
     use std::sync::Arc;
 
     use anyhow::{Context as _, Result};
-    use oshioki_agent::{
+    use vouch_agent::{
         BrowserRelaySigner,
         touchid::{AttemptError, Outcome, PromptCancel, ScreenLock, TouchIdPrompt},
     };
-    use oshioki_browser_relay::{Message, approval_challenge};
-    use oshioki_enclave::SignError;
+    use vouch_browser_relay::{Message, approval_challenge};
+    use vouch_enclave::SignError;
 
     struct Screen;
 
     impl ScreenLock for Screen {
         fn is_locked(&self) -> bool {
-            oshioki_enclave::screen_is_locked()
+            vouch_enclave::screen_is_locked()
         }
     }
 
@@ -1044,20 +1044,20 @@ async fn serve_attempt(
                 "Google account does not match Mac configuration"
             );
             let Some(signer) = approval_signer else {
-                bail!("Mac Oshioki approval identity is not configured")
+                bail!("Mac Vouch approval identity is not configured")
             };
             let authorization = tokio::select! {
                 result = timeout(
                     Duration::from_secs(30),
                     browser_authorize(signer, attempt, lane, &offered, &account, destination),
-                ) => result.context("Oshioki authorization timed out")??,
+                ) => result.context("Vouch authorization timed out")??,
                 message = peer.receive(sub, attempt) => {
                     ensure!(message?.action == Action::Stop, "unexpected ceremony control message");
                     return Ok(())
                 }
             };
             let Some(signature) = authorization else {
-                bail!("Oshioki approval was denied or expired")
+                bail!("Vouch approval was denied or expired")
             };
             peer.send(
                 reply,
