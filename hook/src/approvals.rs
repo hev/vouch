@@ -36,6 +36,11 @@ const TOOL_DECISION_WAIT: Duration = Duration::from_secs(85);
 const ADAPTER_BUDGET: Duration = Duration::from_secs(105);
 const HOOK_TIMEOUT_SECONDS: u64 = 120;
 const OWNED_HOOK_TAG: &str = "vouch-managed-hook-v1";
+/// Marker written by Oshioki before the vouch rename. Install and uninstall
+/// still treat it as owned so an upgrade replaces the old hook entries instead
+/// of leaving them beside the new ones (pointing at a removed binary). New
+/// installs never write it.
+const LEGACY_OWNED_HOOK_TAG: &str = "oshioki-managed-hook-v1";
 const STATUS_APPROVAL: &str = "Waiting for Vouch browser approval";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -65,6 +70,10 @@ impl HarnessArg {
 
     fn all_marker(self) -> String {
         format!("{OWNED_HOOK_TAG}-{}", self.as_str())
+    }
+
+    fn legacy_marker(self) -> String {
+        format!("{LEGACY_OWNED_HOOK_TAG}-{}", self.as_str())
     }
 }
 
@@ -310,7 +319,7 @@ fn remove_owned_hook(config: &mut Value, harness: HarnessArg) -> Result<bool> {
     let Some(groups) = groups.as_array_mut() else {
         bail!("PermissionRequest settings must be an array");
     };
-    let marker = harness.all_marker();
+    let markers = [harness.all_marker(), harness.legacy_marker()];
     let mut changed = false;
     let mut retained = Vec::with_capacity(groups.len());
     for mut group in std::mem::take(groups) {
@@ -319,7 +328,11 @@ fn remove_owned_hook(config: &mut Value, harness: HarnessArg) -> Result<bool> {
             .and_then(Value::as_array_mut)
             .is_some_and(|handlers| {
                 let before = handlers.len();
-                handlers.retain(|handler| !is_owned_handler(handler, &marker));
+                handlers.retain(|handler| {
+                    !markers
+                        .iter()
+                        .any(|marker| is_owned_handler(handler, marker))
+                });
                 before != handlers.len()
             });
         changed |= removed_from_group;
@@ -1245,6 +1258,98 @@ mod tests {
             );
             assert!(!uninstall_harness_at(&path, harness).unwrap());
         }
+    }
+
+    fn legacy_oshioki_settings(harness: HarnessArg) -> Value {
+        serde_json::json!({
+            "hooks": {
+                "PermissionRequest": [{
+                    "matcher": "Bash",
+                    "hooks": [{ "type": "command", "command": "keep-me", "timeout": 9 }]
+                }, {
+                    "hooks": [{
+                        "type": "command",
+                        "command": format!(
+                            "'/opt/homebrew/bin/oshioki' approvals request --harness {} --managed-hook=oshioki-managed-hook-v1-{}",
+                            harness.as_str(),
+                            harness.as_str()
+                        ),
+                        "timeout": HOOK_TIMEOUT_SECONDS,
+                        "statusMessage": "Waiting for Oshioki browser approval"
+                    }]
+                }]
+            }
+        })
+    }
+
+    fn handler_commands(config: &Value) -> Vec<String> {
+        config["hooks"]["PermissionRequest"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|group| group["hooks"].as_array().unwrap().iter())
+            .filter_map(|handler| handler["command"].as_str().map(str::to_owned))
+            .collect()
+    }
+
+    #[test]
+    fn install_over_legacy_oshioki_hook_leaves_exactly_one_vouch_hook() {
+        for harness in [HarnessArg::Codex, HarnessArg::Claude] {
+            let temp = TempDir::new();
+            let path = temp.0.join("settings.json");
+            let legacy = legacy_oshioki_settings(harness);
+            fs::write(&path, serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+
+            install_harness_at(&path, harness).unwrap();
+            let installed = read_settings(&path).unwrap();
+            let commands = handler_commands(&installed);
+            assert!(commands.iter().all(|c| !c.contains(LEGACY_OWNED_HOOK_TAG)));
+            assert_eq!(
+                commands
+                    .iter()
+                    .filter(|c| c.contains(&harness.all_marker()))
+                    .count(),
+                1
+            );
+            assert!(commands.iter().any(|c| c == "keep-me"));
+            assert_eq!(commands.len(), 2);
+            assert_eq!(
+                installed["hooks"]["PermissionRequest"][0],
+                legacy["hooks"]["PermissionRequest"][0]
+            );
+        }
+    }
+
+    #[test]
+    fn uninstall_removes_legacy_oshioki_hook_and_keeps_user_hooks() {
+        for harness in [HarnessArg::Codex, HarnessArg::Claude] {
+            let temp = TempDir::new();
+            let path = temp.0.join("settings.json");
+            let legacy = legacy_oshioki_settings(harness);
+            fs::write(&path, serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+
+            assert!(uninstall_harness_at(&path, harness).unwrap());
+            let removed = read_settings(&path).unwrap();
+            assert_eq!(handler_commands(&removed), vec!["keep-me".to_owned()]);
+            assert_eq!(
+                removed["hooks"]["PermissionRequest"],
+                serde_json::json!([legacy["hooks"]["PermissionRequest"][0]])
+            );
+            assert!(!uninstall_harness_at(&path, harness).unwrap());
+        }
+    }
+
+    #[test]
+    fn legacy_marker_for_one_harness_does_not_claim_the_other() {
+        let temp = TempDir::new();
+        let path = temp.0.join("settings.json");
+        let legacy = legacy_oshioki_settings(HarnessArg::Codex);
+        fs::write(&path, serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(!uninstall_harness_at(&path, HarnessArg::Claude).unwrap());
+        assert_eq!(read_settings(&path).unwrap(), legacy);
     }
 
     #[test]
