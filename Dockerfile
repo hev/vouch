@@ -2,33 +2,33 @@ ARG RUST_IMAGE=rust:1.85-bookworm
 FROM ${RUST_IMAGE} AS builder
 WORKDIR /build
 COPY . ./
-# The oshioki-pam workspace member links libpam.
+# The vouch-pam workspace member links libpam.
 RUN apt-get update \
  && apt-get install --yes --no-install-recommends libpam0g-dev \
  && rm -rf /var/lib/apt/lists/*
 RUN cargo build --locked --release --workspace \
  && cd target/release \
- && sha256sum oshioki oshioki-agent oshioki-server liboshioki_plugin.so liboshioki_pam.so > SHA256SUMS
+ && sha256sum vouch vouch-agent vouch-server libvouch_plugin.so libvouch_pam.so > SHA256SUMS
 # The E2E drives the agent with `run --auto`, which only exists behind the
 # `unattended` feature. Build that agent apart so the release binary and its
 # checksum above stay feature-free.
-RUN cargo build --locked --release --package oshioki-agent --features unattended \
+RUN cargo build --locked --release --package vouch-agent --features unattended \
       --target-dir target/unattended
 
 FROM debian:bookworm-slim AS server
 RUN apt-get update \
  && apt-get install --yes --no-install-recommends ca-certificates curl \
  && rm -rf /var/lib/apt/lists/* \
- && groupadd --system oshioki \
- && useradd --system --gid oshioki --home-dir /var/lib/oshioki --create-home oshioki \
- && install -d -o oshioki -g oshioki -m 0750 /state
-COPY --from=builder /build/target/release/oshioki-server /usr/local/bin/
-USER oshioki
-ENV OSHIOKI_STATE_PATH=/state/state.sqlite3 \
-    OSHIOKI_LISTEN=0.0.0.0:8443
+ && groupadd --system vouch \
+ && useradd --system --gid vouch --home-dir /var/lib/vouch --create-home vouch \
+ && install -d -o vouch -g vouch -m 0750 /state
+COPY --from=builder /build/target/release/vouch-server /usr/local/bin/
+USER vouch
+ENV VOUCH_STATE_PATH=/state/state.sqlite3 \
+    VOUCH_LISTEN=0.0.0.0:8443
 VOLUME ["/state"]
 EXPOSE 8443
-ENTRYPOINT ["/usr/local/bin/oshioki-server"]
+ENTRYPOINT ["/usr/local/bin/vouch-server"]
 
 FROM mcr.microsoft.com/playwright:v1.62.1-noble AS e2e
 USER root
@@ -36,13 +36,13 @@ RUN apt-get update \
  && apt-get install --yes --no-install-recommends curl file openssl python3-cryptography sudo \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /work
-COPY --from=builder /build/target/release/oshioki /work/target/release/
-COPY --from=builder /build/target/unattended/release/oshioki-agent /work/target/unattended/
-COPY --from=builder /build/target/release/liboshioki_plugin.so /work/target/release/
+COPY --from=builder /build/target/release/vouch /work/target/release/
+COPY --from=builder /build/target/unattended/release/vouch-agent /work/target/unattended/
+COPY --from=builder /build/target/release/libvouch_plugin.so /work/target/release/
 # Copied, not loaded: nothing in scripts/run-compose-e2e dlopens the PAM
 # module, so the e2e image needs no libpam0g runtime. It is here so the
 # checksum manifest beside it describes every file it lists.
-COPY --from=builder /build/target/release/liboshioki_pam.so /work/target/release/
+COPY --from=builder /build/target/release/libvouch_pam.so /work/target/release/
 COPY --from=builder /build/target/release/SHA256SUMS /work/target/release/
 COPY scripts/ /work/scripts/
 COPY server/web/package.json server/web/package-lock.json /work/server/web/

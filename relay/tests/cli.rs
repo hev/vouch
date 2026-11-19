@@ -9,11 +9,11 @@ use std::{
 };
 
 use futures::StreamExt as _;
-use oshioki_browser_relay::{Action, Message, approval_challenge, sign, verify};
-use oshioki_protocol::encode_base64url;
 use p256::ecdsa::{SigningKey, signature::Signer as _};
 use p256::elliptic_curve::Generate as _;
 use tokio::{process::Command, time::timeout};
+use vouch_browser_relay::{Action, Message, approval_challenge, sign, verify};
+use vouch_protocol::encode_base64url;
 
 struct Temp(PathBuf);
 impl Drop for Temp {
@@ -35,7 +35,7 @@ fn now() -> u64 {
 async fn wrapper_preserves_browser_flow_and_fails_on_google_denial_or_mac_failure() {
     for (google_exit, mac_fails) in [(0, false), (1, false), (0, true)] {
         let dir = Temp(PathBuf::from(format!(
-            "/tmp/oshioki-relay-cli-{}",
+            "/tmp/vouch-relay-cli-{}",
             uuid::Uuid::new_v4()
         )));
         std::fs::create_dir(&dir.0).unwrap();
@@ -76,7 +76,7 @@ async fn wrapper_preserves_browser_flow_and_fails_on_google_denial_or_mac_failur
         std::fs::write(&gcloud, r"#!/usr/bin/env python3
 import os, shlex, subprocess, sys
 assert sys.argv[1:] == ['auth', 'login', '--force', '--launch-browser']
-assert os.environ['DISPLAY'] == 'oshioki-browser-relay'
+assert os.environ['DISPLAY'] == 'vouch-browser-relay'
 assert os.environ['CLOUDSDK_AUTH_DISABLE_CODE_VERIFIER'] == 'false'
 # Match Python webbrowser's custom BROWSER argument substitution.
 args = [part.replace('%s', os.environ['TEST_OAUTH_URL']) for part in shlex.split(os.environ['BROWSER'])]
@@ -91,7 +91,7 @@ sys.exit(result or int(os.environ['TEST_GOOGLE_EXIT']))
         let subject = format!("oshioki.browser.v1.{lane}");
         let mut requests = client.subscribe(subject).await.unwrap();
         client.flush().await.unwrap();
-        let mut wrapper = Command::new(env!("CARGO_BIN_EXE_oshioki-browser-relay"))
+        let mut wrapper = Command::new(env!("CARGO_BIN_EXE_vouch-browser-relay"))
             .args(["login", "--config"])
             .arg(config)
             .env(
@@ -165,7 +165,7 @@ sys.exit(result or int(os.environ['TEST_GOOGLE_EXIT']))
         .await
         .unwrap();
         assert_eq!(status.unwrap().success(), google_exit == 0 && !mac_fails);
-        assert!(!PathBuf::from(format!("/tmp/oshioki-browser-{attempt}")).exists());
+        assert!(!PathBuf::from(format!("/tmp/vouch-browser-{attempt}")).exists());
         broker.kill().await.unwrap();
     }
 }
@@ -181,7 +181,7 @@ async fn account_bound_flow_approves_headless_reuse_and_browser_fallback() {
         (false, false, true),
     ] {
         let dir = Temp(PathBuf::from(format!(
-            "/tmp/oshioki-relay-account-{}",
+            "/tmp/vouch-relay-account-{}",
             uuid::Uuid::new_v4()
         )));
         std::fs::create_dir(&dir.0).unwrap();
@@ -254,7 +254,7 @@ sys.exit(0)
         let subject = format!("oshioki.browser.v1.{lane}");
         let mut requests = client.subscribe(subject).await.unwrap();
         client.flush().await.unwrap();
-        let mut wrapper = Command::new(env!("CARGO_BIN_EXE_oshioki-browser-relay"))
+        let mut wrapper = Command::new(env!("CARGO_BIN_EXE_vouch-browser-relay"))
             .args(["login", "--config"])
             .arg(&config)
             .env(
@@ -304,7 +304,7 @@ sys.exit(0)
             assert_eq!(nonce, "fresh-mac-nonce");
             assert_eq!(account, "selected@example.com");
             let approval_signature: p256::ecdsa::Signature = approval.sign(
-                &oshioki_protocol::browser_relay_signature_payload(&approval_challenge(
+                &vouch_protocol::browser_relay_signature_payload(&approval_challenge(
                     &lane,
                     &probe.attempt,
                     probe.expires,

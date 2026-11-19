@@ -2,7 +2,7 @@
 
 ## Our pledge
 
-We pledge to make participation in Oshioki a harassment-free experience for
+We pledge to make participation in Vouch a harassment-free experience for
 everyone, regardless of age, body size, visible or invisible disability,
 ethnicity, sex characteristics, gender identity and expression, level of
 experience, education, socioeconomic status, nationality, personal appearance,
@@ -23,9 +23,12 @@ professional setting.
 
 ## Enforcement
 
-Instances of unacceptable behavior may be reported to the project maintainers
-via GitHub private message or the security contact in [SECURITY.md](SECURITY.md).
-Complaints will be reviewed promptly and confidentially. Maintainers may
+Vouch is maintained by Adam Hevenor ([@hev](https://github.com/hev)) at
+[github.com/hev/vouch](https://github.com/hev/vouch). Report unacceptable
+behavior to him privately through GitHub private vulnerability reporting on
+hev/vouch (Security tab, then "Report a vulnerability"), which is the private
+channel described in [SECURITY.md](SECURITY.md). Complaints will be reviewed
+promptly and confidentially. The maintainer may
 remove, edit, or reject contributions, and may temporarily or permanently ban
 contributors for behavior they deem inappropriate, threatening, offensive,
 or harmful.

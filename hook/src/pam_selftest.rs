@@ -1,6 +1,6 @@
 //! Load-time self-test for a built PAM module.
 //!
-//! The installer runs this between staging `liboshioki_pam.so` into the
+//! The installer runs this between staging `libvouch_pam.so` into the
 //! platform security directory and referencing it from `/etc/pam.d/sudo`.
 //! At that point the module is present but inert, so a failure here costs
 //! nothing: no PAM configuration has been touched yet. Once the auth line is
@@ -16,7 +16,7 @@
 //!
 //! `dlopen` is not inert: any ELF initialiser in the object (a Rust `#[ctor]`,
 //! a C++ static constructor, an initialiser pulled in by a dependency) runs in
-//! this process the moment it loads. `liboshioki_pam` has none today, and must
+//! this process the moment it loads. `libvouch_pam` has none today, and must
 //! not acquire one — but the installer runs this as root, so a module that
 //! grew a constructor would be running that code as root, before any PAM file
 //! references it. That is the reason to keep the self-test to load-and-look-up
@@ -136,7 +136,7 @@ mod tests {
 
     #[test]
     fn a_relative_path_is_refused_before_any_dlopen() {
-        let error = run(Path::new("liboshioki_pam.so")).unwrap_err();
+        let error = run(Path::new("libvouch_pam.so")).unwrap_err();
         assert!(
             format!("{error}").contains("absolute"),
             "unexpected error: {error}"
@@ -145,7 +145,7 @@ mod tests {
 
     #[test]
     fn a_missing_file_is_reported_as_a_stat_failure() {
-        let error = run(Path::new("/nonexistent/oshioki/liboshioki_pam.so")).unwrap_err();
+        let error = run(Path::new("/nonexistent/vouch/libvouch_pam.so")).unwrap_err();
         assert!(
             format!("{error}").contains("cannot stat"),
             "unexpected error: {error}"
@@ -159,7 +159,7 @@ mod tests {
         // principle be absent. The bytes are deliberately not a valid ELF or
         // Mach-O header, so every platform's loader rejects the file.
         let directory = std::env::temp_dir().join(format!(
-            "oshioki-pam-selftest-{}-{:?}",
+            "vouch-pam-selftest-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));

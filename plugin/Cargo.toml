@@ -1,5 +1,5 @@
 [package]
-name = "oshioki-plugin"
+name = "vouch-plugin"
 edition = { workspace = true }
 rust-version = { workspace = true }
 version = { workspace = true }
@@ -17,7 +17,7 @@ crate-type = ["cdylib"]
 [dependencies]
 libc = { workspace = true }
 nix = { workspace = true }
-oshioki-protocol = { path = "../protocol" }
+vouch-protocol = { path = "../protocol" }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 

@@ -1,6 +1,6 @@
 # Google Cloud CLI login
 
-After you install Oshioki's opt-in wrapper, the exact command `gcloud auth
+After you install Vouch's opt-in wrapper, the exact command `gcloud auth
 login` uses the browser relay. Other gcloud commands and login commands with
 flags run the pinned Google Cloud CLI directly. There is no adapter for other
 providers.
@@ -15,8 +15,8 @@ authentication.
 
 ## Install and opt in
 
-Install [Oshioki](install.md) and Google Cloud CLI on the machine that runs
-gcloud. The Mac approver also needs Oshioki. The setup tools require Python 3.9
+Install [Vouch](install.md) and Google Cloud CLI on the machine that runs
+gcloud. The Mac approver also needs Vouch. The setup tools require Python 3.9
 or newer; release packages declare it as a runtime dependency. Google Cloud
 CLI is separate.
 
@@ -24,7 +24,7 @@ For a source checkout, build the binaries and add them and the setup scripts to
 `PATH`:
 
 ```sh
-cargo build --locked --release -p oshioki-agent -p oshioki-browser-relay
+cargo build --locked --release -p vouch-agent -p vouch-browser-relay
 export PATH="$PWD/scripts:$PWD/target/release:$PATH"
 ```
 
@@ -34,9 +34,9 @@ to delegate other commands safely:
 
 ```sh
 real_gcloud="$(command -v gcloud)"
-oshioki-google-login-setup install \
+vouch-google-login-setup install \
   --mode requester \
-  --config "$HOME/.config/oshioki/browser-relay/requester.json" \
+  --config "$HOME/.config/vouch/browser-relay/requester.json" \
   --gcloud "$real_gcloud"
 ```
 
@@ -50,19 +50,19 @@ writable by group or others unless they have the sticky bit. If these checks
 fail, create a private directory and pass it with `--bin-dir`:
 
 ```sh
-mkdir -p "$HOME/.oshioki/bin"
-chmod 700 "$HOME/.oshioki" "$HOME/.oshioki/bin"
-oshioki-google-login-setup install \
+mkdir -p "$HOME/.vouch/bin"
+chmod 700 "$HOME/.vouch" "$HOME/.vouch/bin"
+vouch-google-login-setup install \
   --mode requester \
-  --config "$HOME/.config/oshioki/browser-relay/requester.json" \
+  --config "$HOME/.config/vouch/browser-relay/requester.json" \
   --gcloud "$real_gcloud" \
-  --bin-dir "$HOME/.oshioki/bin"
-export PATH="$HOME/.oshioki/bin:$PATH"
+  --bin-dir "$HOME/.vouch/bin"
+export PATH="$HOME/.vouch/bin:$PATH"
 ```
 
 Put the wrapper directory before the real gcloud path. Refresh the shell's
 command lookup with `hash -r` in Bash or `rehash` in zsh. To remove the wrapper,
-run `oshioki-google-login-setup uninstall`; pass the same `--bin-dir` if you
+run `vouch-google-login-setup uninstall`; pass the same `--bin-dir` if you
 used a custom directory.
 
 ## Local login
@@ -73,19 +73,19 @@ session. It needs no server, NATS, SSH, or sudo installation.
 Create a separate approval identity as the user who owns the gcloud profile:
 
 ```sh
-mkdir -p ~/.config/oshioki/browser-relay
-chmod 700 ~/.config/oshioki/browser-relay
-oshioki-agent init --signer enclave --state ~/.config/oshioki/browser-relay
-oshioki-agent device-record --state ~/.config/oshioki/browser-relay --label browser-relay
+mkdir -p ~/.config/vouch/browser-relay
+chmod 700 ~/.config/vouch/browser-relay
+vouch-agent init --signer enclave --state ~/.config/vouch/browser-relay
+vouch-agent device-record --state ~/.config/vouch/browser-relay --label browser-relay
 ```
 
 Copy its public `credential_public_key` into `approval_public_key`. Do not use
-the sudo agent identity. Create `~/.config/oshioki/browser-relay/local.json`:
+the sudo agent identity. Create `~/.config/vouch/browser-relay/local.json`:
 
 ```json
 {
   "google_account": "you@example.com",
-  "approval_identity": "/Users/you/.config/oshioki/browser-relay/agent.json",
+  "approval_identity": "/Users/you/.config/vouch/browser-relay/agent.json",
   "approval_public_key": "IDENTITY_CREDENTIAL_PUBLIC_KEY",
   "local_label": "this Mac"
 }
@@ -95,8 +95,8 @@ JSON paths must be absolute; `~` is not expanded. Set the config permissions
 and request login:
 
 ```sh
-chmod 600 ~/.config/oshioki/browser-relay/local.json
-oshioki-browser-relay local-login --config ~/.config/oshioki/browser-relay/local.json
+chmod 600 ~/.config/vouch/browser-relay/local.json
+vouch-browser-relay local-login --config ~/.config/vouch/browser-relay/local.json
 ```
 
 Approve the named account with Touch ID. If cached credentials are usable,
@@ -113,7 +113,7 @@ and opens Google's browser when required. Install the relay on both machines
 and create the Mac approval identity described above.
 
 The connection needs a private NATS broker reachable from both machines. Use
-separate NATS users and core NATS; no Oshioki server or JetStream stream is
+separate NATS users and core NATS; no Vouch server or JetStream stream is
 needed. A TLS broker can serve both directly. For loopback NATS, use the SSH
 tunnel below. Both configs use the same canonical lowercase UUID for `lane`.
 
@@ -137,35 +137,35 @@ a trusted channel. These keys authenticate the relay peers; they are separate
 from the Mac's Touch ID approval key.
 
 ```sh
-mkdir -p ~/.config/oshioki/browser-relay
-chmod 700 ~/.config/oshioki/browser-relay
-oshioki-browser-relay keygen ~/.config/oshioki/browser-relay/signing.key
+mkdir -p ~/.config/vouch/browser-relay
+chmod 700 ~/.config/vouch/browser-relay
+vouch-browser-relay keygen ~/.config/vouch/browser-relay/signing.key
 ```
 
 Save both JSON configs with mode 0600. Requester config at
-`~/.config/oshioki/browser-relay/requester.json`:
+`~/.config/vouch/browser-relay/requester.json`:
 
 ```json
 {
   "nats_url": "tls://requester-user:PASSWORD@nats.example.com:4222",
   "lane": "REPLACE_WITH_SHARED_LOWERCASE_UUID",
-  "private_key": "/home/you/.config/oshioki/browser-relay/signing.key",
+  "private_key": "/home/you/.config/vouch/browser-relay/signing.key",
   "peer_public_key": "MAC_RELAY_PUBLIC_KEY",
   "google_account": "you@example.com",
   "approval_public_key": "MAC_IDENTITY_CREDENTIAL_PUBLIC_KEY"
 }
 ```
 
-Mac config at `~/.config/oshioki/browser-relay/approver.json`:
+Mac config at `~/.config/vouch/browser-relay/approver.json`:
 
 ```json
 {
   "nats_url": "tls://approver-user:PASSWORD@nats.example.com:4222",
   "lane": "REPLACE_WITH_SHARED_LOWERCASE_UUID",
-  "private_key": "/Users/you/.config/oshioki/browser-relay/signing.key",
+  "private_key": "/Users/you/.config/vouch/browser-relay/signing.key",
   "peer_public_key": "REQUESTER_RELAY_PUBLIC_KEY",
   "google_account": "you@example.com",
-  "approval_identity": "/Users/you/.config/oshioki/browser-relay/agent.json",
+  "approval_identity": "/Users/you/.config/vouch/browser-relay/agent.json",
   "ssh_destination": "requester-ssh-alias"
 }
 ```
@@ -179,7 +179,7 @@ passwords in the private files, not command arguments.
 Start the approver on the Mac in a foreground session:
 
 ```sh
-oshioki-browser-relay serve --config ~/.config/oshioki/browser-relay/approver.json
+vouch-browser-relay serve --config ~/.config/vouch/browser-relay/approver.json
 ```
 
 Adding or removing a Touch ID fingerprint invalidates the approval identity.
@@ -188,16 +188,16 @@ uses it. See [Mac approval recovery](mac-approvals.md#prompts-and-recovery).
 
 ### Optional services
 
-`oshioki-browser-service` installs services for existing configs; it does not
+`vouch-browser-service` installs services for existing configs; it does not
 create keys, identities, or NATS config. Without `--start`, it writes the
 service definition only. Install a receiver service instead of running the
 foreground `serve` command. For a direct TLS broker, install it in the Mac's
 logged-in GUI session. This is the only service needed for direct TLS:
 
 ```sh
-oshioki-browser-service install receiver \
-  --config "$HOME/.config/oshioki/browser-relay/approver.json" \
-  --relay "$(command -v oshioki-browser-relay)" \
+vouch-browser-service install receiver \
+  --config "$HOME/.config/vouch/browser-relay/approver.json" \
+  --relay "$(command -v vouch-browser-relay)" \
   --start
 ```
 
@@ -205,10 +205,10 @@ The LaunchAgent runs while you are logged in. Check its status and log with:
 
 ```sh
 launchctl print gui/$(id -u)/io.oshioki.browser-relay.receiver
-tail -f ~/Library/Logs/Oshioki/browser-relay/receiver.err.log
+tail -f ~/Library/Logs/Vouch/browser-relay/receiver.err.log
 ```
 
-Remove it with `oshioki-browser-service uninstall receiver`.
+Remove it with `vouch-browser-service uninstall receiver`.
 
 ### Loopback NATS over SSH
 
@@ -240,8 +240,8 @@ Set each `nats_url` to its local user at
 Keep both JSON configs private. On the Linux requester, start the broker service:
 
 ```sh
-oshioki-browser-service install broker \
-  --config "$HOME/.config/oshioki/browser-relay/nats.conf" \
+vouch-browser-service install broker \
+  --config "$HOME/.config/vouch/browser-relay/nats.conf" \
   --nats-server "$(command -v nats-server)" \
   --start
 ```
@@ -249,12 +249,12 @@ oshioki-browser-service install broker \
 On the Mac, start the SSH tunnel and receiver:
 
 ```sh
-oshioki-browser-service install tunnel \
+vouch-browser-service install tunnel \
   --ssh-destination requester \
   --local-port 4222 --remote-port 4222 --start
-oshioki-browser-service install receiver \
-  --config "$HOME/.config/oshioki/browser-relay/approver.json" \
-  --relay "$(command -v oshioki-browser-relay)" \
+vouch-browser-service install receiver \
+  --config "$HOME/.config/vouch/browser-relay/approver.json" \
+  --relay "$(command -v vouch-browser-relay)" \
   --start
 ```
 
@@ -263,13 +263,13 @@ requester:
 
 ```sh
 launchctl print gui/$(id -u)/io.oshioki.browser-relay.tunnel
-tail -f ~/Library/Logs/Oshioki/browser-relay/tunnel.err.log
-systemctl --user status oshioki-browser-relay-nats.service
-journalctl --user -u oshioki-browser-relay-nats.service -f
+tail -f ~/Library/Logs/Vouch/browser-relay/tunnel.err.log
+systemctl --user status vouch-browser-relay-nats.service
+journalctl --user -u vouch-browser-relay-nats.service -f
 ```
 
-Remove them with `oshioki-browser-service uninstall tunnel` on the Mac and
-`oshioki-browser-service uninstall broker` on the requester.
+Remove them with `vouch-browser-service uninstall tunnel` on the Mac and
+`vouch-browser-service uninstall broker` on the requester.
 
 After the Mac receiver is running, run `gcloud auth login` on the requester.
 The wrapper starts the remote flow. Keep both relay peers on the same release.

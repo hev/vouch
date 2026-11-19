@@ -5,7 +5,7 @@
 //! then ad hoc re-signs each file it touched. That rewrite happens after the
 //! release artifact was hashed into `SHA256SUMS`, so a bottled copy of this
 //! module no longer matches its recorded checksum and
-//! `install-oshioki-hook --contextual-pam` refuses to install it (issue #87).
+//! `install-vouch-hook --contextual-pam` refuses to install it (issue #87).
 //!
 //! `change_dylib_id` returns early when the file already carries that exact
 //! id (`Library/Homebrew/extend/os/mac/keg.rb`: `return false if
@@ -20,14 +20,14 @@
 //! module. So a module installed at `/usr/local/lib/pam/` from the release
 //! tarball loads exactly the same with this id as it did with its own path.
 //!
-//! Override `OSHIOKI_PAM_INSTALL_NAME` for an Intel prefix
-//! (`/usr/local/opt/oshioki/libexec/...`) or any non-default Homebrew
+//! Override `VOUCH_PAM_INSTALL_NAME` for an Intel prefix
+//! (`/usr/local/opt/vouch/libexec/...`) or any non-default Homebrew
 //! prefix. Non-macOS targets get nothing: ELF has no equivalent, and the
 //! Linux lane ships the module through the .deb.
 
 /// Where the Homebrew keg lands on Apple silicon, which is the only
 /// architecture the tap bottles.
-const DEFAULT_INSTALL_NAME: &str = "/opt/homebrew/opt/oshioki/libexec/liboshioki_pam.dylib";
+const DEFAULT_INSTALL_NAME: &str = "/opt/homebrew/opt/vouch/libexec/libvouch_pam.dylib";
 
 /// Rejects an override that would not survive the linker command line. The
 /// value is spliced into `-Wl,-install_name,<name>`: a comma there splits
@@ -55,12 +55,12 @@ fn checked_install_name(var: &str, name: &str) -> String {
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-env-changed=OSHIOKI_PAM_INSTALL_NAME");
+    println!("cargo:rerun-if-env-changed=VOUCH_PAM_INSTALL_NAME");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
         return;
     }
-    let name = match std::env::var("OSHIOKI_PAM_INSTALL_NAME") {
-        Ok(name) => checked_install_name("OSHIOKI_PAM_INSTALL_NAME", &name),
+    let name = match std::env::var("VOUCH_PAM_INSTALL_NAME") {
+        Ok(name) => checked_install_name("VOUCH_PAM_INSTALL_NAME", &name),
         Err(_) => DEFAULT_INSTALL_NAME.to_owned(),
     };
     // cdylib-only: a plain `rustc-link-arg` would also reach the test

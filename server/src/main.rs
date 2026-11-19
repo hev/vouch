@@ -20,14 +20,6 @@ use futures::StreamExt as _;
 use jwt_compact::{
     AlgorithmExt as _, Claims as JwtClaims, Header as JwtHeader, TimeOptions, alg::Es256,
 };
-use oshioki_protocol::{
-    AUTH_ENVELOPE_TYPE, ActivationV1, AliveV1, ApproveV1, AuthApproveWebauthnV1, AuthDecisionV1,
-    AuthEnvelopeV1, DecisionV1, DenyV1, EnrollmentIntentV1, EnrollmentSubmissionV1,
-    RequestEnvelopeV1, SealedDeviceBodyV1, TOOL_APPROVAL_SUBJECT, TOOL_ENVELOPE_TYPE,
-    ToolAcknowledgementV1, ToolApprovalDecisionV1, ToolApprovalEnvelopeV1, ToolSealedBodyV1,
-    verify_tool_decision_v1,
-};
-use oshioki_transport::{Ack, JetStreamMessage, NatsTransport, ServerTransport};
 use p256::{
     elliptic_curve::Generate as _,
     pkcs8::{DecodePrivateKey as _, EncodePrivateKey as _},
@@ -47,6 +39,14 @@ use std::{
 use tokio::sync::Semaphore;
 use tokio_util::io::ReaderStream;
 use tracing::{error, info, warn};
+use vouch_protocol::{
+    AUTH_ENVELOPE_TYPE, ActivationV1, AliveV1, ApproveV1, AuthApproveWebauthnV1, AuthDecisionV1,
+    AuthEnvelopeV1, DecisionV1, DenyV1, EnrollmentIntentV1, EnrollmentSubmissionV1,
+    RequestEnvelopeV1, SealedDeviceBodyV1, TOOL_APPROVAL_SUBJECT, TOOL_ENVELOPE_TYPE,
+    ToolAcknowledgementV1, ToolApprovalDecisionV1, ToolApprovalEnvelopeV1, ToolSealedBodyV1,
+    verify_tool_decision_v1,
+};
+use vouch_transport::{Ack, JetStreamMessage, NatsTransport, ServerTransport};
 use web_push_native::{Auth as WebPushAuth, WebPushBuilder};
 
 /// Every path the authentication lane serves. The router is built from this
@@ -162,18 +162,18 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("oshioki_server=info".parse().expect("valid directive")),
+                .add_directive("vouch_server=info".parse().expect("valid directive")),
         )
         .init();
-    let database_path = required_env("OSHIOKI_STATE_PATH")?;
-    let listen = std::env::var("OSHIOKI_LISTEN").unwrap_or_else(|_| "127.0.0.1:8443".into());
-    let dist_root = std::env::var("OSHIOKI_DARWIN_DIST")
-        .unwrap_or_else(|_| "/opt/oshioki/dist/v1/darwin-arm64".into());
-    let origin = required_env("OSHIOKI_ORIGIN")?;
-    let runtime_config = oshioki_protocol::HookConfigV1 {
+    let database_path = required_env("VOUCH_STATE_PATH")?;
+    let listen = std::env::var("VOUCH_LISTEN").unwrap_or_else(|_| "127.0.0.1:8443".into());
+    let dist_root = std::env::var("VOUCH_DARWIN_DIST")
+        .unwrap_or_else(|_| "/opt/vouch/dist/v1/darwin-arm64".into());
+    let origin = required_env("VOUCH_ORIGIN")?;
+    let runtime_config = vouch_protocol::HookConfigV1 {
         version: 1,
         origin: origin.clone(),
-        rp_id: required_env("OSHIOKI_RP_ID")?,
+        rp_id: required_env("VOUCH_RP_ID")?,
         server_base_url: origin.clone(),
     };
     runtime_config
@@ -193,7 +193,7 @@ async fn main() -> Result<()> {
         push_worker_last_ok: Arc::new(AtomicI64::new(now())),
         origin: Arc::new(runtime_config.origin),
         rp_id: Arc::new(runtime_config.rp_id),
-        ntfy_url: std::env::var("OSHIOKI_NTFY_URL").ok().map(Arc::new),
+        ntfy_url: std::env::var("VOUCH_NTFY_URL").ok().map(Arc::new),
         vapid,
     };
     spawn_workers(&state);
@@ -260,7 +260,7 @@ async fn main() -> Result<()> {
 }
 
 fn load_vapid_config(state_path: &FsPath, origin: &str) -> Result<VapidConfig> {
-    let path = std::env::var_os("OSHIOKI_VAPID_KEY_PATH").map_or_else(
+    let path = std::env::var_os("VOUCH_VAPID_KEY_PATH").map_or_else(
         || {
             state_path
                 .parent()
@@ -285,13 +285,13 @@ fn load_vapid_config(state_path: &FsPath, origin: &str) -> Result<VapidConfig> {
     .context("parse VAPID private key")?;
     let signing_key = p256::ecdsa::SigningKey::from_slice(key.to_bytes().as_ref())
         .context("load VAPID private key")?;
-    let public_key = oshioki_protocol::encode_base64url(
+    let public_key = vouch_protocol::encode_base64url(
         signing_key.verifying_key().to_sec1_point(false).as_bytes(),
     );
-    let subject = std::env::var("OSHIOKI_VAPID_SUBJECT").unwrap_or_else(|_| origin.to_owned());
-    let parsed_subject = url::Url::parse(&subject).context("parse OSHIOKI_VAPID_SUBJECT")?;
+    let subject = std::env::var("VOUCH_VAPID_SUBJECT").unwrap_or_else(|_| origin.to_owned());
+    let parsed_subject = url::Url::parse(&subject).context("parse VOUCH_VAPID_SUBJECT")?;
     if !matches!(parsed_subject.scheme(), "https" | "mailto") {
-        bail!("OSHIOKI_VAPID_SUBJECT must be an https or mailto URI");
+        bail!("VOUCH_VAPID_SUBJECT must be an https or mailto URI");
     }
     Ok(VapidConfig {
         private_key: Arc::new(key.to_bytes().to_vec()),
@@ -439,7 +439,7 @@ async fn request_consumer(state: AppState) -> Result<()> {
                 ack,
             } = message;
             let raw = payload.as_slice();
-            if raw.len() > oshioki_protocol::v1::MAX_ENVELOPE_BYTES {
+            if raw.len() > vouch_protocol::v1::MAX_ENVELOPE_BYTES {
                 warn!(bytes = raw.len(), "terminating oversized request envelope");
                 ack(Ack::Term).await?;
                 state.consumer_last_ok.store(now(), Ordering::Relaxed);
@@ -549,7 +549,7 @@ fn envelope_type(raw: &[u8]) -> Option<String> {
 async fn ingest_auth_envelope(
     state: &AppState,
     raw: &[u8],
-    ack: oshioki_transport::AckFn,
+    ack: vouch_transport::AckFn,
 ) -> Result<()> {
     let envelope = match serde_json::from_slice::<AuthEnvelopeV1>(raw) {
         Ok(value) => value,
@@ -581,7 +581,7 @@ async fn ingest_auth_envelope(
 async fn ingest_tool_envelope(
     state: &AppState,
     raw: &[u8],
-    ack: oshioki_transport::AckFn,
+    ack: vouch_transport::AckFn,
 ) -> Result<()> {
     let envelope = match serde_json::from_slice::<ToolApprovalEnvelopeV1>(raw) {
         Ok(value) => value,
@@ -633,7 +633,7 @@ async fn enrollment_consumer(state: AppState) -> Result<()> {
                         if intent.expires_at <= now() || intent.expires_at > now() + 300 {
                             bail!("invalid enrollment intent expiry");
                         }
-                        let hash = oshioki_protocol::decode_base64url(&intent.secret_hash)?;
+                        let hash = vouch_protocol::decode_base64url(&intent.secret_hash)?;
                         if let InsertResult::Conflict = state.store.create_enrollment(&intent.enrollment_id, &hash, intent.expires_at, &intent.reply_subject)? { warn!(enrollment_id=%intent.enrollment_id, "conflicting enrollment intent"); }
                         Ok(())
                     })();
@@ -957,7 +957,7 @@ fn vapid_authorization(vapid: &VapidConfig, endpoint: &str, ttl: u32) -> Result<
     let token = Es256
         .token(&JwtHeader::empty(), &claims, &signing_key)
         .context("sign VAPID JWT")?;
-    let public_key = oshioki_protocol::encode_base64url(
+    let public_key = vouch_protocol::encode_base64url(
         signing_key.verifying_key().to_sec1_point(false).as_bytes(),
     );
     Ok(format!("vapid t={token}, k={public_key}"))
@@ -1177,9 +1177,9 @@ async fn register_push_subscription(
         return Err(ApiError(StatusCode::BAD_REQUEST));
     }
     let token = bearer_token(&headers)?;
-    let p256dh = oshioki_protocol::decode_base64url(&input.keys.p256dh)
+    let p256dh = vouch_protocol::decode_base64url(&input.keys.p256dh)
         .map_err(|_| ApiError(StatusCode::BAD_REQUEST))?;
-    let auth = oshioki_protocol::decode_base64url(&input.keys.auth)
+    let auth = vouch_protocol::decode_base64url(&input.keys.auth)
         .map_err(|_| ApiError(StatusCode::BAD_REQUEST))?;
     let expiration_time = input.expiration_time.map(|value| {
         if value > 100_000_000_000 {
@@ -1383,7 +1383,7 @@ async fn submit_tool_decision(
         .active_device(&sealed.device_fingerprint)
         .map_err(|_| ApiError(StatusCode::INTERNAL_SERVER_ERROR))?
         .ok_or(ApiError(StatusCode::UNAUTHORIZED))?;
-    let config = oshioki_protocol::HookConfigV1 {
+    let config = vouch_protocol::HookConfigV1 {
         version: 1,
         origin: state.origin.as_str().to_owned(),
         rp_id: state.rp_id.as_str().to_owned(),
@@ -1739,7 +1739,7 @@ async fn enrollment_status(
 async fn get_device(
     State(state): State<AppState>,
     Path(fingerprint): Path<String>,
-) -> Result<Json<oshioki_protocol::DevicePublicRecordV1>, ApiError> {
+) -> Result<Json<vouch_protocol::DevicePublicRecordV1>, ApiError> {
     state
         .store
         .active_device(&fingerprint)
@@ -1932,11 +1932,11 @@ fn bearer_token(headers: &HeaderMap) -> Result<String, ApiError> {
         .map(ToOwned::to_owned)
         .ok_or(ApiError(StatusCode::UNAUTHORIZED))
 }
-/// Selects the server transport named by `OSHIOKI_TRANSPORT`. Absent or
+/// Selects the server transport named by `VOUCH_TRANSPORT`. Absent or
 /// empty means `nats`, the only backend; anything else fails closed before
 /// the listener binds — an unknown transport must never silently use NATS.
 async fn transport_from_env() -> Result<Arc<dyn ServerTransport>> {
-    match std::env::var("OSHIOKI_TRANSPORT").as_deref() {
+    match std::env::var("VOUCH_TRANSPORT").as_deref() {
         Err(_) | Ok("" | "nats") => Ok(Arc::new(NatsTransport::from_env().await?)),
         Ok(other) => bail!("unsupported transport: {other}"),
     }
@@ -1951,9 +1951,9 @@ fn now() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oshioki_protocol::ToolApprovalRequestV1;
     use sha2::Digest as _;
     use tower::util::ServiceExt as _;
+    use vouch_protocol::ToolApprovalRequestV1;
 
     #[test]
     fn mapped_ipv4_addresses_follow_ipv4_public_address_policy() {
@@ -1987,7 +1987,7 @@ mod tests {
         let signing_key = p256::ecdsa::SigningKey::from_slice(key.to_bytes().as_ref()).unwrap();
         VapidConfig {
             private_key: Arc::new(key.to_bytes().to_vec()),
-            public_key: oshioki_protocol::encode_base64url(
+            public_key: vouch_protocol::encode_base64url(
                 signing_key.verifying_key().to_sec1_point(false).as_bytes(),
             ),
             subject: "https://sudo.test".into(),
@@ -2016,7 +2016,7 @@ mod tests {
     }
 
     fn dist_root(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("oshioki-dist-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vouch-dist-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -2027,13 +2027,12 @@ mod tests {
     }
 
     fn health_state(name: &str, consumer_age: i64, outbox_age: i64) -> (PathBuf, AppState) {
-        let dir =
-            std::env::temp_dir().join(format!("oshioki-health-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vouch-health-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let store = Arc::new(Store::open(&dir.join("state.sqlite3")).unwrap());
         store.ready().unwrap();
-        let transport = oshioki_transport::MockTransport::new();
+        let transport = vouch_transport::MockTransport::new();
         let current = now();
         (
             dir,
@@ -2140,15 +2139,15 @@ mod tests {
         ];
         let mut devices = [test_device(), test_device()];
         let second_credential = vec![2; 16];
-        devices[1].credential_id = oshioki_protocol::encode_base64url(&second_credential);
-        devices[1].fingerprint = oshioki_protocol::device_fingerprint(
+        devices[1].credential_id = vouch_protocol::encode_base64url(&second_credential);
+        devices[1].fingerprint = vouch_protocol::device_fingerprint(
             &second_credential,
-            &oshioki_protocol::decode_base64url(&devices[1].credential_public_key).unwrap(),
-            &oshioki_protocol::decode_base64url(&devices[1].box_public_key).unwrap(),
+            &vouch_protocol::decode_base64url(&devices[1].credential_public_key).unwrap(),
+            &vouch_protocol::decode_base64url(&devices[1].box_public_key).unwrap(),
         );
         for (device, token) in devices.iter_mut().zip(tokens) {
             device.api_token_hash =
-                oshioki_protocol::encode_base64url(&sha2::Sha256::digest(token.as_bytes()));
+                vouch_protocol::encode_base64url(&sha2::Sha256::digest(token.as_bytes()));
             state.store.put_device(device).unwrap();
         }
         let headers = tokens.map(|token| {
@@ -2169,14 +2168,14 @@ mod tests {
         serde_json::from_value::<PushSubscriptionRequest>(json!({
             "version":1,"endpoint":material.endpoint,"expiration_time":null,
             "installation_token":installation_token,
-            "keys":{"p256dh":oshioki_protocol::encode_base64url(&material.p256dh),"auth":oshioki_protocol::encode_base64url(&material.auth)}
+            "keys":{"p256dh":vouch_protocol::encode_base64url(&material.p256dh),"auth":vouch_protocol::encode_base64url(&material.auth)}
         })).unwrap()
     }
 
     #[tokio::test]
     async fn push_api_advertises_and_enforces_multi_enrollment_capability() {
         let (dir, state, headers, first_fingerprint) = multi_push_api_state("push-api-multi");
-        let capability = oshioki_protocol::encode_base64url(&[42; 32]);
+        let capability = vouch_protocol::encode_base64url(&[42; 32]);
         let material = test_push_item();
         let input = |capability: Option<&str>| multi_push_input(&material, capability);
         let Json(config) = push_config(State(state.clone())).await;
@@ -2199,7 +2198,7 @@ mod tests {
             register_push_subscription(
                 State(state.clone()),
                 headers[0].clone(),
-                Json(input(Some(&oshioki_protocol::encode_base64url(&[43; 32]))))
+                Json(input(Some(&vouch_protocol::encode_base64url(&[43; 32]))))
             )
             .await
             .unwrap_err()
@@ -2366,7 +2365,7 @@ mod tests {
     #[test]
     fn vapid_key_persists_across_config_loads() {
         let dir = std::env::temp_dir().join(format!(
-            "oshioki-vapid-test-{}-{}",
+            "vouch-vapid-test-{}-{}",
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
@@ -2390,7 +2389,7 @@ mod tests {
     #[test]
     fn vapid_initialization_is_noreplace_under_concurrency_and_ignores_stale_temp() {
         let dir = std::env::temp_dir().join(format!(
-            "oshioki-vapid-race-test-{}-{}",
+            "vouch-vapid-race-test-{}-{}",
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
@@ -2736,8 +2735,7 @@ mod tests {
     /// flipped.
     #[tokio::test]
     async fn mock_transport_drives_verdict_worker() {
-        let dir =
-            std::env::temp_dir().join(format!("oshioki-server-verdict-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vouch-server-verdict-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let store = Arc::new(Store::open(&dir.join("state.sqlite3")).unwrap());
@@ -2751,12 +2749,12 @@ mod tests {
             host: "nas".into(),
             user: "eric".into(),
             issued_at: request_now,
-            expires_at: request_now + oshioki_protocol::MAX_REQUEST_LIFETIME_SECS,
+            expires_at: request_now + vouch_protocol::MAX_REQUEST_LIFETIME_SECS,
             sealed: vec![SealedDeviceBodyV1 {
                 device_fingerprint: device.fingerprint.clone(),
-                ephemeral_pub: oshioki_protocol::v1::encode_base64url(&[4; 32]),
-                nonce: oshioki_protocol::v1::encode_base64url(&[5; 12]),
-                ciphertext: oshioki_protocol::v1::encode_base64url(&[6; 32]),
+                ephemeral_pub: vouch_protocol::v1::encode_base64url(&[4; 32]),
+                nonce: vouch_protocol::v1::encode_base64url(&[5; 12]),
+                ciphertext: vouch_protocol::v1::encode_base64url(&[6; 32]),
             }],
         };
         let raw = serde_json::to_vec(&envelope).unwrap();
@@ -2770,7 +2768,7 @@ mod tests {
         store
             .queue_decision("req-1", &device.fingerprint, &decision, now())
             .unwrap();
-        let transport = oshioki_transport::MockTransport::new();
+        let transport = vouch_transport::MockTransport::new();
         let state = AppState {
             store: Arc::clone(&store),
             transport: Arc::new(transport.clone()),
@@ -2809,8 +2807,7 @@ mod tests {
             "duplicate publish means commit-before-ack flipped"
         );
         assert_eq!(published[0].0, "oshioki.delivery.req-1");
-        let delivery: oshioki_protocol::DeliveryV1 =
-            serde_json::from_slice(&published[0].1).unwrap();
+        let delivery: vouch_protocol::DeliveryV1 = serde_json::from_slice(&published[0].1).unwrap();
         delivery.validate("req-1").unwrap();
         assert_eq!(published[1].0, "oshioki.verdict.req-1");
         assert_eq!(published[1].1, serde_json::to_vec(&decision).unwrap());
@@ -2824,7 +2821,7 @@ mod tests {
     #[tokio::test]
     async fn the_verdict_worker_drops_receipts_past_their_deadline() {
         let dir = std::env::temp_dir().join(format!(
-            "oshioki-server-stale-delivery-{}",
+            "vouch-server-stale-delivery-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);
@@ -2835,9 +2832,9 @@ mod tests {
         store.put_device(&device).unwrap();
         let sealed = vec![SealedDeviceBodyV1 {
             device_fingerprint: device.fingerprint.clone(),
-            ephemeral_pub: oshioki_protocol::v1::encode_base64url(&[4; 32]),
-            nonce: oshioki_protocol::v1::encode_base64url(&[5; 12]),
-            ciphertext: oshioki_protocol::v1::encode_base64url(&[6; 32]),
+            ephemeral_pub: vouch_protocol::v1::encode_base64url(&[4; 32]),
+            nonce: vouch_protocol::v1::encode_base64url(&[5; 12]),
+            ciphertext: vouch_protocol::v1::encode_base64url(&[6; 32]),
         }];
         // Ingested against a clock long past: the request, and so its
         // receipt, died while the transport was unreachable.
@@ -2847,7 +2844,7 @@ mod tests {
             host: "nas".into(),
             user: "eric".into(),
             issued_at: 1_000,
-            expires_at: 1_000 + oshioki_protocol::MAX_REQUEST_LIFETIME_SECS,
+            expires_at: 1_000 + vouch_protocol::MAX_REQUEST_LIFETIME_SECS,
             sealed: sealed.clone(),
         };
         store
@@ -2859,14 +2856,14 @@ mod tests {
             host: "nas".into(),
             user: "eric".into(),
             issued_at: now(),
-            expires_at: now() + oshioki_protocol::MAX_REQUEST_LIFETIME_SECS,
+            expires_at: now() + vouch_protocol::MAX_REQUEST_LIFETIME_SECS,
             sealed,
         };
         store
             .ingest_request(&serde_json::to_vec(&live).unwrap(), &live, now())
             .unwrap();
 
-        let transport = oshioki_transport::MockTransport::new();
+        let transport = vouch_transport::MockTransport::new();
         let state = AppState {
             store: Arc::clone(&store),
             transport: Arc::new(transport.clone()),
@@ -2914,15 +2911,14 @@ mod tests {
     /// confirmation on `oshioki.device.revoked.<fingerprint>`.
     #[tokio::test]
     async fn mock_transport_drives_revocation() {
-        let dir =
-            std::env::temp_dir().join(format!("oshioki-server-revoke-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vouch-server-revoke-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let store = Store::open(&dir.join("state.sqlite3")).unwrap();
         store.ready().unwrap();
         let device = test_device();
         store.put_device(&device).unwrap();
-        let transport = oshioki_transport::MockTransport::new();
+        let transport = vouch_transport::MockTransport::new();
         let state = AppState {
             store: Arc::new(store),
             transport: Arc::new(transport.clone()),
@@ -2978,8 +2974,7 @@ mod tests {
             .await
             .unwrap_or_else(|_| panic!("{what} never fired"));
         }
-        let dir =
-            std::env::temp_dir().join(format!("oshioki-server-consume-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vouch-server-consume-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let store = Arc::new(Store::open(&dir.join("state.sqlite3")).unwrap());
@@ -2993,12 +2988,12 @@ mod tests {
             host: "nas".into(),
             user: "eric".into(),
             issued_at: request_now,
-            expires_at: request_now + oshioki_protocol::MAX_REQUEST_LIFETIME_SECS,
+            expires_at: request_now + vouch_protocol::MAX_REQUEST_LIFETIME_SECS,
             sealed: vec![SealedDeviceBodyV1 {
                 device_fingerprint: device.fingerprint.clone(),
-                ephemeral_pub: oshioki_protocol::v1::encode_base64url(&[4; 32]),
-                nonce: oshioki_protocol::v1::encode_base64url(&[5; 12]),
-                ciphertext: oshioki_protocol::v1::encode_base64url(&[6; 32]),
+                ephemeral_pub: vouch_protocol::v1::encode_base64url(&[4; 32]),
+                nonce: vouch_protocol::v1::encode_base64url(&[5; 12]),
+                ciphertext: vouch_protocol::v1::encode_base64url(&[6; 32]),
             }],
         };
         let valid_raw = serde_json::to_vec(&valid_envelope).unwrap();
@@ -3009,28 +3004,28 @@ mod tests {
         let conflict_raw = serde_json::to_vec(&conflict).unwrap();
         let (ack_tx, ack_rx) = std::sync::mpsc::channel::<()>();
         let (term_tx, term_rx) = std::sync::mpsc::channel::<()>();
-        let transport = oshioki_transport::MockTransport::new();
+        let transport = vouch_transport::MockTransport::new();
         // Oversized envelopes are terminated on length alone, before any
         // parse: a redelivery would only cost the same bytes again.
-        transport.push_request(oshioki_transport::mock::JetStreamMessageStub {
+        transport.push_request(vouch_transport::mock::JetStreamMessageStub {
             subject: "oshioki.request.nas".into(),
-            payload: vec![b'x'; oshioki_protocol::v1::MAX_ENVELOPE_BYTES + 1],
+            payload: vec![b'x'; vouch_protocol::v1::MAX_ENVELOPE_BYTES + 1],
             on_term: Some(term_tx.clone()),
             on_ack: None,
         });
-        transport.push_request(oshioki_transport::mock::JetStreamMessageStub {
+        transport.push_request(vouch_transport::mock::JetStreamMessageStub {
             subject: "oshioki.request.nas".into(),
             payload: b"not json".to_vec(),
             on_term: Some(term_tx.clone()),
             on_ack: None,
         });
-        transport.push_request(oshioki_transport::mock::JetStreamMessageStub {
+        transport.push_request(vouch_transport::mock::JetStreamMessageStub {
             subject: "oshioki.request.nas".into(),
             payload: valid_raw.clone(),
             on_term: None,
             on_ack: Some(ack_tx),
         });
-        transport.push_request(oshioki_transport::mock::JetStreamMessageStub {
+        transport.push_request(vouch_transport::mock::JetStreamMessageStub {
             subject: "oshioki.request.nas".into(),
             payload: conflict_raw,
             on_term: Some(term_tx),
@@ -3068,11 +3063,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    fn auth_test_state(
-        name: &str,
-    ) -> (PathBuf, AppState, oshioki_transport::MockTransport, String) {
-        let dir =
-            std::env::temp_dir().join(format!("oshioki-server-{name}-{}", std::process::id()));
+    fn auth_test_state(name: &str) -> (PathBuf, AppState, vouch_transport::MockTransport, String) {
+        let dir = std::env::temp_dir().join(format!("vouch-server-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let store = Arc::new(Store::open(&dir.join("state.sqlite3")).unwrap());
@@ -3080,9 +3072,9 @@ mod tests {
         let token = "browser-token-012345678901234567890".to_owned();
         let mut device = test_device();
         device.api_token_hash =
-            oshioki_protocol::encode_base64url(&sha2::Sha256::digest(token.as_bytes()));
+            vouch_protocol::encode_base64url(&sha2::Sha256::digest(token.as_bytes()));
         store.put_device(&device).unwrap();
-        let transport = oshioki_transport::MockTransport::new();
+        let transport = vouch_transport::MockTransport::new();
         let state = AppState {
             store,
             transport: Arc::new(transport.clone()),
@@ -3103,16 +3095,16 @@ mod tests {
         let issued_at = now() - 1;
         AuthEnvelopeV1 {
             message_type: AUTH_ENVELOPE_TYPE.into(),
-            version: oshioki_protocol::AUTH_WIRE_VERSION,
+            version: vouch_protocol::AUTH_WIRE_VERSION,
             request_id: id.into(),
             host: "nas".into(),
             issued_at,
             expires_at: issued_at + 75,
             sealed: vec![SealedDeviceBodyV1 {
                 device_fingerprint: fingerprint.to_owned(),
-                ephemeral_pub: oshioki_protocol::encode_base64url(&[4; 32]),
-                nonce: oshioki_protocol::encode_base64url(&[5; 12]),
-                ciphertext: oshioki_protocol::encode_base64url(&[6; 32]),
+                ephemeral_pub: vouch_protocol::encode_base64url(&[4; 32]),
+                nonce: vouch_protocol::encode_base64url(&[5; 12]),
+                ciphertext: vouch_protocol::encode_base64url(&[6; 32]),
             }],
         }
     }
@@ -3120,17 +3112,17 @@ mod tests {
     fn command_envelope(id: &str, fingerprint: &str) -> RequestEnvelopeV1 {
         let issued_at = now() - 1;
         RequestEnvelopeV1 {
-            version: oshioki_protocol::VERSION_V1,
+            version: vouch_protocol::VERSION_V1,
             request_id: id.into(),
             host: "nas".into(),
             user: "eric".into(),
             issued_at,
-            expires_at: issued_at + oshioki_protocol::MAX_REQUEST_LIFETIME_SECS - 1,
+            expires_at: issued_at + vouch_protocol::MAX_REQUEST_LIFETIME_SECS - 1,
             sealed: vec![SealedDeviceBodyV1 {
                 device_fingerprint: fingerprint.to_owned(),
-                ephemeral_pub: oshioki_protocol::encode_base64url(&[4; 32]),
-                nonce: oshioki_protocol::encode_base64url(&[5; 12]),
-                ciphertext: oshioki_protocol::encode_base64url(&[6; 32]),
+                ephemeral_pub: vouch_protocol::encode_base64url(&[4; 32]),
+                nonce: vouch_protocol::encode_base64url(&[5; 12]),
+                ciphertext: vouch_protocol::encode_base64url(&[6; 32]),
             }],
         }
     }
@@ -3139,15 +3131,15 @@ mod tests {
         let issued_at = now() - 1;
         ToolApprovalEnvelopeV1 {
             message_type: TOOL_ENVELOPE_TYPE.into(),
-            version: oshioki_protocol::TOOL_WIRE_VERSION,
+            version: vouch_protocol::TOOL_WIRE_VERSION,
             request_id: id.into(),
             issued_at,
             expires_at: issued_at + 90,
             sealed: vec![ToolSealedBodyV1 {
                 device_fingerprint: fingerprint.to_owned(),
-                ephemeral_pub: oshioki_protocol::encode_base64url(&[4; 32]),
-                nonce: oshioki_protocol::encode_base64url(&[5; 12]),
-                ciphertext: oshioki_protocol::encode_base64url(&[6; 32]),
+                ephemeral_pub: vouch_protocol::encode_base64url(&[4; 32]),
+                nonce: vouch_protocol::encode_base64url(&[5; 12]),
+                ciphertext: vouch_protocol::encode_base64url(&[6; 32]),
             }],
         }
     }
@@ -3165,17 +3157,17 @@ mod tests {
         }))
         .unwrap();
         let request = ToolApprovalRequestV1 {
-            message_type: oshioki_protocol::TOOL_REQUEST_TYPE.into(),
-            version: oshioki_protocol::TOOL_WIRE_VERSION,
+            message_type: vouch_protocol::TOOL_REQUEST_TYPE.into(),
+            version: vouch_protocol::TOOL_WIRE_VERSION,
             request_id: id.into(),
-            nonce: oshioki_protocol::encode_base64url(&[6; 16]),
-            harness: oshioki_protocol::ToolHarnessV1::Codex,
+            nonce: vouch_protocol::encode_base64url(&[6; 16]),
+            harness: vouch_protocol::ToolHarnessV1::Codex,
             event: "PermissionRequest".into(),
             tool_name: "Bash".into(),
             tool_input,
             cwd: "/tmp/project".into(),
             native_event_json,
-            context: oshioki_protocol::ToolContextV1 {
+            context: vouch_protocol::ToolContextV1 {
                 session_id: Some("session-1".into()),
                 turn_id: Some("turn-1".into()),
                 ..Default::default()
@@ -3191,7 +3183,7 @@ mod tests {
     fn seed_parallel_tool_and_command(
         state: &AppState,
         id: &str,
-        device: &oshioki_protocol::DevicePublicRecordV1,
+        device: &vouch_protocol::DevicePublicRecordV1,
     ) -> ToolApprovalEnvelopeV1 {
         let command = command_envelope(id, &device.fingerprint);
         let command_raw = serde_json::to_vec(&command).unwrap();
@@ -3217,15 +3209,15 @@ mod tests {
     fn signed_tool_decision(
         request: &ToolApprovalRequestV1,
         raw: &[u8],
-        device: &oshioki_protocol::DevicePublicRecordV1,
-        action: oshioki_protocol::ToolDecisionActionV1,
+        device: &vouch_protocol::DevicePublicRecordV1,
+        action: vouch_protocol::ToolDecisionActionV1,
     ) -> ToolApprovalDecisionV1 {
         use p256::ecdsa::{SigningKey, signature::Signer as _};
         let signing = SigningKey::from_slice(&[2; 32]).unwrap();
-        let challenge = oshioki_protocol::tool_approval_challenge(action, raw);
+        let challenge = vouch_protocol::tool_approval_challenge(action, raw);
         let client_data = serde_json::to_vec(&json!({
             "type":"webauthn.get",
-            "challenge":oshioki_protocol::v1::encode_base64url(&challenge),
+            "challenge":vouch_protocol::v1::encode_base64url(&challenge),
             "origin":"https://sudo.test",
             "crossOrigin":false,
         }))
@@ -3235,32 +3227,32 @@ mod tests {
         let mut signed = authenticator_data.clone();
         signed.extend_from_slice(&sha2::Sha256::digest(&client_data));
         let signature: p256::ecdsa::Signature = signing.sign(&signed);
-        let assertion = oshioki_protocol::ToolApprovalWebauthnV1 {
-            version: oshioki_protocol::TOOL_WIRE_VERSION,
+        let assertion = vouch_protocol::ToolApprovalWebauthnV1 {
+            version: vouch_protocol::TOOL_WIRE_VERSION,
             request_id: request.request_id.clone(),
             device_fingerprint: device.fingerprint.clone(),
             credential_id: device.credential_id.clone(),
-            authenticator_data: oshioki_protocol::v1::encode_base64url(&authenticator_data),
-            client_data_json: oshioki_protocol::v1::encode_base64url(&client_data),
-            signature: oshioki_protocol::v1::encode_base64url(signature.to_der().as_bytes()),
+            authenticator_data: vouch_protocol::v1::encode_base64url(&authenticator_data),
+            client_data_json: vouch_protocol::v1::encode_base64url(&client_data),
+            signature: vouch_protocol::v1::encode_base64url(signature.to_der().as_bytes()),
         };
         match action {
-            oshioki_protocol::ToolDecisionActionV1::Approve => {
+            vouch_protocol::ToolDecisionActionV1::Approve => {
                 ToolApprovalDecisionV1::Approve(assertion)
             }
-            oshioki_protocol::ToolDecisionActionV1::Deny => ToolApprovalDecisionV1::Deny(assertion),
+            vouch_protocol::ToolDecisionActionV1::Deny => ToolApprovalDecisionV1::Deny(assertion),
         }
     }
 
     fn webauthn_assertion(id: &str, fingerprint: &str) -> AuthApproveWebauthnV1 {
         AuthApproveWebauthnV1 {
-            version: oshioki_protocol::AUTH_WIRE_VERSION,
+            version: vouch_protocol::AUTH_WIRE_VERSION,
             request_id: id.into(),
             device_fingerprint: fingerprint.to_owned(),
-            credential_id: oshioki_protocol::encode_base64url(&[1; 16]),
-            authenticator_data: oshioki_protocol::encode_base64url(&[7; 37]),
-            client_data_json: oshioki_protocol::encode_base64url(b"{\"type\":\"webauthn.get\"}"),
-            signature: oshioki_protocol::encode_base64url(&[8; 70]),
+            credential_id: vouch_protocol::encode_base64url(&[1; 16]),
+            authenticator_data: vouch_protocol::encode_base64url(&[7; 37]),
+            client_data_json: vouch_protocol::encode_base64url(b"{\"type\":\"webauthn.get\"}"),
+            signature: vouch_protocol::encode_base64url(&[8; 70]),
         }
     }
 
@@ -3373,7 +3365,7 @@ mod tests {
 
         // The request is answered: a second, different assertion is refused.
         let mut replacement = assertion;
-        replacement.signature = oshioki_protocol::encode_base64url(&[9; 70]);
+        replacement.signature = vouch_protocol::encode_base64url(&[9; 70]);
         assert_eq!(
             authenticate_webauthn(
                 State(state),
@@ -3434,12 +3426,12 @@ mod tests {
             &request,
             &request_raw,
             &device,
-            oshioki_protocol::ToolDecisionActionV1::Deny,
+            vouch_protocol::ToolDecisionActionV1::Deny,
         );
         let mut invalid = deny.clone();
         match &mut invalid {
             ToolApprovalDecisionV1::Approve(value) | ToolApprovalDecisionV1::Deny(value) => {
-                value.signature = oshioki_protocol::encode_base64url(&[9; 64]);
+                value.signature = vouch_protocol::encode_base64url(&[9; 64]);
             }
         }
         let submission = || ToolDecisionSubmission {
@@ -3495,7 +3487,7 @@ mod tests {
             &request,
             &request_raw,
             &device,
-            oshioki_protocol::ToolDecisionActionV1::Approve,
+            vouch_protocol::ToolDecisionActionV1::Approve,
         );
         assert_eq!(
             submit_tool_decision(
@@ -3533,7 +3525,7 @@ mod tests {
             .unwrap_or_else(|_| panic!("{what} never fired"));
         }
         let dir = std::env::temp_dir().join(format!(
-            "oshioki-server-consumer-lanes-{}",
+            "vouch-server-consumer-lanes-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);
@@ -3541,16 +3533,16 @@ mod tests {
         let store = Arc::new(Store::open(&dir.join("state.sqlite3")).unwrap());
         store.ready().unwrap();
         let device = test_device();
-        let transport = oshioki_transport::MockTransport::new();
+        let transport = vouch_transport::MockTransport::new();
         let (command_tx, command_rx) = std::sync::mpsc::channel();
         let (auth_tx, auth_rx) = std::sync::mpsc::channel();
-        transport.push_request(oshioki_transport::mock::JetStreamMessageStub {
+        transport.push_request(vouch_transport::mock::JetStreamMessageStub {
             subject: "oshioki.request.nas".into(),
             payload: serde_json::to_vec(&command_envelope("cmd-1", &device.fingerprint)).unwrap(),
             on_term: None,
             on_ack: Some(command_tx),
         });
-        transport.push_request(oshioki_transport::mock::JetStreamMessageStub {
+        transport.push_request(vouch_transport::mock::JetStreamMessageStub {
             subject: "oshioki.auth.nas".into(),
             payload: serde_json::to_vec(&auth_envelope("auth-1", &device.fingerprint)).unwrap(),
             on_term: None,
@@ -3595,7 +3587,7 @@ mod tests {
         let (dir, state, transport, _token) = auth_test_state("malformed-request-types");
         let device = test_device();
         let (term_tx, term_rx) = std::sync::mpsc::channel();
-        transport.push_request(oshioki_transport::mock::JetStreamMessageStub {
+        transport.push_request(vouch_transport::mock::JetStreamMessageStub {
             subject: "oshioki.auth.nas".into(),
             payload: serde_json::to_vec(&serde_json::json!({
                 "type": AUTH_ENVELOPE_TYPE,
@@ -3609,7 +3601,7 @@ mod tests {
         let mut disguised =
             serde_json::to_value(command_envelope("cmd-disguised", &device.fingerprint)).unwrap();
         disguised["type"] = serde_json::json!("sudo_something_else");
-        transport.push_request(oshioki_transport::mock::JetStreamMessageStub {
+        transport.push_request(vouch_transport::mock::JetStreamMessageStub {
             subject: "oshioki.request.nas".into(),
             payload: serde_json::to_vec(&disguised).unwrap(),
             on_term: Some(term_tx),
@@ -3695,7 +3687,7 @@ mod tests {
         ];
         let (term_tx, term_rx) = std::sync::mpsc::channel();
         for (subject, _, payload) in &mismatches {
-            transport.push_request(oshioki_transport::mock::JetStreamMessageStub {
+            transport.push_request(vouch_transport::mock::JetStreamMessageStub {
                 subject: (*subject).into(),
                 payload: payload.clone(),
                 on_term: Some(term_tx.clone()),
@@ -3751,13 +3743,13 @@ mod tests {
             .unwrap();
 
         let approval = ApproveV1 {
-            version: oshioki_protocol::VERSION_V1,
+            version: vouch_protocol::VERSION_V1,
             request_id: "auth-cross".into(),
             device_fingerprint: device.fingerprint.clone(),
-            credential_id: oshioki_protocol::encode_base64url(&[1; 16]),
-            authenticator_data: oshioki_protocol::encode_base64url(&[7; 37]),
-            client_data_json: oshioki_protocol::encode_base64url(b"{\"type\":\"webauthn.get\"}"),
-            signature: oshioki_protocol::encode_base64url(&[8; 70]),
+            credential_id: vouch_protocol::encode_base64url(&[1; 16]),
+            authenticator_data: vouch_protocol::encode_base64url(&[7; 37]),
+            client_data_json: vouch_protocol::encode_base64url(b"{\"type\":\"webauthn.get\"}"),
+            signature: vouch_protocol::encode_base64url(&[8; 70]),
         };
         assert_eq!(
             approve_request(
@@ -3772,7 +3764,7 @@ mod tests {
             StatusCode::NOT_FOUND
         );
         let denial = DenyV1 {
-            version: oshioki_protocol::VERSION_V1,
+            version: vouch_protocol::VERSION_V1,
             request_id: "auth-cross".into(),
             device_fingerprint: device.fingerprint.clone(),
             signature: None,
@@ -3921,7 +3913,7 @@ mod tests {
         assert!(!page.to_lowercase().contains("deny"));
     }
 
-    fn test_device() -> oshioki_protocol::DevicePublicRecordV1 {
+    fn test_device() -> vouch_protocol::DevicePublicRecordV1 {
         let credential_id = vec![1; 16];
         let signing = p256::ecdsa::SigningKey::from_slice(&[2; 32]).unwrap();
         let point = signing.verifying_key().to_sec1_point(false);
@@ -3950,20 +3942,20 @@ mod tests {
         let mut credential_public_key = Vec::new();
         ciborium::ser::into_writer(&cose, &mut credential_public_key).unwrap();
         let box_public_key = vec![3; 32];
-        let fingerprint = oshioki_protocol::device_fingerprint(
+        let fingerprint = vouch_protocol::device_fingerprint(
             &credential_id,
             &credential_public_key,
             &box_public_key,
         );
-        oshioki_protocol::DevicePublicRecordV1 {
+        vouch_protocol::DevicePublicRecordV1 {
             version: 1,
-            kind: oshioki_protocol::DeviceKindV1::Webauthn,
+            kind: vouch_protocol::DeviceKindV1::Webauthn,
             fingerprint,
-            credential_id: oshioki_protocol::v1::encode_base64url(&credential_id),
-            credential_public_key: oshioki_protocol::v1::encode_base64url(&credential_public_key),
-            box_public_key: oshioki_protocol::v1::encode_base64url(&box_public_key),
+            credential_id: vouch_protocol::v1::encode_base64url(&credential_id),
+            credential_public_key: vouch_protocol::v1::encode_base64url(&credential_public_key),
+            box_public_key: vouch_protocol::v1::encode_base64url(&box_public_key),
             label: "test".into(),
-            api_token_hash: oshioki_protocol::v1::encode_base64url(&[9; 32]),
+            api_token_hash: vouch_protocol::v1::encode_base64url(&[9; 32]),
             sign_count: 0,
             active: true,
         }
@@ -3975,7 +3967,7 @@ mod tests {
     #[tokio::test]
     async fn browser_ack_requires_authenticated_pending_request() {
         let dir =
-            std::env::temp_dir().join(format!("oshioki-server-browser-ack-{}", std::process::id()));
+            std::env::temp_dir().join(format!("vouch-server-browser-ack-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let store = Arc::new(Store::open(&dir.join("state.sqlite3")).unwrap());
@@ -3983,26 +3975,26 @@ mod tests {
         let token = "browser-token-012345678901234567890";
         let mut device = test_device();
         device.api_token_hash =
-            oshioki_protocol::encode_base64url(&sha2::Sha256::digest(token.as_bytes()));
+            vouch_protocol::encode_base64url(&sha2::Sha256::digest(token.as_bytes()));
         store.put_device(&device).unwrap();
         let request_now = now();
         let request = RequestEnvelopeV1 {
-            version: oshioki_protocol::VERSION_V1,
+            version: vouch_protocol::VERSION_V1,
             request_id: "browser-ack-request".into(),
             host: "nas".into(),
             user: "eric".into(),
             issued_at: request_now - 1,
-            expires_at: request_now + oshioki_protocol::MAX_REQUEST_LIFETIME_SECS - 1,
+            expires_at: request_now + vouch_protocol::MAX_REQUEST_LIFETIME_SECS - 1,
             sealed: vec![SealedDeviceBodyV1 {
                 device_fingerprint: device.fingerprint.clone(),
-                ephemeral_pub: oshioki_protocol::encode_base64url(&[4; 32]),
-                nonce: oshioki_protocol::encode_base64url(&[5; 12]),
-                ciphertext: oshioki_protocol::encode_base64url(&[6; 32]),
+                ephemeral_pub: vouch_protocol::encode_base64url(&[4; 32]),
+                nonce: vouch_protocol::encode_base64url(&[5; 12]),
+                ciphertext: vouch_protocol::encode_base64url(&[6; 32]),
             }],
         };
         let raw = serde_json::to_vec(&request).unwrap();
         store.ingest_request(&raw, &request, request_now).unwrap();
-        let transport = oshioki_transport::MockTransport::new();
+        let transport = vouch_transport::MockTransport::new();
         let state = AppState {
             store,
             transport: Arc::new(transport.clone()),

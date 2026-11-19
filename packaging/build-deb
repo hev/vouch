@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Assemble the oshioki .deb from release binaries.
+# Assemble the vouch .deb from release binaries.
 #
 #   packaging/build-deb STAGE_DIR VERSION OUTPUT_DEB
 #
 # STAGE_DIR holds the release artifacts built for the target architecture:
-# oshioki, liboshioki_plugin.so, liboshioki_pam.so, oshioki-server,
-# oshioki-browser-relay, oshioki-google-login-setup,
-# oshioki-browser-service, and a SHA256SUMS with one entry per staged file.
+# vouch, libvouch_plugin.so, libvouch_pam.so, vouch-server,
+# vouch-browser-relay, vouch-google-login-setup,
+# vouch-browser-service, and a SHA256SUMS with one entry per staged file.
 # VERSION is the Debian version,
 # e.g. 0.1.0 for tag v0.1.0. DEB_ARCH overrides the target architecture
 # (default amd64) for local validation; the staged binaries must match it.
@@ -22,10 +22,10 @@ case "$OUTPUT_DEB" in /*) ;; *) OUTPUT_DEB="$(pwd -P)/$OUTPUT_DEB" ;; esac
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 ARCH="${DEB_ARCH:-amd64}"
 
-for artifact in oshioki liboshioki_plugin.so liboshioki_pam.so oshioki-server oshioki-browser-relay oshioki-google-login-setup oshioki-browser-service SHA256SUMS; do
+for artifact in vouch libvouch_plugin.so libvouch_pam.so vouch-server vouch-browser-relay vouch-google-login-setup vouch-browser-service SHA256SUMS; do
   [ -f "$STAGE_DIR/$artifact" ] || { echo "build-deb: missing $STAGE_DIR/$artifact" >&2; exit 1; }
 done
-for name in oshioki liboshioki_plugin.so liboshioki_pam.so oshioki-browser-relay oshioki-google-login-setup oshioki-browser-service; do
+for name in vouch libvouch_plugin.so libvouch_pam.so vouch-browser-relay vouch-google-login-setup vouch-browser-service; do
   awk -v name="$name" '$2 == name {found=1} END {exit !found}' "$STAGE_DIR/SHA256SUMS" \
     || { echo "build-deb: SHA256SUMS has no entry for $name" >&2; exit 1; }
 done
@@ -38,29 +38,29 @@ case "$ARCH" in
   *) echo "build-deb: unsupported DEB_ARCH $ARCH" >&2; exit 1 ;;
 esac
 command -v file >/dev/null || { echo "build-deb: need the file command" >&2; exit 1; }
-for artifact in oshioki liboshioki_plugin.so liboshioki_pam.so oshioki-server oshioki-browser-relay; do
+for artifact in vouch libvouch_plugin.so libvouch_pam.so vouch-server vouch-browser-relay; do
   file -b "$STAGE_DIR/$artifact" | grep -Eq "$arch_probe" \
     || { echo "build-deb: $artifact does not match DEB_ARCH=$ARCH" >&2; exit 1; }
 done
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-TREE="$WORK/oshioki_$VERSION"
+TREE="$WORK/vouch_$VERSION"
 
 cp -r "$ROOT/packaging/debian" "$TREE"
 sed -i "s/@VERSION@/$VERSION/g; s/^Architecture: .*/Architecture: $ARCH/" "$TREE/DEBIAN/control"
 
-install -d "$TREE/usr/share/oshioki" "$TREE/usr/sbin" "$TREE/usr/bin"
-install -m 0755 "$STAGE_DIR/oshioki-browser-relay" "$TREE/usr/bin/oshioki-browser-relay"
-install -m 0755 "$STAGE_DIR/oshioki-google-login-setup" "$TREE/usr/bin/oshioki-google-login-setup"
-install -m 0755 "$STAGE_DIR/oshioki-browser-service" "$TREE/usr/bin/oshioki-browser-service"
-install -m 0755 "$STAGE_DIR/oshioki" "$TREE/usr/share/oshioki/"
-install -m 0644 "$STAGE_DIR/liboshioki_plugin.so" "$STAGE_DIR/liboshioki_pam.so" \
-  "$STAGE_DIR/SHA256SUMS" "$TREE/usr/share/oshioki/"
-install -m 0755 "$STAGE_DIR/oshioki-server" "$TREE/usr/sbin/oshioki-server"
-install -m 0755 "$ROOT/scripts/oshioki-phone-setup" "$TREE/usr/sbin/oshioki-phone-setup"
-install -m 0755 "$ROOT/scripts/install-oshioki-hook" "$TREE/usr/share/oshioki/install-oshioki-hook"
-install -d -m 0700 "$TREE/etc/oshioki"
+install -d "$TREE/usr/share/vouch" "$TREE/usr/sbin" "$TREE/usr/bin"
+install -m 0755 "$STAGE_DIR/vouch-browser-relay" "$TREE/usr/bin/vouch-browser-relay"
+install -m 0755 "$STAGE_DIR/vouch-google-login-setup" "$TREE/usr/bin/vouch-google-login-setup"
+install -m 0755 "$STAGE_DIR/vouch-browser-service" "$TREE/usr/bin/vouch-browser-service"
+install -m 0755 "$STAGE_DIR/vouch" "$TREE/usr/share/vouch/"
+install -m 0644 "$STAGE_DIR/libvouch_plugin.so" "$STAGE_DIR/libvouch_pam.so" \
+  "$STAGE_DIR/SHA256SUMS" "$TREE/usr/share/vouch/"
+install -m 0755 "$STAGE_DIR/vouch-server" "$TREE/usr/sbin/vouch-server"
+install -m 0755 "$ROOT/scripts/vouch-phone-setup" "$TREE/usr/sbin/vouch-phone-setup"
+install -m 0755 "$ROOT/scripts/install-vouch-hook" "$TREE/usr/share/vouch/install-vouch-hook"
+install -d -m 0700 "$TREE/etc/vouch"
 
 # The multiarch triplet this package was built for. The installer refuses to
 # drop the PAM module into a security directory that disagrees with it: a
@@ -70,8 +70,8 @@ install -d -m 0700 "$TREE/etc/oshioki"
 command -v dpkg-architecture >/dev/null || { echo "build-deb: need dpkg-architecture (dpkg-dev)" >&2; exit 1; }
 MULTIARCH="$(dpkg-architecture -a"$ARCH" -qDEB_HOST_MULTIARCH 2>/dev/null || true)"
 [ -n "$MULTIARCH" ] || { echo "build-deb: dpkg-architecture reported no DEB_HOST_MULTIARCH for $ARCH" >&2; exit 1; }
-printf '%s\n' "$MULTIARCH" > "$TREE/usr/share/oshioki/pam-multiarch"
-chmod 0644 "$TREE/usr/share/oshioki/pam-multiarch"
+printf '%s\n' "$MULTIARCH" > "$TREE/usr/share/vouch/pam-multiarch"
+chmod 0644 "$TREE/usr/share/vouch/pam-multiarch"
 
 # Versioned libc dependency from the actual binaries. Rust links libc, and a
 # deb that installs on an older distro than the build host must say so.
@@ -79,11 +79,11 @@ chmod 0644 "$TREE/usr/share/oshioki/pam-multiarch"
 # directory, so give it a scratch one; the binaries may live anywhere.
 command -v dpkg-shlibdeps >/dev/null || { echo "build-deb: need dpkg-shlibdeps (dpkg-dev)" >&2; exit 1; }
 mkdir -p "$WORK/scan/debian"
-printf 'Source: oshioki\nMaintainer: Oshioki contributors\n\nPackage: oshioki\nArchitecture: any\n' > "$WORK/scan/debian/control"
+printf 'Source: vouch\nMaintainer: Vouch contributors\n\nPackage: vouch\nArchitecture: any\n' > "$WORK/scan/debian/control"
 shlib_log="$WORK/shlib-errors.log"
 shlib_depends="$(
-  cd "$WORK/scan" && dpkg-shlibdeps -O "$TREE/usr/sbin/oshioki-server" "$TREE/usr/share/oshioki/oshioki" \
-    "$TREE/usr/share/oshioki/liboshioki_pam.so" "$TREE/usr/bin/oshioki-browser-relay" \
+  cd "$WORK/scan" && dpkg-shlibdeps -O "$TREE/usr/sbin/vouch-server" "$TREE/usr/share/vouch/vouch" \
+    "$TREE/usr/share/vouch/libvouch_pam.so" "$TREE/usr/bin/vouch-browser-relay" \
     2>"$shlib_log" | sed 's/^shlibs:Depends=//'
 )" || { cat "$shlib_log" >&2; echo "build-deb: dpkg-shlibdeps failed" >&2; exit 1; }
 [ -n "$shlib_depends" ] || { cat "$shlib_log" >&2; echo "build-deb: dpkg-shlibdeps produced no Depends" >&2; exit 1; }

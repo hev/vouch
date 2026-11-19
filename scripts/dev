@@ -17,18 +17,18 @@ compose() {
     compose_uid=0
   fi
   extra_files=()
-  if [ -n "${OSHIOKI_PUBLISH_NATS:-}" ]; then
+  if [ -n "${VOUCH_PUBLISH_NATS:-}" ]; then
     extra_files=(-f "$REPO_ROOT/compose.nats-port.yaml")
   fi
-  OSHIOKI_STATE_ROOT="$state_root" OSHIOKI_HTTP_PORT="${http_port:-8443}" \
-    OSHIOKI_UID="$compose_uid" OSHIOKI_HOST_UID="$host_uid" \
+  VOUCH_STATE_ROOT="$state_root" VOUCH_HTTP_PORT="${http_port:-8443}" \
+    VOUCH_UID="$compose_uid" VOUCH_HOST_UID="$host_uid" \
     docker compose -f "$REPO_ROOT/compose.yaml" "${extra_files[@]}" -p "$project_name" "$@"
 }
 
 local_checks() {
   cargo test --manifest-path "$REPO_ROOT/Cargo.toml" --workspace --locked
   cargo clippy --manifest-path "$REPO_ROOT/Cargo.toml" --workspace --all-targets --locked -- -D warnings
-  cargo build --manifest-path "$REPO_ROOT/Cargo.toml" --locked -p oshioki-hook -p oshioki-agent
+  cargo build --manifest-path "$REPO_ROOT/Cargo.toml" --locked -p vouch-hook -p vouch-agent
   if [ "$(uname -s)" = Linux ] && { command -v nats-server >/dev/null 2>&1 || command -v docker >/dev/null 2>&1; }; then
     "$REPO_ROOT/scripts/test-nats-lane-upgrade"
   else
@@ -42,10 +42,10 @@ local_checks() {
   else
     echo "test-dev-acceptance: SKIP (Linux only)"
   fi
-  "$REPO_ROOT/scripts/test-install-oshioki-hook"
+  "$REPO_ROOT/scripts/test-install-vouch-hook"
   "$REPO_ROOT/scripts/test-debian-package-scripts"
-  "$REPO_ROOT/scripts/test-oshioki-laptop-setup"
-  "$REPO_ROOT/scripts/test-oshioki-phone-setup"
+  "$REPO_ROOT/scripts/test-vouch-laptop-setup"
+  "$REPO_ROOT/scripts/test-vouch-phone-setup"
   python3 "$REPO_ROOT/scripts/test-google-login-setup"
   python3 "$REPO_ROOT/scripts/test-browser-service"
 }
@@ -83,7 +83,7 @@ case "$command_name" in
     managed_state=1
     if [ "$#" -eq 0 ]; then
       temp_root="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
-      state_root="$(mktemp -d "$temp_root/oshioki-dev.XXXXXX")"
+      state_root="$(mktemp -d "$temp_root/vouch-dev.XXXXXX")"
     elif [ "$#" -eq 2 ] && [ "$1" = "--state-dir" ]; then
       state_root="$(mkdir -p "$2" && cd "$2" && pwd -P)"
       managed_state=0
@@ -91,14 +91,14 @@ case "$command_name" in
       usage
     fi
     install -d -m 0700 "$state_root/server" "$state_root/e2e"
-    project_name="oshioki-dev-$(basename "$state_root" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')"
+    project_name="vouch-dev-$(basename "$state_root" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')"
     session_tmp="$SESSION_FILE.$$"
     printf '%s\n%s\n%s\n' "$project_name" "$state_root" "$managed_state" >"$session_tmp"
     mv "$session_tmp" "$SESSION_FILE"
     # The retained server is also the Mac hook's backend: publish NATS on
     # loopback so host-side clients can reach it. Disposable `test`
     # projects never set this, so they cannot collide on the port.
-    if ! OSHIOKI_PUBLISH_NATS=1 compose up --detach server; then
+    if ! VOUCH_PUBLISH_NATS=1 compose up --detach server; then
       rm -f "$SESSION_FILE"
       [ "$managed_state" = 0 ] || rm -rf -- "$state_root"
       exit 1
@@ -117,10 +117,10 @@ case "$command_name" in
     [ "$#" -eq 0 ] || usage
     local_checks
     temp_root="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
-    state_root="$(mktemp -d "$temp_root/oshioki-e2e.XXXXXX")"
+    state_root="$(mktemp -d "$temp_root/vouch-e2e.XXXXXX")"
     http_port=0
     install -d -m 0700 "$state_root/server" "$state_root/e2e"
-    project_name="oshioki-e2e-$(basename "$state_root" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')"
+    project_name="vouch-e2e-$(basename "$state_root" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')"
     test_ok=0
     cleanup_test() {
       set +e
@@ -164,7 +164,7 @@ case "$command_name" in
         exit 1
       fi
       case "$(basename "$state_root")" in
-        oshioki-dev.*) rm -rf -- "$state_root" ;;
+        vouch-dev.*) rm -rf -- "$state_root" ;;
         *) echo "refusing to remove unexpected managed state path: $state_root" >&2; exit 1 ;;
       esac
     fi

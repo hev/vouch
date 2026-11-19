@@ -25,26 +25,28 @@ use url::{Host, Url};
 use uuid::Uuid;
 
 mod approvals;
+mod log_cmd;
 mod registry;
 mod sudo_lane;
 #[path = "../../cli/terminal_logo.rs"]
 mod terminal_logo;
 
-use oshioki_protocol::auth_v1::{
+use vouch_protocol::auth_v1::{
     AUTH_ENVELOPE_TYPE, AUTH_REQUEST_TYPE, AUTH_WIRE_VERSION, AuthDecisionV1, AuthEnvelopeV1,
     AuthInvocationV1, AuthRequestV1, SubmittedAuthContextV1, TrustedAuthContextV1,
     hardware_auth_recipients, verify_native_authentication_v1, verify_webauthn_authentication_v1,
 };
-use oshioki_protocol::{
+use vouch_protocol::{
     ActivationV1, DecisionV1, DenyV1, DeviceKindV1, DevicePublicRecordV1, DeviceRegistryV1,
     EnrollmentIntentV1, EnrollmentSubmissionV1, EnvEntryV1, HookConfigV1,
     PRIVATE_PLUGIN_HOOK_PROTOCOL_VERSION, RequestEnvelopeV1, RequestV1, VERSION_V1,
-    escape_for_terminal, verify_approval_v1, verify_deny_v1, verify_enrollment_v1,
-    verify_native_approval_v1, verify_native_enrollment_v1, verify_software_native_enrollment_v1,
+    escape_for_terminal, normalize_reason, normalize_session_label, verify_approval_v1,
+    verify_deny_v1, verify_enrollment_v1, verify_native_approval_v1, verify_native_enrollment_v1,
+    verify_software_native_enrollment_v1,
 };
-use oshioki_transport::{HookProgress, HookTransport, HookTransportFailure, NatsTransport};
+use vouch_transport::{HookProgress, HookTransport, HookTransportFailure, NatsTransport};
 
-const DEFAULT_CONFIG_DIR: &str = "/etc/oshioki";
+const DEFAULT_CONFIG_DIR: &str = "/etc/vouch";
 /// How long the hook waits to connect to the local agent socket. A missing
 /// socket fails fast into the NATS fallback; the approval deadline still
 /// governs the wait for a verdict.
@@ -53,7 +55,7 @@ const DAEMON_ACK_TIMEOUT: Duration = Duration::from_secs(3);
 /// How long enroll waits on the approval transport before it says so. Longer
 /// than `DAEMON_ACK_TIMEOUT` because enrollment is an interactive, one-shot
 /// operation against a server that may be waking up, and shorter than the
-/// 60s URL poll in `oshioki-laptop-setup` so the script reports the hook's
+/// 60s URL poll in `vouch-laptop-setup` so the script reports the hook's
 /// own explanation rather than its own "produced no URL".
 const ENROLLMENT_TRANSPORT_TIMEOUT: Duration = Duration::from_secs(20);
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(90);
@@ -114,10 +116,10 @@ const ACTIVATION_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Parser)]
 #[command(
-    name = "oshioki",
-    about = "Manage Oshioki sudo approvals",
+    name = "vouch",
+    about = "Manage Vouch sudo approvals",
     version,
-    after_help = "Examples:\n  sudo oshioki enroll\n  sudo oshioki status\n  sudo oshioki revoke <fingerprint>"
+    after_help = "Examples:\n  sudo vouch enroll\n  sudo vouch status\n  sudo vouch revoke <fingerprint>"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -162,7 +164,7 @@ enum Verb {
     },
     /// Pin a device from a JSON record file.
     PinRecord {
-        /// Path to a record from `oshioki-agent device-record`.
+        /// Path to a record from `vouch-agent device-record`.
         #[arg(value_name = "PATH", allow_hyphen_values = true)]
         path: PathBuf,
     },
@@ -183,7 +185,10 @@ enum Verb {
     },
     /// Send a synthetic request through the approval flow.
     Test,
-    /// Private installer verb. `scripts/install-oshioki-hook --contextual-pam`
+    /// Show the approval log this Mac's agent keeps: one line per request it
+    /// decided, with who asked, why, what ran and how it ended.
+    Log(log_cmd::LogArgs),
+    /// Private installer verb. `scripts/install-vouch-hook --contextual-pam`
     /// runs it after staging the PAM module and before any /etc/pam.d file
     /// references it: dlopen the file, dlsym the two auth entry points,
     /// dlclose, exit 0 or non-zero. Hidden for the same reason `check` and
@@ -254,6 +259,7 @@ async fn run(cli: Cli, checking: bool, lane: Result<()>) -> Result<()> {
         Ok(Verb::Watch) => cmd_watch().await,
         Ok(Verb::Approvals { command }) => approvals::run(command).await,
         Ok(Verb::Test) => cmd_test().await,
+        Ok(Verb::Log(args)) => log_cmd::run(&args),
         Ok(Verb::PamSelftest { module }) => pam_selftest::run(&module),
     };
     if let Err(error) = result {
@@ -367,14 +373,14 @@ mod logging {
     const MAX_DATAGRAM_LINE: usize = 2048;
 
     /// `checking` is the sudo path: its terminal level comes from
-    /// `OSHIOKI_LOG` in `config.env`, which root writes, never from the
+    /// `VOUCH_LOG` in `config.env`, which root writes, never from the
     /// caller's environment. Other verbs run for a person and honour
     /// `RUST_LOG`.
     pub fn init(checking: bool) {
         let directives = if checking {
             super::read_env_file(&super::check_config_dir().join("config.env"))
                 .ok()
-                .and_then(|env| env.get("OSHIOKI_LOG").cloned())
+                .and_then(|env| env.get("VOUCH_LOG").cloned())
         } else {
             std::env::var("RUST_LOG").ok()
         };
@@ -477,15 +483,15 @@ mod logging {
                     // Fire and forget: the hook exits right after the
                     // record and launchd reaps the child, and a wedged
                     // log daemon must not hold a sudo. The message keeps
-                    // the same `oshioki[pid]:` prefix as the datagram so
+                    // the same `vouch[pid]:` prefix as the datagram so
                     // the unified log can be filtered on it; `--` keeps a
                     // line starting with `-` from being read as an option.
                     let _ = std::process::Command::new(LOGGER)
                         .env_clear()
-                        .args(["-t", "oshioki", "-p"])
+                        .args(["-t", "vouch", "-p"])
                         .arg(format!("authpriv.{}", severity_name(severity)))
                         .arg("--")
-                        .arg(format!("oshioki[{}]: {}", self.pid, sanitize(line)))
+                        .arg(format!("vouch[{}]: {}", self.pid, sanitize(line)))
                         .stdin(std::process::Stdio::null())
                         .stdout(std::process::Stdio::null())
                         .stderr(std::process::Stdio::null())
@@ -510,10 +516,10 @@ mod logging {
         clean
     }
 
-    /// `<PRI>oshioki[pid]: line`, the BSD syslog datagram.
+    /// `<PRI>vouch[pid]: line`, the BSD syslog datagram.
     pub fn datagram(pid: u32, severity: u8, line: &str) -> String {
         format!(
-            "<{}>oshioki[{pid}]: {}",
+            "<{}>vouch[{pid}]: {}",
             LOG_AUTHPRIV * 8 + severity,
             sanitize(line)
         )
@@ -642,11 +648,55 @@ mod logging {
                 tracing::warn!(target: "audit", error = "deadline", "sudo request denied");
                 tracing::warn!("counter regressed");
                 tracing::info!("no agent on the socket; trying NATS");
-                tracing::info!(target: "oshioki_transport::nats", "connected successfully");
+                tracing::info!(target: "vouch_transport::nats", "connected successfully");
                 tracing::info!(target: "async_nats", "event: connected");
             });
             let seen = seen.lock().unwrap().clone();
             (terminal.text(), seen)
+        }
+
+        /// Each verdict leaves one authpriv line with the request id, the
+        /// user, the argv and the outcome; a rejection adds its reason.
+        #[test]
+        fn verdicts_reach_the_system_log_with_request_user_argv_and_outcome() {
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let sink = Arc::clone(&seen);
+            let subscriber = tracing_subscriber::registry().with(
+                SyslogLayer::new(move |severity, line| {
+                    sink.lock().unwrap().push((severity, line.to_string()));
+                })
+                .with_filter(syslog_filter()),
+            );
+            let argv = vec!["launchctl".to_owned(), "kickstart\nforged".to_owned()];
+            tracing::subscriber::with_default(subscriber, || {
+                crate::audit_verdict("r-ok", "adam", &argv, ("approved", None));
+                crate::audit_verdict(
+                    "r-bad",
+                    "adam",
+                    &argv,
+                    (
+                        "rejected",
+                        Some("native approval verification failed".to_owned()),
+                    ),
+                );
+            });
+            let seen = seen.lock().unwrap().clone();
+            assert_eq!(seen.len(), 2, "{seen:?}");
+            let (ok_severity, ok) = &seen[0];
+            assert_eq!(*ok_severity, severity(tracing::Level::INFO));
+            for needle in [
+                "vouch verdict",
+                "request_id=r-ok",
+                "user=adam",
+                "outcome=approved",
+            ] {
+                assert!(ok.contains(needle), "{needle} missing from {ok}");
+            }
+            assert!(ok.contains(r#"["launchctl","kickstart\nforged"]"#), "{ok}");
+            let (bad_severity, bad) = &seen[1];
+            assert_eq!(*bad_severity, severity(tracing::Level::WARN));
+            assert!(bad.contains("outcome=rejected"), "{bad}");
+            assert!(bad.contains("native approval verification failed"), "{bad}");
         }
 
         #[test]
@@ -712,17 +762,17 @@ mod logging {
 
         #[test]
         fn datagram_is_bounded_and_cannot_forge_a_second_record() {
-            let forged = "curl failed\n<86>oshioki[1]: sudo request approved\r\0tail";
+            let forged = "curl failed\n<86>vouch[1]: sudo request approved\r\0tail";
             let line = datagram(42, 6, forged);
             assert_eq!(
                 line,
-                "<86>oshioki[42]: curl failed <86>oshioki[1]: sudo request approved  tail"
+                "<86>vouch[42]: curl failed <86>vouch[1]: sudo request approved  tail"
             );
             assert!(!line[1..].contains(['\n', '\r', '\0']));
             let long = "é".repeat(3000);
             let line = datagram(1, 4, &long);
-            assert!(line.starts_with("<84>oshioki[1]: "));
-            assert!(line.len() <= "<84>oshioki[1]: ".len() + super::MAX_DATAGRAM_LINE);
+            assert!(line.starts_with("<84>vouch[1]: "));
+            assert!(line.len() <= "<84>vouch[1]: ".len() + super::MAX_DATAGRAM_LINE);
             assert!(line.ends_with('é'), "cut on a char boundary");
         }
 
@@ -785,7 +835,7 @@ async fn execute_request_at(
 ) -> Result<()> {
     let _ = writeln!(
         io::stderr(),
-        "Oshioki is trying: {}",
+        "Vouch is trying: {}",
         escape_for_terminal(&request.command)
     );
     let _ = io::stderr().flush();
@@ -826,7 +876,7 @@ async fn execute_request_at(
     let payload = seal_request(&request, &raw_request, &active)
         .and_then(|envelope| Ok(serde_json::to_vec(&envelope)?))
         .map_err(|error| host_fault("seal the approval envelope", &error))?;
-    if payload.len() > oshioki_protocol::v1::MAX_ENVELOPE_BYTES {
+    if payload.len() > vouch_protocol::v1::MAX_ENVELOPE_BYTES {
         bail!("request envelope exceeds 3 MiB");
     }
     let progress: std::sync::Arc<dyn Fn(HookProgress) + Send + Sync> =
@@ -905,7 +955,7 @@ async fn execute_request_at(
             // The transport check above guarantees a fallback here.
             None => {
                 return Err(approval_unavailable(format!(
-                    "no approval transports configured: OSHIOKI_AGENT_SOCKET is unset and NATS_URL is not set in {}",
+                    "no approval transports configured: VOUCH_AGENT_SOCKET is unset and NATS_URL is not set in {}",
                     directory.join("config.env").display()
                 )));
             }
@@ -1046,7 +1096,7 @@ fn socket_decision_outcome(result: Result<()>) -> Result<()> {
 /// one candidate (a server confirmation, say) is bounded by the same
 /// deadline.
 async fn first_valid_decision<T, F, Fut>(
-    mut decisions: oshioki_transport::DecisionStream<T>,
+    mut decisions: vouch_transport::DecisionStream<T>,
     deadline: tokio::time::Instant,
     mut apply: F,
 ) -> Result<()>
@@ -1102,14 +1152,14 @@ struct NatsFallbackOptions {
 }
 
 /// Reads the transport set from `config.env`. A missing or empty
-/// `OSHIOKI_AGENT_SOCKET` means no socket transport; a missing or empty
+/// `VOUCH_AGENT_SOCKET` means no socket transport; a missing or empty
 /// `NATS_URL` means no NATS transport (socket-only). Both absent is a
 /// configuration error, not a fallback: there is nothing to fall back to.
 fn transports_from(directory: &Path) -> Result<Transports> {
     let env = read_env_file(&directory.join("config.env"))?;
     let transports = Transports {
         socket: env
-            .get("OSHIOKI_AGENT_SOCKET")
+            .get("VOUCH_AGENT_SOCKET")
             .filter(|value| !value.is_empty())
             .map(PathBuf::from),
         nats_url: env
@@ -1119,7 +1169,7 @@ fn transports_from(directory: &Path) -> Result<Transports> {
     };
     if transports.socket.is_none() && transports.nats_url.is_none() {
         bail!(
-            "no approval transports configured: OSHIOKI_AGENT_SOCKET is unset and NATS_URL is not set in {}",
+            "no approval transports configured: VOUCH_AGENT_SOCKET is unset and NATS_URL is not set in {}",
             directory.join("config.env").display()
         );
     }
@@ -1138,7 +1188,7 @@ async fn nats_fallback(
     nats_url: &str,
     options: NatsFallbackOptions,
     progress: std::sync::Arc<dyn Fn(HookProgress) + Send + Sync>,
-) -> Result<oshioki_transport::DecisionStream<DecisionV1>> {
+) -> Result<vouch_transport::DecisionStream<DecisionV1>> {
     let remaining = deadline
         .checked_duration_since(tokio::time::Instant::now())
         .unwrap_or(Duration::ZERO);
@@ -1337,7 +1387,7 @@ async fn try_agent_socket(
         }
     };
     let (mut reader, mut writer) = stream.into_split();
-    let frame = oshioki_protocol::socket_v1::encode_frame(payload)?;
+    let frame = vouch_protocol::socket_v1::encode_frame(payload)?;
     let write_wait = deadline
         .checked_duration_since(tokio::time::Instant::now())
         .unwrap_or(Duration::ZERO);
@@ -1415,14 +1465,14 @@ async fn try_agent_socket(
                 }));
             }
         };
-        match oshioki_protocol::decode_control_message(&bytes) {
+        match vouch_protocol::decode_control_message(&bytes) {
             // Only an acknowledgement for this request counts. One for another
             // request, or a different message kind where the acknowledgement
             // belongs, is something whoever holds the socket path can send;
             // it is not evidence about this request, so it is a peer that
             // never acknowledged (`NoAck`) and NATS may still answer.
-            Ok(oshioki_protocol::ControlMessageOutcome::Message(
-                oshioki_protocol::ControlMessageV1::Alive(alive),
+            Ok(vouch_protocol::ControlMessageOutcome::Message(
+                vouch_protocol::ControlMessageV1::Alive(alive),
             )) => match alive.validate(request_id) {
                 Ok(()) => break,
                 Err(error) => {
@@ -1430,12 +1480,12 @@ async fn try_agent_socket(
                         path,
                         error: format!(
                             "invalid socket daemon acknowledgement: {error}; \
-                             upgrade oshioki-agent before using this hook"
+                             upgrade vouch-agent before using this hook"
                         ),
                     }));
                 }
             },
-            Ok(oshioki_protocol::ControlMessageOutcome::Message(_)) => {
+            Ok(vouch_protocol::ControlMessageOutcome::Message(_)) => {
                 return Ok(SocketOutcome::Silent(SocketSilence::NoAck {
                     path,
                     error: "expected a socket daemon acknowledgement but got a different control message".into(),
@@ -1444,7 +1494,7 @@ async fn try_agent_socket(
             // A kind this build does not recognize is not evidence of
             // anything: keep waiting for the real acknowledgement instead of
             // failing, subject to the deadline above. Issue #66.
-            Ok(oshioki_protocol::ControlMessageOutcome::UnknownKind(_kind)) => {}
+            Ok(vouch_protocol::ControlMessageOutcome::UnknownKind(_kind)) => {}
             // A decode fault against the host's own local agent is a local
             // software fault (version skew, a bug), not a denial. Before an
             // acknowledgement no agent has taken responsibility yet, so this
@@ -1455,7 +1505,7 @@ async fn try_agent_socket(
                     path,
                     error: format!(
                         "decode socket daemon acknowledgement: {error}; \
-                         upgrade oshioki-agent before using this hook"
+                         upgrade vouch-agent before using this hook"
                     ),
                 }));
             }
@@ -1532,21 +1582,21 @@ async fn try_agent_socket(
         // Peek at the kind before deciding whether this frame is the
         // verdict, an informational message we can keep waiting past, or an
         // outright decode fault.
-        match oshioki_protocol::decode_control_message(&frame_bytes) {
-            Ok(oshioki_protocol::ControlMessageOutcome::Message(
-                oshioki_protocol::ControlMessageV1::Decision(_)
-                | oshioki_protocol::ControlMessageV1::AuthDecision(_),
+        match vouch_protocol::decode_control_message(&frame_bytes) {
+            Ok(vouch_protocol::ControlMessageOutcome::Message(
+                vouch_protocol::ControlMessageV1::Decision(_)
+                | vouch_protocol::ControlMessageV1::AuthDecision(_),
             )) => break frame_bytes,
             // An informational message (a keepalive re-ack, a delivery
             // receipt) or a kind this build does not recognize is not
             // evidence of anything at the verdict position either: keep
             // waiting, bounded by the same deadline. Issue #66.
             Ok(
-                oshioki_protocol::ControlMessageOutcome::Message(
-                    oshioki_protocol::ControlMessageV1::Alive(_)
-                    | oshioki_protocol::ControlMessageV1::Delivery(_),
+                vouch_protocol::ControlMessageOutcome::Message(
+                    vouch_protocol::ControlMessageV1::Alive(_)
+                    | vouch_protocol::ControlMessageV1::Delivery(_),
                 )
-                | oshioki_protocol::ControlMessageOutcome::UnknownKind(_),
+                | vouch_protocol::ControlMessageOutcome::UnknownKind(_),
             ) => {}
             Err(error) => {
                 return Err(approval_unavailable(format!(
@@ -1558,13 +1608,13 @@ async fn try_agent_socket(
     Ok(SocketOutcome::Verdict(bytes))
 }
 
-/// The socket path from `OSHIOKI_AGENT_SOCKET` in `config.env`, if set.
+/// The socket path from `VOUCH_AGENT_SOCKET` in `config.env`, if set.
 /// Sudo scrubs the hook's environment, so the socket must come from the
 /// root-owned config file rather than a process variable.
 fn agent_socket_from(directory: &Path) -> Result<Option<PathBuf>> {
     let env = read_env_file(&directory.join("config.env"))?;
     Ok(env
-        .get("OSHIOKI_AGENT_SOCKET")
+        .get("VOUCH_AGENT_SOCKET")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from))
 }
@@ -1591,7 +1641,7 @@ enum Frame {
 /// closed. The distinction is made by reading the length prefix a chunk at a
 /// time, since `read_exact` cannot say how much of it arrived before the EOF.
 async fn read_frame(reader: &mut tokio::net::unix::OwnedReadHalf) -> Result<Frame> {
-    let mut prefix = [0u8; oshioki_protocol::socket_v1::FRAME_LEN_BYTES];
+    let mut prefix = [0u8; vouch_protocol::socket_v1::FRAME_LEN_BYTES];
     let mut filled = 0;
     while filled < prefix.len() {
         let read = reader.read(&mut prefix[filled..]).await?;
@@ -1606,7 +1656,7 @@ async fn read_frame(reader: &mut tokio::net::unix::OwnedReadHalf) -> Result<Fram
         }
         filled += read;
     }
-    let len = oshioki_protocol::socket_v1::decode_frame_len(prefix)?;
+    let len = vouch_protocol::socket_v1::decode_frame_len(prefix)?;
     let mut payload = vec![0u8; len];
     match reader.read_exact(&mut payload).await {
         Ok(_) => {}
@@ -1625,14 +1675,14 @@ async fn read_frame(reader: &mut tokio::net::unix::OwnedReadHalf) -> Result<Fram
 /// all unavailable (issues #66 and #68): whoever holds the socket path can
 /// send any of them, so none may fail closed and take the password away.
 fn decode_socket_command_decision(bytes: &[u8]) -> Result<DecisionV1> {
-    match oshioki_protocol::decode_control_message(bytes) {
-        Ok(oshioki_protocol::ControlMessageOutcome::Message(
-            oshioki_protocol::ControlMessageV1::Decision(decision),
+    match vouch_protocol::decode_control_message(bytes) {
+        Ok(vouch_protocol::ControlMessageOutcome::Message(
+            vouch_protocol::ControlMessageV1::Decision(decision),
         )) => Ok(decision),
-        Ok(oshioki_protocol::ControlMessageOutcome::Message(_)) => Err(approval_unavailable(
+        Ok(vouch_protocol::ControlMessageOutcome::Message(_)) => Err(approval_unavailable(
             "expected a socket decision but got a different control message",
         )),
-        Ok(oshioki_protocol::ControlMessageOutcome::UnknownKind(kind)) => {
+        Ok(vouch_protocol::ControlMessageOutcome::UnknownKind(kind)) => {
             Err(approval_unavailable(format!(
                 "socket agent sent an unrecognized control message kind {kind:?} instead of a decision"
             )))
@@ -1647,14 +1697,14 @@ fn decode_socket_command_decision(bytes: &[u8]) -> Result<DecisionV1> {
 /// See [`decode_socket_command_decision`] for the same reasoning applied to
 /// the authentication lane.
 fn decode_socket_auth_decision(bytes: &[u8]) -> Result<AuthDecisionV1> {
-    match oshioki_protocol::decode_control_message(bytes) {
-        Ok(oshioki_protocol::ControlMessageOutcome::Message(
-            oshioki_protocol::ControlMessageV1::AuthDecision(decision),
+    match vouch_protocol::decode_control_message(bytes) {
+        Ok(vouch_protocol::ControlMessageOutcome::Message(
+            vouch_protocol::ControlMessageV1::AuthDecision(decision),
         )) => Ok(decision),
-        Ok(oshioki_protocol::ControlMessageOutcome::Message(_)) => Err(approval_unavailable(
+        Ok(vouch_protocol::ControlMessageOutcome::Message(_)) => Err(approval_unavailable(
             "expected a socket authentication decision but got a different control message",
         )),
-        Ok(oshioki_protocol::ControlMessageOutcome::UnknownKind(kind)) => {
+        Ok(vouch_protocol::ControlMessageOutcome::UnknownKind(kind)) => {
             Err(approval_unavailable(format!(
                 "socket agent sent an unrecognized control message kind {kind:?} instead of an authentication decision"
             )))
@@ -1692,6 +1742,143 @@ async fn final_authorization(
     })
 }
 
+/// The error text of a verified, signed denial.
+const EXPLICIT_DENIAL: &str = "request explicitly denied";
+/// Longest argv rendering put on an audit line; the line itself is capped
+/// again by the syslog sink.
+const MAX_AUDIT_ARGV_CHARS: usize = 1024;
+
+/// Applies one command decision and writes the host's audit line for it:
+/// one per verdict accepted or rejected, carrying the request id, the user,
+/// the argv and the outcome. The line goes to authpriv with the rest of the
+/// audit trail (journald on Linux, the unified log on macOS) and never
+/// changes the result.
+async fn apply_decision(
+    decision: DecisionV1,
+    lane: DecisionLane,
+    request: &RequestV1,
+    raw_request: &[u8],
+    active: &[DevicePublicRecordV1],
+    snapshot_epoch: u64,
+    directory: &Path,
+) -> Result<()> {
+    let denial = matches!(decision, DecisionV1::Deny(_));
+    let result = apply_decision_unaudited(
+        decision,
+        lane,
+        request,
+        raw_request,
+        active,
+        snapshot_epoch,
+        directory,
+    )
+    .await;
+    audit_verdict(
+        &request.request_id,
+        &request.user,
+        &request.argv,
+        verdict_outcome(&result, denial, "approved"),
+    );
+    result
+}
+
+/// What one verdict came to on this host, and why when it was rejected.
+fn verdict_outcome(
+    result: &Result<()>,
+    denial: bool,
+    accepted: &'static str,
+) -> (&'static str, Option<String>) {
+    match result {
+        Ok(()) => (accepted, None),
+        Err(error) if denial && error.to_string() == EXPLICIT_DENIAL => ("denied", None),
+        Err(error) => ("rejected", Some(display_error(error))),
+    }
+}
+
+/// The argv as one bounded JSON array: unambiguous about spaces and quotes,
+/// and with control characters escaped before the syslog sink sees them.
+fn audit_argv(argv: &[String]) -> String {
+    let rendered = serde_json::to_string(argv).unwrap_or_else(|_| "[]".to_owned());
+    if rendered.chars().count() <= MAX_AUDIT_ARGV_CHARS {
+        return rendered;
+    }
+    let mut cut = rendered
+        .chars()
+        .take(MAX_AUDIT_ARGV_CHARS)
+        .collect::<String>();
+    cut.push_str("...");
+    cut
+}
+
+fn audit_verdict(
+    request_id: &str,
+    user: &str,
+    argv: &[String],
+    outcome: (&'static str, Option<String>),
+) {
+    let (outcome, error) = outcome;
+    let user = escape_for_terminal(user);
+    let argv = audit_argv(argv);
+    match error {
+        None => info!(
+            target: "audit",
+            request_id = %escape_for_terminal(request_id),
+            user = %user,
+            argv = %argv,
+            outcome,
+            "vouch verdict"
+        ),
+        Some(error) => warn!(
+            target: "audit",
+            request_id = %escape_for_terminal(request_id),
+            user = %user,
+            argv = %argv,
+            outcome,
+            error = %error,
+            "vouch verdict"
+        ),
+    }
+}
+
+/// [`apply_decision`]'s twin for contextual sudo authentication. The argv is
+/// the invocation the host submitted as display context.
+async fn apply_auth_decision(
+    decision: &AuthDecisionV1,
+    request: &AuthRequestV1,
+    raw_request: &[u8],
+    recipients: &[DevicePublicRecordV1],
+    snapshot_epoch: u64,
+    directory: &Path,
+) -> Result<()> {
+    let result = apply_auth_decision_unaudited(
+        decision,
+        request,
+        raw_request,
+        recipients,
+        snapshot_epoch,
+        directory,
+    )
+    .await;
+    let trusted = &request.trusted;
+    let user = trusted
+        .invoking_user
+        .clone()
+        .unwrap_or_else(|| format!("uid {}", trusted.invoking_uid));
+    let argv = match &request.submitted.invocation {
+        AuthInvocationV1::Available { argv, .. } | AuthInvocationV1::Truncated { argv, .. } => {
+            argv.as_slice()
+        }
+        AuthInvocationV1::Unavailable => &[],
+    };
+    audit_verdict(
+        &request.request_id,
+        &user,
+        argv,
+        verdict_outcome(&result, false, "authenticated"),
+    );
+    result
+}
+
 /// Applies one decision to a request.
 ///
 /// A decision that cannot be authenticated for this request returns
@@ -1700,7 +1887,7 @@ async fn final_authorization(
 /// verified denial, a late verdict, and a revocation found at final
 /// authorization are ordinary errors and deny. Host faults are unavailable.
 #[allow(clippy::too_many_lines)]
-async fn apply_decision(
+async fn apply_decision_unaudited(
     decision: DecisionV1,
     lane: DecisionLane,
     request: &RequestV1,
@@ -1759,7 +1946,7 @@ async fn apply_decision(
             if request.expires_at <= now() {
                 bail!("request expired before its verdict was applied");
             }
-            bail!("request explicitly denied");
+            bail!("{EXPLICIT_DENIAL}");
         }
         DecisionV1::Approve(approval) => {
             approval
@@ -2194,6 +2381,7 @@ fn build_auth_request(
             // trusted agent label of its own, so neither is claimed.
             session: None,
             agent_label: None,
+            reason: None,
             invocation: auth_invocation(&pam.submitted_argv),
         },
     };
@@ -2250,7 +2438,7 @@ fn seal_auth_request(
     raw: &[u8],
     devices: &[DevicePublicRecordV1],
 ) -> Result<AuthEnvelopeV1> {
-    if devices.len() > oshioki_protocol::v1::MAX_DEVICES {
+    if devices.len() > vouch_protocol::v1::MAX_DEVICES {
         bail!("more than eight authentication recipients");
     }
     let envelope = AuthEnvelopeV1 {
@@ -2262,7 +2450,7 @@ fn seal_auth_request(
         expires_at: request.expires_at,
         sealed: devices
             .iter()
-            .map(|device| oshioki_protocol::seal_v1(raw, device))
+            .map(|device| vouch_protocol::seal_v1(raw, device))
             .collect::<Result<Vec<_>, _>>()?,
     };
     envelope.validate()?;
@@ -2321,7 +2509,7 @@ async fn execute_auth_request_at(
     // reason to refuse an authentication either.
     let _ = writeln!(
         io::stderr(),
-        "Oshioki is authenticating {} for {}",
+        "Vouch is authenticating {} for {}",
         escape_for_terminal(&request.trusted.pam_user),
         escape_for_terminal(&request.trusted.service)
     );
@@ -2392,7 +2580,7 @@ async fn execute_auth_request_at(
 /// candidates to read until one is valid.
 enum PendingDecision<T> {
     Socket(T),
-    Nats(oshioki_transport::DecisionStream<T>),
+    Nats(vouch_transport::DecisionStream<T>),
 }
 
 /// The same two-transport matrix `execute_request_at` uses, on the
@@ -2499,7 +2687,7 @@ async fn nats_auth_fallback(
     nats_url: &str,
     has_browser_recipient: bool,
     progress: std::sync::Arc<dyn Fn(HookProgress) + Send + Sync>,
-) -> Result<oshioki_transport::DecisionStream<AuthDecisionV1>> {
+) -> Result<vouch_transport::DecisionStream<AuthDecisionV1>> {
     let display = nats_display_url(nats_url);
     let remaining = deadline
         .checked_duration_since(tokio::time::Instant::now())
@@ -2582,7 +2770,7 @@ async fn nats_auth_fallback(
 /// waiting (NATS) or reports unavailable (socket). Nothing here may widen into
 /// a success, and nothing a co-tenant publisher can send may become
 /// `PAM_AUTH_ERR`, which a Linux `default=die` stack turns into a lockout.
-async fn apply_auth_decision(
+async fn apply_auth_decision_unaudited(
     decision: &AuthDecisionV1,
     request: &AuthRequestV1,
     raw_request: &[u8],
@@ -2710,7 +2898,7 @@ fn terminal_approval_url(server_base_url: &str, request_id: &str) -> String {
 fn require_enroll_privileges(directory: &Path) -> Result<()> {
     if enroll_needs_root(directory, nix::unistd::geteuid().as_raw()) {
         bail!(
-            "`oshioki enroll` needs the system configuration; run `sudo oshioki enroll` (or set OSHIOKI_CONFIG_DIR for a user-owned development configuration)"
+            "`vouch enroll` needs the system configuration; run `sudo vouch enroll` (or set VOUCH_CONFIG_DIR for a user-owned development configuration)"
         );
     }
     Ok(())
@@ -2743,7 +2931,7 @@ fn enrollment_origin(config: &HookConfigV1, allow_localhost: bool) -> Result<Url
             .is_some_and(is_local_only_enrollment_host)
     {
         bail!(
-            "the enrollment origin is reachable only from this computer; run `oshioki-phone-setup` as your normal user to configure a phone-reachable HTTPS origin (Tailscale is preferred), or pass `--allow-localhost` for local development"
+            "the enrollment origin is reachable only from this computer; run `vouch-phone-setup` as your normal user to configure a phone-reachable HTTPS origin (Tailscale is preferred), or pass `--allow-localhost` for local development"
         );
     }
     Ok(origin)
@@ -2819,7 +3007,7 @@ fn enrollment_transport_display(directory: &Path) -> String {
 /// the one verb whose connect was unbounded, and because it prints nothing
 /// until after the intent is published, a NATS host that blackholes instead
 /// of refusing turned a misconfiguration into a silent hang that
-/// `oshioki-laptop-setup` could only report as "enrollment produced no URL".
+/// `vouch-laptop-setup` could only report as "enrollment produced no URL".
 async fn enrollment_transport(
     directory: &Path,
     nats_display: &str,
@@ -2861,7 +3049,7 @@ async fn cmd_enroll_at(
         remove_enrollment_state(&state_path);
         bail!("enrollment expired");
     }
-    let secret_bytes: [u8; 32] = oshioki_protocol::decode_base64url(&state.secret)?
+    let secret_bytes: [u8; 32] = vouch_protocol::decode_base64url(&state.secret)?
         .try_into()
         .map_err(|_| anyhow::anyhow!("invalid enrollment secret"))?;
     let nats_display = enrollment_transport_display(directory);
@@ -2900,7 +3088,7 @@ async fn cmd_enroll_at(
         println!("Enrollment URL (expires in five minutes):\n  {enrollment_url}");
     } else {
         println!(
-            "Enrollment URL (expires in five minutes):\n  {enrollment_url}\nNative agent:\n  oshioki-agent pair '{enrollment_url}'"
+            "Enrollment URL (expires in five minutes):\n  {enrollment_url}\nNative agent:\n  vouch-agent pair '{enrollment_url}'"
         );
     }
     let submission = transport
@@ -3002,7 +3190,7 @@ async fn activate_device(
     bail!(
         "device {} ({}) is pinned on this host and can approve sudo here, but the server did \
          not serve it within {} seconds ({}): the server state is unknown, not rejected. \
-         Check it with `curl {}`; if the record is missing, run `oshioki enroll` again for \
+         Check it with `curl {}`; if the record is missing, run `vouch enroll` again for \
          this device once the server is healthy",
         device.fingerprint,
         device.kind,
@@ -3134,7 +3322,7 @@ where
     W: FnMut(&registry::Transaction<'_>, &registry::LocalRegistry) -> Result<()>,
 {
     // Same shape as protocol fingerprints; do not permit subject/path injection.
-    if oshioki_protocol::decode_base64url(fingerprint).map_or(true, |bytes| bytes.len() != 16) {
+    if vouch_protocol::decode_base64url(fingerprint).map_or(true, |bytes| bytes.len() != 16) {
         bail!("invalid device fingerprint");
     }
     let _lifecycle = registry::LifecycleGuard::acquire(directory)?;
@@ -3311,13 +3499,13 @@ fn pin_device_record(
 /// make it a report about nothing.
 const PAM_D_DIR: &str = "/etc/pam.d";
 const SUDO_CONF_PATH: &str = "/etc/sudo.conf";
-/// The marker comment `scripts/install-oshioki-hook` writes around its owned
+/// The marker comment `scripts/install-vouch-hook` writes around its owned
 /// PAM entry. Kept identical to `PAM_BEGIN_MARK` there.
-const PAM_BEGIN_MARK: &str = "# BEGIN oshioki pam";
+const PAM_BEGIN_MARK: &str = "# BEGIN vouch pam";
 #[cfg(target_os = "macos")]
-const PAM_MODULE_FILE: &str = "liboshioki_pam.dylib";
+const PAM_MODULE_FILE: &str = "libvouch_pam.dylib";
 #[cfg(not(target_os = "macos"))]
-const PAM_MODULE_FILE: &str = "liboshioki_pam.so";
+const PAM_MODULE_FILE: &str = "libvouch_pam.so";
 
 /// PAM service files the installer is allowed to own, in report order.
 #[cfg(target_os = "macos")]
@@ -3366,7 +3554,7 @@ fn pam_module_candidates() -> Vec<PathBuf> {
 /// Read a file for the status report, distinguishing "this file says no"
 /// from "this process was not allowed to look".
 ///
-/// `oshioki status` runs unprivileged as often as not, and `/etc/pam.d` or
+/// `vouch status` runs unprivileged as often as not, and `/etc/pam.d` or
 /// `/etc/sudo.conf` can be unreadable. Treating that as absence would print
 /// `sudo authentication: none` on a host that is in fact fully configured —
 /// the most misleading answer available.
@@ -3487,7 +3675,7 @@ async fn cmd_watch() -> Result<()> {
         };
         envelope.validate()?;
         let url = approval_url(&config.server_base_url, &envelope.request_id);
-        let opener = std::env::var("OSHIOKI_OPENER").unwrap_or_else(|_| "/usr/bin/open".into());
+        let opener = std::env::var("VOUCH_OPENER").unwrap_or_else(|_| "/usr/bin/open".into());
         let status = opener_command(&opener, &url)
             .status()
             .context("launch approval URL")?;
@@ -3580,6 +3768,7 @@ fn build_request(values: &[(String, String)]) -> Result<RequestV1> {
         argv,
         pid_chain: pid_chain(),
         session: session_label(values),
+        reason: reason_label(values),
         env,
         issued_at,
         expires_at: issued_at + 90,
@@ -3590,39 +3779,46 @@ fn build_request(values: &[(String, String)]) -> Result<RequestV1> {
 
 /// Resolves the caller's session label from the bound request values.
 ///
-/// The one supported mechanism: an `OSHIOKI_SESSION` entry from the
-/// invoking user's original environment, bound by the plugin under the
-/// `session.` prefix (distinct from `env.*`, which is the post-`env_reset`
-/// environment the command actually executes with — see `gather_context`
-/// in `plugin/src/lib.rs`). Documented in `docs/configuration.md`, along
-/// with recipes for setting it from a coding agent, tmux, or an ssh client.
+/// The one supported mechanism: a `VOUCH_SESSION` entry from the invoking
+/// user's original environment, bound by the plugin under the `session.`
+/// prefix (distinct from `env.*`, which is the post-`env_reset` environment
+/// the command actually executes with — see `gather_context` in
+/// `plugin/src/lib.rs`). Documented in `docs/configuration.md`, along with
+/// recipes for setting it from a coding agent, tmux, or an ssh client.
+///
+/// `session.OSHIOKI_SESSION` is still accepted for one release, for a plugin
+/// built before the rename; a `VOUCH_SESSION` binding wins when both are
+/// present and valid.
 ///
 /// `None` when absent, empty, or invalid; the agent's own fallbacks
 /// (`pid_chain`, then tty) apply in that case — see `session_name_for` in
 /// `agent/src/main.rs`.
-///
-/// The label is bounded and trimmed to satisfy `RequestV1::validate`; an
-/// overlong or empty result after trimming is treated as no match.
 fn session_label(values: &[(String, String)]) -> Option<String> {
-    let last_value = |key: &str| {
-        values
-            .iter()
-            .rev()
-            .find_map(|(candidate, value)| (candidate == key).then_some(value.as_str()))
-    };
-    last_value("session.OSHIOKI_SESSION").and_then(normalize_session_label)
+    last_bound_value(values, "session.VOUCH_SESSION")
+        .and_then(normalize_session_label)
+        .or_else(|| {
+            last_bound_value(values, "session.OSHIOKI_SESSION").and_then(normalize_session_label)
+        })
 }
 
-/// Bounds and trims a candidate session label to the limits
-/// `RequestV1::validate` enforces: at most 64 characters, no control
-/// characters, non-empty after trimming. Returns `None` rather than a
-/// truncated value, since a clipped label could misrepresent the session.
-fn normalize_session_label(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() || trimmed.chars().count() > 64 || trimmed.chars().any(char::is_control) {
-        return None;
-    }
-    Some(trimmed.to_owned())
+/// Resolves the agent's own reason for the request from the bound values.
+///
+/// Read only from `session.VOUCH_REASON`, the plugin's binding of
+/// `VOUCH_REASON` from the invoking user's original environment, exactly
+/// like the session label. `env.VOUCH_REASON` is the environment the command
+/// executes with and is never read as a reason. The value is display text:
+/// it is shown in the approval panel as the agent's unverified words and has
+/// no bearing on what is verified or run. Overlong, empty, or control
+/// character values yield `None` rather than a clipped sentence.
+fn reason_label(values: &[(String, String)]) -> Option<String> {
+    last_bound_value(values, "session.VOUCH_REASON").and_then(normalize_reason)
+}
+
+fn last_bound_value<'a>(values: &'a [(String, String)], key: &str) -> Option<&'a str> {
+    values
+        .iter()
+        .rev()
+        .find_map(|(candidate, value)| (candidate == key).then_some(value.as_str()))
 }
 
 fn build_synthetic_request() -> RequestV1 {
@@ -3647,6 +3843,7 @@ fn build_synthetic_request() -> RequestV1 {
         pid_chain: pid_chain(),
         env: vec![],
         session: None,
+        reason: None,
         issued_at,
         expires_at: issued_at + 90,
     }
@@ -3657,7 +3854,7 @@ fn seal_request(
     raw: &[u8],
     devices: &[DevicePublicRecordV1],
 ) -> Result<RequestEnvelopeV1> {
-    if devices.len() > oshioki_protocol::v1::MAX_DEVICES {
+    if devices.len() > vouch_protocol::v1::MAX_DEVICES {
         bail!("more than eight active devices");
     }
     let envelope = RequestEnvelopeV1 {
@@ -3669,7 +3866,7 @@ fn seal_request(
         expires_at: request.expires_at,
         sealed: devices
             .iter()
-            .map(|device| oshioki_protocol::seal_v1(raw, device))
+            .map(|device| vouch_protocol::seal_v1(raw, device))
             .collect::<Result<Vec<_>, _>>()?,
     };
     envelope.validate()?;
@@ -3691,14 +3888,14 @@ fn parse_sudo_stdin() -> Result<Vec<(String, String)>> {
     Ok(values)
 }
 
-/// The operator's config directory for the non-sudo verbs; `OSHIOKI_CONFIG_DIR`
+/// The operator's config directory for the non-sudo verbs; `VOUCH_CONFIG_DIR`
 /// selects a user-owned development configuration. The sudo verbs serve an
 /// untrusted caller and always get the system directory.
 fn config_dir() -> PathBuf {
     if sudo_lane::active() {
         return PathBuf::from(DEFAULT_CONFIG_DIR);
     }
-    std::env::var_os("OSHIOKI_CONFIG_DIR")
+    std::env::var_os("VOUCH_CONFIG_DIR")
         .map_or_else(|| PathBuf::from(DEFAULT_CONFIG_DIR), PathBuf::from)
 }
 fn check_config_dir() -> &'static Path {
@@ -3843,13 +4040,13 @@ fn atomic_write_json_with<T: Serialize>(
 /// the environment, so this file is the hook's only channel.
 fn selected_transport(directory: &Path) -> Result<String> {
     let env = read_env_file(&directory.join("config.env"))?;
-    match env.get("OSHIOKI_TRANSPORT").map(String::as_str) {
+    match env.get("VOUCH_TRANSPORT").map(String::as_str) {
         None | Some("" | "nats") => Ok("nats".to_owned()),
         Some(other) => bail!("unsupported transport: {other}"),
     }
 }
 
-/// Selects the hook transport named by `OSHIOKI_TRANSPORT` in `config.env`.
+/// Selects the hook transport named by `VOUCH_TRANSPORT` in `config.env`.
 async fn transport_from(directory: &Path) -> Result<Box<dyn HookTransport>> {
     let name = selected_transport(directory)?;
     debug_assert_eq!(name, "nats");
@@ -3877,7 +4074,7 @@ enum CurlConfig {
     /// checks, or write the response to an arbitrary path as root.
     System,
     /// A user-owned development configuration chosen with
-    /// `OSHIOKI_CONFIG_DIR` for a non-sudo verb. It keeps the caller's curl
+    /// `VOUCH_CONFIG_DIR` for a non-sudo verb. It keeps the caller's curl
     /// config; the local E2E harness uses `CURL_HOME` to resolve its
     /// throwaway test hostname.
     Caller,
@@ -4008,6 +4205,44 @@ fn pid_chain_darwin() -> Vec<String> {
 }
 
 #[cfg(test)]
+mod verdict_audit_tests {
+    use super::{
+        EXPLICIT_DENIAL, MAX_AUDIT_ARGV_CHARS, audit_argv, invalid_decision, verdict_outcome,
+    };
+
+    #[test]
+    fn outcomes_name_what_the_host_did() {
+        assert_eq!(
+            verdict_outcome(&Ok(()), false, "approved"),
+            ("approved", None)
+        );
+        assert_eq!(
+            verdict_outcome(&Ok(()), false, "authenticated"),
+            ("authenticated", None)
+        );
+        let denied = Err(anyhow::anyhow!("{EXPLICIT_DENIAL}"));
+        assert_eq!(verdict_outcome(&denied, true, "approved"), ("denied", None));
+        // The same text from a decision that was not a denial is a rejection.
+        assert_eq!(verdict_outcome(&denied, false, "approved").0, "rejected");
+        let forged = Err(invalid_decision("native approval verification failed"));
+        let (outcome, error) = verdict_outcome(&forged, true, "approved");
+        assert_eq!(outcome, "rejected");
+        assert!(error.unwrap().contains("verification failed"));
+    }
+
+    #[test]
+    fn argv_is_one_bounded_json_array() {
+        assert_eq!(
+            audit_argv(&["rm".to_owned(), "a b".to_owned()]),
+            r#"["rm","a b"]"#
+        );
+        let long = audit_argv(&["x".repeat(4 * MAX_AUDIT_ARGV_CHARS)]);
+        assert_eq!(long.chars().count(), MAX_AUDIT_ARGV_CHARS + 3);
+        assert!(long.ends_with("..."));
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -4032,17 +4267,17 @@ mod tests {
             CurlConfig::System
         );
         assert_eq!(
-            CurlConfig::resolve(Path::new("/home/dev/oshioki"), false),
+            CurlConfig::resolve(Path::new("/home/dev/vouch"), false),
             CurlConfig::Caller
         );
         assert_eq!(
-            CurlConfig::resolve(Path::new("/home/dev/oshioki"), true),
+            CurlConfig::resolve(Path::new("/home/dev/vouch"), true),
             CurlConfig::System
         );
     }
 
     /// The root sudo verbs must not let a caller-exported
-    /// `OSHIOKI_CONFIG_DIR` pick a non-system config, nor a `CURL_HOME` /
+    /// `VOUCH_CONFIG_DIR` pick a non-system config, nor a `CURL_HOME` /
     /// `HOME` `.curlrc` reach the denial-confirmation GET. Run in a child
     /// process so the lane flag and environment stay out of other tests.
     #[test]
@@ -4055,10 +4290,10 @@ mod tests {
                 "--nocapture",
                 "--test-threads=1",
             ])
-            .env("OSHIOKI_SUDO_LANE_TEST_CHILD", "1")
-            .env("OSHIOKI_CONFIG_DIR", "/tmp/oshioki-attacker")
-            .env("CURL_HOME", "/tmp/oshioki-attacker")
-            .env("HOME", "/tmp/oshioki-attacker")
+            .env("VOUCH_SUDO_LANE_TEST_CHILD", "1")
+            .env("VOUCH_CONFIG_DIR", "/tmp/vouch-attacker")
+            .env("CURL_HOME", "/tmp/vouch-attacker")
+            .env("HOME", "/tmp/vouch-attacker")
             .output()
             .unwrap();
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -4072,12 +4307,12 @@ mod tests {
 
     #[test]
     fn sudo_lane_curl_child() {
-        if std::env::var_os("OSHIOKI_SUDO_LANE_TEST_CHILD").is_none() {
+        if std::env::var_os("VOUCH_SUDO_LANE_TEST_CHILD").is_none() {
             return;
         }
         assert_eq!(
-            std::env::var_os("OSHIOKI_CONFIG_DIR").as_deref(),
-            Some(std::ffi::OsStr::new("/tmp/oshioki-attacker"))
+            std::env::var_os("VOUCH_CONFIG_DIR").as_deref(),
+            Some(std::ffi::OsStr::new("/tmp/vouch-attacker"))
         );
         assert!(std::env::var_os("CURL_HOME").is_some());
         sudo_lane::activate();
@@ -4085,7 +4320,7 @@ mod tests {
         let curl = CurlConfig::for_directory(&config_dir());
         assert_eq!(curl, CurlConfig::System);
         assert_eq!(
-            CurlConfig::for_directory(Path::new("/tmp/oshioki-attacker")),
+            CurlConfig::for_directory(Path::new("/tmp/vouch-attacker")),
             CurlConfig::System
         );
         let argv = curl_argv("https://sudo.test/", curl);
@@ -4094,13 +4329,13 @@ mod tests {
     }
 
     /// Builds a throwaway /etc/pam.d + sudo.conf + security dir triple and
-    /// returns what `oshioki status` would print for it.
+    /// returns what `vouch status` would print for it.
     fn sudo_authentication_line(
         services: &[(&str, bool)],
         module_present: bool,
         legacy_plugin: bool,
     ) -> (String, PathBuf) {
-        let root = std::env::temp_dir().join(format!("oshioki-sudo-auth-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("vouch-sudo-auth-{}", Uuid::new_v4()));
         let pam_d = root.join("pam.d");
         let security = root.join("security");
         fs::create_dir_all(&pam_d).unwrap();
@@ -4108,7 +4343,7 @@ mod tests {
         for (service, owned) in services {
             let body = if *owned {
                 format!(
-                    "session required pam_limits.so\n{PAM_BEGIN_MARK}\nauth [success=done] {PAM_MODULE_FILE}\n# END oshioki pam\n@include common-auth\n"
+                    "session required pam_limits.so\n{PAM_BEGIN_MARK}\nauth [success=done] {PAM_MODULE_FILE}\n# END vouch pam\n@include common-auth\n"
                 )
             } else {
                 "session required pam_limits.so\n@include common-auth\n".to_owned()
@@ -4122,7 +4357,7 @@ mod tests {
         if legacy_plugin {
             fs::write(
                 &sudo_conf,
-                "Plugin approval_exec /usr/local/libexec/sudo/oshioki.so\n",
+                "Plugin approval_exec /usr/local/libexec/sudo/vouch.so\n",
             )
             .unwrap();
         }
@@ -4180,8 +4415,7 @@ mod tests {
     /// An unreadable /etc/pam.d must never read as "nothing is configured".
     #[test]
     fn status_reports_unknown_when_it_cannot_read_the_pam_files() {
-        let root =
-            std::env::temp_dir().join(format!("oshioki-sudo-auth-denied-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("vouch-sudo-auth-denied-{}", Uuid::new_v4()));
         let pam_d = root.join("pam.d");
         fs::create_dir_all(&pam_d).unwrap();
         for service in PAM_SERVICES {
@@ -4227,7 +4461,7 @@ mod tests {
     fn check_exit_codes_keep_password_fallback_only_for_unavailable_approval() {
         let unavailable = [
             approval_unavailable(
-                "no agent on /run/oshioki.sock (Connection refused) and no NATS fallback configured",
+                "no agent on /run/vouch.sock (Connection refused) and no NATS fallback configured",
             ),
             anyhow::Error::new(HookTransportFailure::Daemon(
                 "daemon acknowledgement timed out".into(),
@@ -4271,13 +4505,13 @@ mod tests {
     #[test]
     fn fingerprint_arguments_may_start_with_a_hyphen() {
         for verb in ["revoke", "pin"] {
-            let cli = Cli::try_parse_from(["oshioki", verb, "-8lGYGvNFgwWqSSFS3yv1Q"]).unwrap();
+            let cli = Cli::try_parse_from(["vouch", verb, "-8lGYGvNFgwWqSSFS3yv1Q"]).unwrap();
             let (Verb::Revoke { fingerprint } | Verb::Pin { fingerprint }) = cli.verb else {
                 panic!("unexpected verb")
             };
             assert_eq!(fingerprint, "-8lGYGvNFgwWqSSFS3yv1Q");
         }
-        let cli = Cli::try_parse_from(["oshioki", "enroll", "--resume", "-abc"]).unwrap();
+        let cli = Cli::try_parse_from(["vouch", "enroll", "--resume", "-abc"]).unwrap();
         assert!(matches!(
             cli.verb,
             Verb::Enroll {
@@ -4285,7 +4519,7 @@ mod tests {
                 ..
             } if r == "-abc"
         ));
-        let cli = Cli::try_parse_from(["oshioki", "enroll", "--allow-localhost"]).unwrap();
+        let cli = Cli::try_parse_from(["vouch", "enroll", "--allow-localhost"]).unwrap();
         assert!(matches!(
             cli.verb,
             Verb::Enroll {
@@ -4298,7 +4532,7 @@ mod tests {
     #[test]
     fn private_check_remains_parseable_but_is_hidden_from_operator_help() {
         let cli =
-            Cli::try_parse_from(["oshioki", "check", "--plugin-protocol-version", "1"]).unwrap();
+            Cli::try_parse_from(["vouch", "check", "--plugin-protocol-version", "1"]).unwrap();
         assert!(matches!(
             cli.verb,
             Verb::Check {
@@ -4307,7 +4541,7 @@ mod tests {
         ));
 
         let help = Cli::command().render_help().to_string();
-        assert!(help.contains("Manage Oshioki sudo approvals"), "{help}");
+        assert!(help.contains("Manage Vouch sudo approvals"), "{help}");
         assert!(
             !help
                 .lines()
@@ -4474,7 +4708,7 @@ mod tests {
         let secret = x25519_dalek::StaticSecret::from([4; 32]);
         let box_public = x25519_dalek::PublicKey::from(&secret);
         let fingerprint =
-            oshioki_protocol::device_fingerprint(&credential, &public, box_public.as_bytes());
+            vouch_protocol::device_fingerprint(&credential, &public, box_public.as_bytes());
         let device = DevicePublicRecordV1 {
             version: 1,
             kind: DeviceKindV1::Webauthn,
@@ -4533,7 +4767,7 @@ mod tests {
         ] {
             let error = enrollment_origin(&enrollment_config(origin), false).unwrap_err();
             assert!(
-                error.to_string().contains("oshioki-phone-setup"),
+                error.to_string().contains("vouch-phone-setup"),
                 "{origin}: {error:#}"
             );
         }
@@ -4574,7 +4808,7 @@ mod tests {
     fn enroll_root_requirement_only_applies_to_the_system_configuration() {
         assert!(enroll_needs_root(Path::new(DEFAULT_CONFIG_DIR), 501));
         assert!(!enroll_needs_root(Path::new(DEFAULT_CONFIG_DIR), 0));
-        assert!(!enroll_needs_root(Path::new("/tmp/oshioki"), 501));
+        assert!(!enroll_needs_root(Path::new("/tmp/vouch"), 501));
     }
 
     #[test]
@@ -4599,7 +4833,7 @@ mod tests {
     }
     #[test]
     fn atomic_registry_round_trip() {
-        let root = std::env::temp_dir().join(format!("oshioki-hook-test-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("vouch-hook-test-{}", Uuid::new_v4()));
         let path = root.join("devices.json");
         let registry = DeviceRegistryV1 {
             version: 1,
@@ -4622,10 +4856,10 @@ mod tests {
         let raw = request.raw_json().unwrap();
         request.expires_at = now() - 1;
         let signature: p256::ecdsa::Signature =
-            signing.sign(&oshioki_protocol::v1::approve_challenge(&raw));
+            signing.sign(&vouch_protocol::v1::approve_challenge(&raw));
         let genuine = [
             DecisionV1::Deny(deny_for(&signing, &request.request_id, &device)),
-            DecisionV1::ApproveNative(oshioki_protocol::ApproveNativeV1 {
+            DecisionV1::ApproveNative(vouch_protocol::ApproveNativeV1 {
                 version: VERSION_V1,
                 request_id: request.request_id.clone(),
                 device_fingerprint: device.fingerprint.clone(),
@@ -4652,19 +4886,19 @@ mod tests {
         }
         let fingerprint = URL_SAFE_NO_PAD.encode([1; 16]);
         let forged = [
-            DecisionV1::Deny(oshioki_protocol::DenyV1 {
+            DecisionV1::Deny(vouch_protocol::DenyV1 {
                 version: VERSION_V1,
                 request_id: request.request_id.clone(),
                 device_fingerprint: fingerprint.clone(),
                 signature: None,
             }),
-            DecisionV1::ApproveNative(oshioki_protocol::ApproveNativeV1 {
+            DecisionV1::ApproveNative(vouch_protocol::ApproveNativeV1 {
                 version: VERSION_V1,
                 request_id: request.request_id.clone(),
                 device_fingerprint: fingerprint.clone(),
                 signature: URL_SAFE_NO_PAD.encode([2; 64]),
             }),
-            DecisionV1::Approve(oshioki_protocol::ApproveV1 {
+            DecisionV1::Approve(vouch_protocol::ApproveV1 {
                 version: VERSION_V1,
                 request_id: request.request_id.clone(),
                 device_fingerprint: fingerprint,
@@ -4692,7 +4926,7 @@ mod tests {
 
     #[test]
     fn check_uses_the_root_owned_config_directory() {
-        assert_eq!(check_config_dir(), Path::new("/etc/oshioki"));
+        assert_eq!(check_config_dir(), Path::new("/etc/vouch"));
     }
 
     /// One pinned Secure Enclave device with a real key, for denial tests.
@@ -4703,8 +4937,8 @@ mod tests {
             .to_sec1_point(false)
             .as_bytes()
             .to_vec();
-        let credential_id = oshioki_protocol::native_credential_id(&public);
-        let fingerprint = oshioki_protocol::device_fingerprint(&credential_id, &public, &[22; 32]);
+        let credential_id = vouch_protocol::native_credential_id(&public);
+        let fingerprint = vouch_protocol::device_fingerprint(&credential_id, &public, &[22; 32]);
         let device = DevicePublicRecordV1 {
             version: VERSION_V1,
             kind: DeviceKindV1::SecureEnclave,
@@ -4730,8 +4964,8 @@ mod tests {
             .to_sec1_point(false)
             .as_bytes()
             .to_vec();
-        let credential_id = oshioki_protocol::native_credential_id(&public);
-        let fingerprint = oshioki_protocol::device_fingerprint(&credential_id, &public, &[32; 32]);
+        let credential_id = vouch_protocol::native_credential_id(&public);
+        let fingerprint = vouch_protocol::device_fingerprint(&credential_id, &public, &[32; 32]);
         let device = DevicePublicRecordV1 {
             version: VERSION_V1,
             kind: DeviceKindV1::SecureEnclave,
@@ -4754,7 +4988,7 @@ mod tests {
         device: &DevicePublicRecordV1,
     ) -> DenyV1 {
         use p256::ecdsa::signature::Signer as _;
-        let challenge = oshioki_protocol::deny_challenge(request_id, &device.fingerprint);
+        let challenge = vouch_protocol::deny_challenge(request_id, &device.fingerprint);
         let signature: p256::ecdsa::Signature = signing.sign(&challenge);
         DenyV1 {
             version: VERSION_V1,
@@ -4845,7 +5079,7 @@ mod tests {
     /// device is active immediately.
     #[test]
     fn pin_record_writes_the_registry_on_confirmation() {
-        let dir = std::env::temp_dir().join(format!("oshioki-pinrecord-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vouch-pinrecord-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
@@ -4863,7 +5097,7 @@ mod tests {
     /// confirmed is not a pairing.
     #[test]
     fn pin_record_refuses_a_wrong_confirmation() {
-        let dir = std::env::temp_dir().join(format!("oshioki-pinrefuse-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vouch-pinrefuse-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let (unrelated, _) = deny_test_device();
@@ -4889,7 +5123,7 @@ mod tests {
     /// An invalid record never reaches the confirmation: label included.
     #[test]
     fn pin_record_refuses_an_invalid_record() {
-        let dir = std::env::temp_dir().join(format!("oshioki-pinbad-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vouch-pinbad-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let (unrelated, _) = deny_test_device();
@@ -4911,7 +5145,7 @@ mod tests {
 
     #[test]
     fn pin_record_takes_a_path() {
-        let cli = Cli::try_parse_from(["oshioki", "pin-record", "/tmp/record.json"]).unwrap();
+        let cli = Cli::try_parse_from(["vouch", "pin-record", "/tmp/record.json"]).unwrap();
         assert!(matches!(cli.verb, Verb::PinRecord { .. }));
     }
 
@@ -4942,7 +5176,7 @@ mod tests {
             &denial
         ));
         assert!(!denial_confirmed_by(
-            &DecisionV1::ApproveNative(oshioki_protocol::ApproveNativeV1 {
+            &DecisionV1::ApproveNative(vouch_protocol::ApproveNativeV1 {
                 version: VERSION_V1,
                 request_id: "req-1".into(),
                 device_fingerprint: denial.device_fingerprint.clone(),
@@ -4961,7 +5195,7 @@ mod tests {
             ("nats://203.0.1.1:4222", "refusing plaintext"),
             ("http://127.0.0.1:4222", "unsupported NATS URL scheme"),
         ] {
-            let dir = std::env::temp_dir().join(format!("oshioki-hook-nats-{}", Uuid::new_v4()));
+            let dir = std::env::temp_dir().join(format!("vouch-hook-nats-{}", Uuid::new_v4()));
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(
                 dir.join("config.env"),
@@ -4990,7 +5224,7 @@ mod tests {
     pub(super) fn private_socket_test_dir() -> PathBuf {
         use std::os::unix::fs::DirBuilderExt as _;
 
-        let dir = socket_temp_root().join(format!("oshioki-test-{}", Uuid::new_v4().simple()));
+        let dir = socket_temp_root().join(format!("vouch-test-{}", Uuid::new_v4().simple()));
         // mkdir is atomic and fails on any existing entry, including symlinks.
         std::fs::DirBuilder::new().mode(0o700).create(&dir).unwrap();
         dir
@@ -5031,7 +5265,7 @@ mod tests {
     fn socket_test_config(dir: &Path, socket: Option<&Path>) {
         let mut config = String::from("NATS_URL=nats://127.0.0.1:4222\n");
         if let Some(socket) = socket {
-            config.push_str("OSHIOKI_AGENT_SOCKET=");
+            config.push_str("VOUCH_AGENT_SOCKET=");
             config.push_str(&socket.display().to_string());
             config.push('\n');
         }
@@ -5076,7 +5310,7 @@ mod tests {
     #[tokio::test]
     async fn missing_socket_path_reports_no_agent() {
         let dir = socket_test_dir("missing");
-        socket_test_config(&dir, Some(Path::new("/nonexistent-oshioki-agent.sock")));
+        socket_test_config(&dir, Some(Path::new("/nonexistent-vouch-agent.sock")));
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         assert!(matches!(
             try_agent_socket(&dir, "req-1", b"{}", deadline, &test_progress())
@@ -5128,21 +5362,21 @@ mod tests {
                 .await
                 .unwrap();
             assert!(!request.is_empty());
-            let alive = oshioki_protocol::AliveV1::for_request("req-1");
+            let alive = vouch_protocol::AliveV1::for_request("req-1");
             let alive_frame =
-                oshioki_protocol::socket_v1::encode_frame(&serde_json::to_vec(&alive).unwrap())
+                vouch_protocol::socket_v1::encode_frame(&serde_json::to_vec(&alive).unwrap())
                     .unwrap();
             AsyncWriteExt::write_all(&mut stream, &alive_frame)
                 .await
                 .unwrap();
-            let decision = DecisionV1::Deny(oshioki_protocol::DenyV1 {
+            let decision = DecisionV1::Deny(vouch_protocol::DenyV1 {
                 version: VERSION_V1,
                 request_id: "req-1".into(),
                 device_fingerprint: "fp".into(),
                 signature: None,
             });
             let frame =
-                oshioki_protocol::socket_v1::encode_frame(&serde_json::to_vec(&decision).unwrap())
+                vouch_protocol::socket_v1::encode_frame(&serde_json::to_vec(&decision).unwrap())
                     .unwrap();
             AsyncWriteExt::write_all(&mut stream, &frame).await.unwrap();
         });
@@ -5180,7 +5414,7 @@ mod tests {
         let dir = socket_test_dir("software-replacement");
         // macOS caps AF_UNIX paths at 104 bytes; keep the socket outside the
         // descriptive temp directory so this test also runs there.
-        let socket_path = PathBuf::from(format!("/tmp/oshioki-repl-{}.sock", Uuid::new_v4()));
+        let socket_path = PathBuf::from(format!("/tmp/vouch-repl-{}.sock", Uuid::new_v4()));
         socket_test_config_no_nats(&dir, Some(&socket_path));
 
         let signing = SigningKey::from_slice(&[0x11; 32]).unwrap();
@@ -5190,11 +5424,11 @@ mod tests {
             .to_sec1_point(false)
             .as_bytes()
             .to_vec();
-        let credential_id = oshioki_protocol::native_credential_id(&credential_public_key);
+        let credential_id = vouch_protocol::native_credential_id(&credential_public_key);
         let device = DevicePublicRecordV1 {
             version: VERSION_V1,
             kind: DeviceKindV1::Software,
-            fingerprint: oshioki_protocol::device_fingerprint(
+            fingerprint: vouch_protocol::device_fingerprint(
                 &credential_id,
                 &credential_public_key,
                 x25519_dalek::PublicKey::from(&box_secret).as_bytes(),
@@ -5211,14 +5445,14 @@ mod tests {
         device.validate().unwrap();
         let request = build_synthetic_request();
         let raw = request.raw_json().unwrap();
-        let envelope = oshioki_protocol::RequestEnvelopeV1 {
+        let envelope = vouch_protocol::RequestEnvelopeV1 {
             version: VERSION_V1,
             request_id: request.request_id.clone(),
             host: request.host.clone(),
             user: request.user.clone(),
             issued_at: request.issued_at,
             expires_at: request.expires_at,
-            sealed: vec![oshioki_protocol::seal_v1(&raw, &device).unwrap()],
+            sealed: vec![vouch_protocol::seal_v1(&raw, &device).unwrap()],
         };
         let payload = serde_json::to_vec(&envelope).unwrap();
         let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
@@ -5231,25 +5465,23 @@ mod tests {
             let mut request_bytes = vec![0u8; u32::from_be_bytes(prefix) as usize];
             stream.read_exact(&mut request_bytes).await.unwrap();
             let received: RequestEnvelopeV1 = serde_json::from_slice(&request_bytes).unwrap();
-            let opened = oshioki_protocol::unseal_v1(&received.sealed[0], &box_secret).unwrap();
+            let opened = vouch_protocol::unseal_v1(&received.sealed[0], &box_secret).unwrap();
             assert_eq!(opened, expected_raw);
-            let alive = oshioki_protocol::socket_v1::encode_frame(
-                &serde_json::to_vec(&oshioki_protocol::AliveV1::for_request(
-                    &received.request_id,
-                ))
-                .unwrap(),
+            let alive = vouch_protocol::socket_v1::encode_frame(
+                &serde_json::to_vec(&vouch_protocol::AliveV1::for_request(&received.request_id))
+                    .unwrap(),
             )
             .unwrap();
             stream.write_all(&alive).await.unwrap();
             let signature: p256::ecdsa::Signature =
-                signing.sign(&oshioki_protocol::approve_challenge(&opened));
-            let approval = oshioki_protocol::ApproveNativeV1 {
+                signing.sign(&vouch_protocol::approve_challenge(&opened));
+            let approval = vouch_protocol::ApproveNativeV1 {
                 version: VERSION_V1,
                 request_id: received.request_id,
                 device_fingerprint: expected_fingerprint,
                 signature: URL_SAFE_NO_PAD.encode(signature.to_der().as_bytes()),
             };
-            let frame = oshioki_protocol::socket_v1::encode_frame(
+            let frame = vouch_protocol::socket_v1::encode_frame(
                 &serde_json::to_vec(&DecisionV1::ApproveNative(approval)).unwrap(),
             )
             .unwrap();
@@ -5313,7 +5545,7 @@ mod tests {
         let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
         let serve = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
-            let frame = oshioki_protocol::socket_v1::encode_frame(b"not json").unwrap();
+            let frame = vouch_protocol::socket_v1::encode_frame(b"not json").unwrap();
             AsyncWriteExt::write_all(&mut stream, &frame).await.unwrap();
         });
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -5350,28 +5582,28 @@ mod tests {
             AsyncReadExt::read_exact(&mut stream, &mut request)
                 .await
                 .unwrap();
-            let unknown_frame = oshioki_protocol::socket_v1::encode_frame(
+            let unknown_frame = vouch_protocol::socket_v1::encode_frame(
                 br#"{"type":"future_kind","version":1,"request_id":"req-1"}"#,
             )
             .unwrap();
             AsyncWriteExt::write_all(&mut stream, &unknown_frame)
                 .await
                 .unwrap();
-            let alive = oshioki_protocol::AliveV1::for_request("req-1");
+            let alive = vouch_protocol::AliveV1::for_request("req-1");
             let alive_frame =
-                oshioki_protocol::socket_v1::encode_frame(&serde_json::to_vec(&alive).unwrap())
+                vouch_protocol::socket_v1::encode_frame(&serde_json::to_vec(&alive).unwrap())
                     .unwrap();
             AsyncWriteExt::write_all(&mut stream, &alive_frame)
                 .await
                 .unwrap();
-            let decision = DecisionV1::Deny(oshioki_protocol::DenyV1 {
+            let decision = DecisionV1::Deny(vouch_protocol::DenyV1 {
                 version: VERSION_V1,
                 request_id: "req-1".into(),
                 device_fingerprint: "fp".into(),
                 signature: None,
             });
             let frame =
-                oshioki_protocol::socket_v1::encode_frame(&serde_json::to_vec(&decision).unwrap())
+                vouch_protocol::socket_v1::encode_frame(&serde_json::to_vec(&decision).unwrap())
                     .unwrap();
             AsyncWriteExt::write_all(&mut stream, &frame).await.unwrap();
         });
@@ -5412,7 +5644,7 @@ mod tests {
             AsyncReadExt::read_exact(&mut stream, &mut request)
                 .await
                 .unwrap();
-            let unknown_frame = oshioki_protocol::socket_v1::encode_frame(
+            let unknown_frame = vouch_protocol::socket_v1::encode_frame(
                 br#"{"type":"future_kind","version":1,"request_id":"req-1"}"#,
             )
             .unwrap();
@@ -5476,28 +5708,28 @@ mod tests {
             AsyncReadExt::read_exact(&mut stream, &mut request)
                 .await
                 .unwrap();
-            let alive = oshioki_protocol::AliveV1::for_request("req-1");
+            let alive = vouch_protocol::AliveV1::for_request("req-1");
             let alive_frame =
-                oshioki_protocol::socket_v1::encode_frame(&serde_json::to_vec(&alive).unwrap())
+                vouch_protocol::socket_v1::encode_frame(&serde_json::to_vec(&alive).unwrap())
                     .unwrap();
             AsyncWriteExt::write_all(&mut stream, &alive_frame)
                 .await
                 .unwrap();
-            let unknown_frame = oshioki_protocol::socket_v1::encode_frame(
+            let unknown_frame = vouch_protocol::socket_v1::encode_frame(
                 br#"{"type":"future_kind","version":1,"request_id":"req-1"}"#,
             )
             .unwrap();
             AsyncWriteExt::write_all(&mut stream, &unknown_frame)
                 .await
                 .unwrap();
-            let decision = DecisionV1::Deny(oshioki_protocol::DenyV1 {
+            let decision = DecisionV1::Deny(vouch_protocol::DenyV1 {
                 version: VERSION_V1,
                 request_id: "req-1".into(),
                 device_fingerprint: "fp".into(),
                 signature: None,
             });
             let frame =
-                oshioki_protocol::socket_v1::encode_frame(&serde_json::to_vec(&decision).unwrap())
+                vouch_protocol::socket_v1::encode_frame(&serde_json::to_vec(&decision).unwrap())
                     .unwrap();
             AsyncWriteExt::write_all(&mut stream, &frame).await.unwrap();
         });
@@ -5537,14 +5769,14 @@ mod tests {
             AsyncReadExt::read_exact(&mut stream, &mut request)
                 .await
                 .unwrap();
-            let alive = oshioki_protocol::AliveV1::for_request("req-1");
+            let alive = vouch_protocol::AliveV1::for_request("req-1");
             let alive_frame =
-                oshioki_protocol::socket_v1::encode_frame(&serde_json::to_vec(&alive).unwrap())
+                vouch_protocol::socket_v1::encode_frame(&serde_json::to_vec(&alive).unwrap())
                     .unwrap();
             AsyncWriteExt::write_all(&mut stream, &alive_frame)
                 .await
                 .unwrap();
-            let unknown_frame = oshioki_protocol::socket_v1::encode_frame(
+            let unknown_frame = vouch_protocol::socket_v1::encode_frame(
                 br#"{"type":"future_kind","version":1,"request_id":"req-1"}"#,
             )
             .unwrap();
@@ -5593,7 +5825,7 @@ mod tests {
         for (name, after_ack) in [
             (
                 "oversized",
-                u32::try_from(oshioki_protocol::socket_v1::MAX_FRAME_BYTES + 1)
+                u32::try_from(vouch_protocol::socket_v1::MAX_FRAME_BYTES + 1)
                     .unwrap()
                     .to_be_bytes()
                     .to_vec(),
@@ -5721,7 +5953,7 @@ mod tests {
     #[test]
     fn transports_rejects_an_empty_transport_set() {
         let dir = socket_test_dir("no-transports");
-        std::fs::write(dir.join("config.env"), "OSHIOKI_ALLOW_PLAINTEXT_NATS=1\n").unwrap();
+        std::fs::write(dir.join("config.env"), "VOUCH_ALLOW_PLAINTEXT_NATS=1\n").unwrap();
         let error = transports_from(&dir).unwrap_err();
         assert!(
             format!("{error:#}").contains("no approval transports configured"),
@@ -5756,7 +5988,7 @@ mod tests {
     #[test]
     fn nats_display_url_redacts_credentials() {
         assert_eq!(
-            nats_display_url("nats://oshioki:s3cret@127.0.0.1:4222"),
+            nats_display_url("nats://vouch:s3cret@127.0.0.1:4222"),
             "nats://127.0.0.1:4222"
         );
         assert_eq!(
@@ -5765,18 +5997,18 @@ mod tests {
         );
         assert_eq!(nats_display_url("nats://[::1]:4222"), "nats://[::1]:4222");
         assert_eq!(
-            nats_display_url("oshioki:s3cret@nats.example.com:4222"),
+            nats_display_url("vouch:s3cret@nats.example.com:4222"),
             "<invalid NATS URL>"
         );
         let noisy = sanitize_terminal_text(&format!(
-            "tls://oshioki:s3cret@nats.example.com:4222\u{001b}[2K{}",
+            "tls://vouch:s3cret@nats.example.com:4222\u{001b}[2K{}",
             "x".repeat(MAX_TERMINAL_ERROR_BYTES)
         ));
         assert!(!noisy.contains("s3cret"));
         assert!(!noisy.contains('\u{001b}'));
         assert!(noisy.ends_with("..."));
         assert_eq!(
-            sanitize_terminal_text("connect to oshioki:s3cret@nats.example.com:4222 failed"),
+            sanitize_terminal_text("connect to vouch:s3cret@nats.example.com:4222 failed"),
             "connect to <redacted>@nats.example.com:4222 failed"
         );
         assert_eq!(
@@ -5847,16 +6079,15 @@ mod tests {
     /// denial instead of falling back to another approval path.
     async fn acknowledged_hangup_stub(listener: tokio::net::UnixListener) {
         let (mut stream, _) = listener.accept().await.unwrap();
-        let mut prefix = [0u8; oshioki_protocol::socket_v1::FRAME_LEN_BYTES];
+        let mut prefix = [0u8; vouch_protocol::socket_v1::FRAME_LEN_BYTES];
         stream.read_exact(&mut prefix).await.unwrap();
-        let length = oshioki_protocol::socket_v1::decode_frame_len(prefix).unwrap();
+        let length = vouch_protocol::socket_v1::decode_frame_len(prefix).unwrap();
         let mut request = vec![0u8; length];
         stream.read_exact(&mut request).await.unwrap();
-        let request: oshioki_protocol::RequestEnvelopeV1 =
-            serde_json::from_slice(&request).unwrap();
-        let alive = oshioki_protocol::AliveV1::for_request(&request.request_id);
-        let frame = oshioki_protocol::socket_v1::encode_frame(&serde_json::to_vec(&alive).unwrap())
-            .unwrap();
+        let request: vouch_protocol::RequestEnvelopeV1 = serde_json::from_slice(&request).unwrap();
+        let alive = vouch_protocol::AliveV1::for_request(&request.request_id);
+        let frame =
+            vouch_protocol::socket_v1::encode_frame(&serde_json::to_vec(&alive).unwrap()).unwrap();
         stream.write_all(&frame).await.unwrap();
         stream.flush().await.unwrap();
     }
@@ -5877,16 +6108,15 @@ mod tests {
     /// one of these is a host-local fault per issues #66 and #68.
     async fn acknowledged_then_stub(listener: tokio::net::UnixListener, after_ack: Vec<u8>) {
         let (mut stream, _) = listener.accept().await.unwrap();
-        let mut prefix = [0u8; oshioki_protocol::socket_v1::FRAME_LEN_BYTES];
+        let mut prefix = [0u8; vouch_protocol::socket_v1::FRAME_LEN_BYTES];
         stream.read_exact(&mut prefix).await.unwrap();
-        let length = oshioki_protocol::socket_v1::decode_frame_len(prefix).unwrap();
+        let length = vouch_protocol::socket_v1::decode_frame_len(prefix).unwrap();
         let mut request = vec![0u8; length];
         stream.read_exact(&mut request).await.unwrap();
-        let request: oshioki_protocol::RequestEnvelopeV1 =
-            serde_json::from_slice(&request).unwrap();
-        let alive = oshioki_protocol::AliveV1::for_request(&request.request_id);
-        let frame = oshioki_protocol::socket_v1::encode_frame(&serde_json::to_vec(&alive).unwrap())
-            .unwrap();
+        let request: vouch_protocol::RequestEnvelopeV1 = serde_json::from_slice(&request).unwrap();
+        let alive = vouch_protocol::AliveV1::for_request(&request.request_id);
+        let frame =
+            vouch_protocol::socket_v1::encode_frame(&serde_json::to_vec(&alive).unwrap()).unwrap();
         stream.write_all(&frame).await.unwrap();
         if !after_ack.is_empty() {
             stream.write_all(&after_ack).await.unwrap();
@@ -5973,7 +6203,7 @@ mod tests {
         std::fs::write(
             dir.join("config.env"),
             format!(
-                "NATS_URL=nats://127.0.0.1:{port}\nNATS_USER=u\nNATS_PASS=p\nOSHIOKI_AGENT_SOCKET={}\n",
+                "NATS_URL=nats://127.0.0.1:{port}\nNATS_USER=u\nNATS_PASS=p\nVOUCH_AGENT_SOCKET={}\n",
                 socket_path.display()
             ),
         )
@@ -6008,7 +6238,7 @@ mod tests {
         std::fs::write(
             dir.join("config.env"),
             format!(
-                "NATS_URL=nats://127.0.0.1:{port}\nOSHIOKI_AGENT_SOCKET={}\n",
+                "NATS_URL=nats://127.0.0.1:{port}\nVOUCH_AGENT_SOCKET={}\n",
                 socket_path.display()
             ),
         )
@@ -6025,7 +6255,7 @@ mod tests {
             AsyncReadExt::read_exact(&mut stream, &mut request)
                 .await
                 .unwrap();
-            let unknown_frame = oshioki_protocol::socket_v1::encode_frame(
+            let unknown_frame = vouch_protocol::socket_v1::encode_frame(
                 br#"{"type":"future_kind","version":1,"request_id":"req-1"}"#,
             )
             .unwrap();
@@ -6165,7 +6395,7 @@ mod tests {
     fn socket_test_config_no_nats(dir: &Path, socket: Option<&Path>) {
         let mut config = String::new();
         if let Some(socket) = socket {
-            config.push_str("OSHIOKI_AGENT_SOCKET=");
+            config.push_str("VOUCH_AGENT_SOCKET=");
             config.push_str(&socket.display().to_string());
             config.push('\n');
         }
@@ -6179,7 +6409,7 @@ mod tests {
         let (device, signing) = deny_test_device();
         let mut request = build_synthetic_request();
         request.request_id = "req-1".into();
-        let transport = oshioki_transport::MockTransport::new();
+        let transport = vouch_transport::MockTransport::new();
         transport.push_verdict(DecisionV1::Deny(deny_for(&signing, "req-1", &device)));
         let decision = transport
             .request_decision(
@@ -6219,9 +6449,9 @@ mod tests {
         let (device, signing) = deny_test_device();
         let request = build_synthetic_request();
         let raw = request.raw_json().unwrap();
-        let challenge = oshioki_protocol::v1::approve_challenge(&raw);
+        let challenge = vouch_protocol::v1::approve_challenge(&raw);
         let signature: p256::ecdsa::Signature = signing.sign(&challenge);
-        let directory = std::env::temp_dir().join(format!("oshioki-signed-{}", Uuid::new_v4()));
+        let directory = std::env::temp_dir().join(format!("vouch-signed-{}", Uuid::new_v4()));
         write_registry_to(
             &directory,
             &DeviceRegistryV1 {
@@ -6230,13 +6460,13 @@ mod tests {
             },
         )
         .unwrap();
-        let approval = DecisionV1::ApproveNative(oshioki_protocol::ApproveNativeV1 {
+        let approval = DecisionV1::ApproveNative(vouch_protocol::ApproveNativeV1 {
             version: VERSION_V1,
             request_id: request.request_id.clone(),
             device_fingerprint: device.fingerprint.clone(),
             signature: URL_SAFE_NO_PAD.encode(signature.to_der().as_bytes()),
         });
-        let transport = oshioki_transport::MockTransport::new();
+        let transport = vouch_transport::MockTransport::new();
         transport.push_verdict(approval);
         let decision = transport
             .request_decision(
@@ -6282,7 +6512,7 @@ mod tests {
     /// stray `env.OSHIOKI_SESSION` (e.g. from `env_keep` or a command that
     /// sets it explicitly) must not be mistaken for the caller's label.
     #[test]
-    fn session_label_ignores_env_prefixed_oshioki_session() {
+    fn session_label_ignores_env_prefixed_vouch_session() {
         let values = vec![("env.OSHIOKI_SESSION".into(), "not-a-label".into())];
         assert_eq!(session_label(&values), None);
     }
@@ -6313,6 +6543,181 @@ mod tests {
         assert_eq!(session_label(&values), Some("second".into()));
     }
 
+    /// `session.VOUCH_SESSION` is the binding a current plugin writes.
+    #[test]
+    fn session_label_reads_vouch_session() {
+        let values = vec![("session.VOUCH_SESSION".into(), "foh-hev-4".into())];
+        assert_eq!(session_label(&values), Some("foh-hev-4".into()));
+    }
+
+    /// For one release a plugin built before the rename still labels the
+    /// session, and the new name wins when both are bound.
+    #[test]
+    fn session_label_falls_back_to_oshioki_session_for_one_release() {
+        let legacy = vec![("session.OSHIOKI_SESSION".into(), "legacy".into())];
+        assert_eq!(session_label(&legacy), Some("legacy".into()));
+        let both = vec![
+            ("session.VOUCH_SESSION".into(), "current".into()),
+            ("session.OSHIOKI_SESSION".into(), "legacy".into()),
+        ];
+        assert_eq!(session_label(&both), Some("current".into()));
+        let invalid_current = vec![
+            ("session.VOUCH_SESSION".into(), "bad\u{0007}".into()),
+            ("session.OSHIOKI_SESSION".into(), "legacy".into()),
+        ];
+        assert_eq!(session_label(&invalid_current), Some("legacy".into()));
+    }
+
+    /// The reason is bound from `session.VOUCH_REASON`, the plugin's copy of
+    /// the caller's pre-`env_reset` environment.
+    #[test]
+    fn reason_label_reads_bound_session_prefix() {
+        let values = vec![(
+            "session.VOUCH_REASON".into(),
+            "  Reload the hevd launch daemon.  ".into(),
+        )];
+        assert_eq!(
+            reason_label(&values),
+            Some("Reload the hevd launch daemon.".into())
+        );
+    }
+
+    /// `env.VOUCH_REASON` is the environment the command runs with. A
+    /// command that sets it (or an `env_keep` that keeps it) must not put
+    /// words in the agent's mouth.
+    #[test]
+    fn reason_label_ignores_env_prefixed_vouch_reason() {
+        let values = vec![("env.VOUCH_REASON".into(), "not a reason".into())];
+        assert_eq!(reason_label(&values), None);
+    }
+
+    /// Overlong, empty, and control-character reasons are dropped whole,
+    /// never clipped or passed through.
+    #[test]
+    fn reason_label_rejects_overlong_and_control_characters() {
+        let bound = |value: String| vec![("session.VOUCH_REASON".to_owned(), value)];
+        assert_eq!(reason_label(&bound(String::new())), None);
+        assert_eq!(reason_label(&bound("   ".into())), None);
+        assert_eq!(
+            reason_label(&bound("x".repeat(vouch_protocol::MAX_REASON_CHARS + 1))),
+            None
+        );
+        assert_eq!(
+            reason_label(&bound("x".repeat(vouch_protocol::MAX_REASON_CHARS))),
+            Some("x".repeat(vouch_protocol::MAX_REASON_CHARS))
+        );
+        assert_eq!(reason_label(&bound("line one\nline two".into())), None);
+        assert_eq!(reason_label(&bound("\u{1b}[2Jclear".into())), None);
+    }
+
+    fn plugin_values_with(extra: &[(&str, &str)]) -> Vec<(String, String)> {
+        let mut values: Vec<(String, String)> = vec![
+            ("info.command".into(), "/bin/launchctl".into()),
+            ("argv.1".into(), "launchctl".into()),
+            ("argv.2".into(), "kickstart".into()),
+            ("env.PATH".into(), "/usr/bin".into()),
+            ("env.VOUCH_REASON".into(), "from the run environment".into()),
+            (
+                "meta.protocol_version".into(),
+                PRIVATE_PLUGIN_HOOK_PROTOCOL_VERSION.to_string(),
+            ),
+            ("meta.env_complete".into(), "1".into()),
+            ("meta.env_count".into(), "2".into()),
+        ];
+        values.extend(
+            extra
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned())),
+        );
+        values
+    }
+
+    /// The bound reason reaches the request, and `env.VOUCH_REASON` stays
+    /// where it was: in the signed execution environment, not the reason.
+    #[test]
+    fn build_request_carries_the_bound_reason_only() {
+        let request = build_request(&plugin_values_with(&[
+            ("session.VOUCH_SESSION", "foh-hev-4"),
+            ("session.VOUCH_REASON", "Reload hevd"),
+        ]))
+        .unwrap();
+        assert_eq!(request.session.as_deref(), Some("foh-hev-4"));
+        assert_eq!(request.reason.as_deref(), Some("Reload hevd"));
+        assert!(
+            request
+                .env
+                .iter()
+                .any(|entry| entry.name == "VOUCH_REASON"
+                    && entry.value == "from the run environment")
+        );
+
+        let without = build_request(&plugin_values_with(&[])).unwrap();
+        assert_eq!(without.reason, None);
+        let rejected = build_request(&plugin_values_with(&[(
+            "session.VOUCH_REASON",
+            "bell\u{0007}",
+        )]))
+        .unwrap();
+        assert_eq!(
+            rejected.reason, None,
+            "an invalid reason is dropped, not fatal"
+        );
+    }
+
+    /// A request in the 0.4.x shape (no `session`, no `reason`) is still
+    /// approved by a device signature over its exact bytes, and so is one
+    /// carrying a reason: the reason never enters the verification decision
+    /// beyond being part of the signed bytes.
+    #[tokio::test]
+    async fn requests_with_and_without_a_reason_verify() {
+        use p256::ecdsa::signature::Signer as _;
+        let (device, signing) = deny_test_device();
+        let directory = std::env::temp_dir().join(format!("vouch-reason-{}", Uuid::new_v4()));
+        write_registry_to(
+            &directory,
+            &DeviceRegistryV1 {
+                version: VERSION_V1,
+                devices: vec![device.clone()],
+            },
+        )
+        .unwrap();
+        let mut legacy = build_synthetic_request();
+        legacy.session = None;
+        legacy.reason = None;
+        let mut with_reason = legacy.clone();
+        with_reason.request_id = Uuid::new_v4().to_string();
+        with_reason.reason = Some("Install the libssl headers".into());
+        for request in [legacy, with_reason] {
+            let raw = request.raw_json().unwrap();
+            let text = String::from_utf8(raw.clone()).unwrap();
+            assert_eq!(
+                text.contains("\"reason\""),
+                request.reason.is_some(),
+                "{text}"
+            );
+            let signature: p256::ecdsa::Signature =
+                signing.sign(&vouch_protocol::v1::approve_challenge(&raw));
+            let approval = DecisionV1::ApproveNative(vouch_protocol::ApproveNativeV1 {
+                version: VERSION_V1,
+                request_id: request.request_id.clone(),
+                device_fingerprint: device.fingerprint.clone(),
+                signature: URL_SAFE_NO_PAD.encode(signature.to_der().as_bytes()),
+            });
+            apply_decision(
+                approval,
+                DecisionLane::Nats,
+                &request,
+                &raw,
+                std::slice::from_ref(&device),
+                0,
+                &directory,
+            )
+            .await
+            .expect("a signed approval verifies with or without a reason");
+        }
+        fs::remove_dir_all(directory).unwrap();
+    }
+
     /// `normalize_session_label` trims whitespace, rejects control
     /// characters, and caps length at 64 characters.
     #[test]
@@ -6338,8 +6743,8 @@ mod auth_tests {
     include!("revocation_tests.rs");
 
     use super::*;
-    use oshioki_protocol::auth_v1::{AuthApproveNativeV1, auth_challenge};
     use p256::ecdsa::{SigningKey, signature::Signer as _};
+    use vouch_protocol::auth_v1::{AuthApproveNativeV1, auth_challenge};
 
     fn pam_json(overrides: &str) -> String {
         format!(
@@ -6375,8 +6780,8 @@ mod auth_tests {
             .to_sec1_point(false)
             .as_bytes()
             .to_vec();
-        let credential_id = oshioki_protocol::native_credential_id(&public);
-        let fingerprint = oshioki_protocol::device_fingerprint(&credential_id, &public, &[42; 32]);
+        let credential_id = vouch_protocol::native_credential_id(&public);
+        let fingerprint = vouch_protocol::device_fingerprint(&credential_id, &public, &[42; 32]);
         let device = DevicePublicRecordV1 {
             version: VERSION_V1,
             kind: DeviceKindV1::SecureEnclave,
@@ -6428,7 +6833,7 @@ mod auth_tests {
         let device = DevicePublicRecordV1 {
             version: VERSION_V1,
             kind: DeviceKindV1::Webauthn,
-            fingerprint: oshioki_protocol::device_fingerprint(
+            fingerprint: vouch_protocol::device_fingerprint(
                 &credential_id,
                 &cose_bytes,
                 &box_public,
@@ -6481,7 +6886,7 @@ mod auth_tests {
         let mut signed = authenticator_data.clone();
         signed.extend_from_slice(&Sha256::digest(client.as_bytes()));
         let signature: p256::ecdsa::Signature = signing.sign(&signed);
-        AuthDecisionV1::AuthenticateWebauthn(oshioki_protocol::auth_v1::AuthApproveWebauthnV1 {
+        AuthDecisionV1::AuthenticateWebauthn(vouch_protocol::auth_v1::AuthApproveWebauthnV1 {
             version: AUTH_WIRE_VERSION,
             request_id: request_id.to_owned(),
             device_fingerprint: device.fingerprint.clone(),
@@ -6595,7 +7000,7 @@ mod auth_tests {
     #[test]
     fn the_authenticate_verb_parses_the_private_argument_list() {
         let cli = Cli::try_parse_from([
-            "oshioki",
+            "vouch",
             "authenticate",
             "--pam-protocol-version",
             "2",
@@ -6613,8 +7018,8 @@ mod auth_tests {
         assert_eq!(pam_protocol_version, 2);
         assert_eq!(pam_liveness_fd, Some(7));
 
-        let cli = Cli::try_parse_from(["oshioki", "authenticate", "--pam-protocol-version", "2"])
-            .unwrap();
+        let cli =
+            Cli::try_parse_from(["vouch", "authenticate", "--pam-protocol-version", "2"]).unwrap();
         let Verb::Authenticate {
             pam_liveness_fd, ..
         } = cli.verb
@@ -6746,14 +7151,14 @@ mod auth_tests {
     /// exits unavailable, so the PAM stack keeps its password path.
     #[tokio::test]
     async fn no_hardware_recipient_is_unavailable_and_sends_nothing() {
-        let directory = std::env::temp_dir().join(format!("oshioki-auth-none-{}", Uuid::new_v4()));
+        let directory = std::env::temp_dir().join(format!("vouch-auth-none-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&directory).unwrap();
         // A socket path that does not exist: reaching a transport at all
         // would be the failure this test is asserting cannot happen.
         std::fs::write(
             directory.join("config.env"),
             format!(
-                "OSHIOKI_AGENT_SOCKET={}\n",
+                "VOUCH_AGENT_SOCKET={}\n",
                 directory.join("absent.sock").display()
             ),
         )
@@ -7124,9 +7529,9 @@ mod auth_tests {
         let (device, signing) = auth_test_device();
         let request = auth_request();
         let raw = request.raw_json().unwrap();
-        let challenge = oshioki_protocol::approve_challenge(&raw);
+        let challenge = vouch_protocol::approve_challenge(&raw);
         let signature: p256::ecdsa::Signature = signing.sign(&challenge);
-        let legacy = DecisionV1::ApproveNative(oshioki_protocol::ApproveNativeV1 {
+        let legacy = DecisionV1::ApproveNative(vouch_protocol::ApproveNativeV1 {
             version: VERSION_V1,
             request_id: request.request_id.clone(),
             device_fingerprint: device.fingerprint.clone(),
@@ -7227,7 +7632,7 @@ mod auth_tests {
         std::fs::write(
             directory.join("config.env"),
             format!(
-                "OSHIOKI_AGENT_SOCKET={}\n",
+                "VOUCH_AGENT_SOCKET={}\n",
                 directory.join("agent.sock").display()
             ),
         )
@@ -7243,15 +7648,15 @@ mod auth_tests {
     /// actually said something before leaving.
     async fn auth_ack_then(listener: tokio::net::UnixListener, after_ack: Vec<u8>) {
         let (mut stream, _) = listener.accept().await.unwrap();
-        let mut prefix = [0u8; oshioki_protocol::socket_v1::FRAME_LEN_BYTES];
+        let mut prefix = [0u8; vouch_protocol::socket_v1::FRAME_LEN_BYTES];
         stream.read_exact(&mut prefix).await.unwrap();
-        let length = oshioki_protocol::socket_v1::decode_frame_len(prefix).unwrap();
+        let length = vouch_protocol::socket_v1::decode_frame_len(prefix).unwrap();
         let mut request = vec![0u8; length];
         stream.read_exact(&mut request).await.unwrap();
-        let envelope: oshioki_protocol::AuthEnvelopeV1 = serde_json::from_slice(&request).unwrap();
-        let alive = oshioki_protocol::AliveV1::for_request(&envelope.request_id);
-        let frame = oshioki_protocol::socket_v1::encode_frame(&serde_json::to_vec(&alive).unwrap())
-            .unwrap();
+        let envelope: vouch_protocol::AuthEnvelopeV1 = serde_json::from_slice(&request).unwrap();
+        let alive = vouch_protocol::AliveV1::for_request(&envelope.request_id);
+        let frame =
+            vouch_protocol::socket_v1::encode_frame(&serde_json::to_vec(&alive).unwrap()).unwrap();
         stream.write_all(&frame).await.unwrap();
         if !after_ack.is_empty() {
             stream.write_all(&after_ack).await.unwrap();
@@ -7297,7 +7702,7 @@ mod auth_tests {
     async fn garbage_after_an_acknowledgement_falls_back_to_password() {
         let directory = auth_socket_dir("ack-garbage");
         let listener = tokio::net::UnixListener::bind(directory.join("agent.sock")).unwrap();
-        let garbage = oshioki_protocol::socket_v1::encode_frame(b"{not a decision").unwrap();
+        let garbage = vouch_protocol::socket_v1::encode_frame(b"{not a decision").unwrap();
         let serve = tokio::spawn(auth_ack_then(listener, garbage));
         let error =
             execute_auth_request_at(auth_request(), Duration::from_secs(30), &directory, None)
@@ -7355,17 +7760,16 @@ mod auth_tests {
         let (device, signing) = auth_test_device();
         let request = auth_request();
         let raw = request.raw_json().unwrap();
-        let challenge = oshioki_protocol::approve_challenge(&raw);
+        let challenge = vouch_protocol::approve_challenge(&raw);
         let signature: p256::ecdsa::Signature = signing.sign(&challenge);
-        let legacy = DecisionV1::ApproveNative(oshioki_protocol::ApproveNativeV1 {
+        let legacy = DecisionV1::ApproveNative(vouch_protocol::ApproveNativeV1 {
             version: VERSION_V1,
             request_id: request.request_id.clone(),
             device_fingerprint: device.fingerprint.clone(),
             signature: URL_SAFE_NO_PAD.encode(signature.to_der()),
         });
         let frame =
-            oshioki_protocol::socket_v1::encode_frame(&serde_json::to_vec(&legacy).unwrap())
-                .unwrap();
+            vouch_protocol::socket_v1::encode_frame(&serde_json::to_vec(&legacy).unwrap()).unwrap();
         let listener = tokio::net::UnixListener::bind(directory.join("agent.sock")).unwrap();
         let serve = tokio::spawn(auth_ack_then(listener, frame));
         let error = execute_auth_request_at(request, Duration::from_secs(30), &directory, None)
@@ -7509,14 +7913,13 @@ mod auth_tests {
     /// Builds a config directory with an unreachable socket transport, so a
     /// test that must not reach a transport still has a valid config.
     fn auth_config_dir(name: &str) -> PathBuf {
-        let directory =
-            std::env::temp_dir().join(format!("oshioki-auth-{name}-{}", Uuid::new_v4()));
+        let directory = std::env::temp_dir().join(format!("vouch-auth-{name}-{}", Uuid::new_v4()));
         let _ = std::fs::remove_dir_all(&directory);
         std::fs::create_dir_all(&directory).unwrap();
         std::fs::write(
             directory.join("config.env"),
             format!(
-                "OSHIOKI_AGENT_SOCKET={}\n",
+                "VOUCH_AGENT_SOCKET={}\n",
                 directory.join("absent.sock").display()
             ),
         )
@@ -7537,8 +7940,7 @@ mod auth_tests {
     /// everyone out of sudo over a missing file.
     #[tokio::test]
     async fn a_missing_transport_config_is_unavailable() {
-        let directory =
-            std::env::temp_dir().join(format!("oshioki-auth-noconf-{}", Uuid::new_v4()));
+        let directory = std::env::temp_dir().join(format!("vouch-auth-noconf-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&directory).unwrap();
         let (device, _) = auth_test_device();
         seed_registry(&directory, vec![device]);
@@ -7767,7 +8169,7 @@ mod auth_tests {
         request_id: String,
         verdicts: Vec<Vec<u8>>,
     ) -> tokio::task::JoinHandle<()> {
-        use oshioki_transport::ServerTransport as _;
+        use vouch_transport::ServerTransport as _;
         let scratch = super::tests::private_socket_test_dir();
         fs::write(scratch.join("config.env"), format!("NATS_URL={url}\n")).unwrap();
         let peer = NatsTransport::from_config_dir(&scratch).await.unwrap();
@@ -7775,7 +8177,7 @@ mod auth_tests {
         let mut requests = peer.subscribe(&request_subject).await.unwrap();
         // Publishing flushes the connection, so the subscription is live
         // before the hook can publish.
-        peer.publish("oshioki.test.ready".into(), Vec::new())
+        peer.publish("vouch.test.ready".into(), Vec::new())
             .await
             .unwrap();
         tokio::spawn(async move {
@@ -7783,7 +8185,7 @@ mod auth_tests {
                 .next()
                 .await
                 .expect("the hook publishes its request");
-            let alive = serde_json::to_vec(&oshioki_protocol::AliveV1::for_request(&request_id));
+            let alive = serde_json::to_vec(&vouch_protocol::AliveV1::for_request(&request_id));
             peer.publish(format!("oshioki.ack.{request_id}"), alive.unwrap())
                 .await
                 .unwrap();
@@ -7836,8 +8238,8 @@ mod auth_tests {
     ) -> DecisionV1 {
         let raw = request.raw_json().unwrap();
         let signature: p256::ecdsa::Signature =
-            signing.sign(&oshioki_protocol::v1::approve_challenge(&raw));
-        DecisionV1::ApproveNative(oshioki_protocol::ApproveNativeV1 {
+            signing.sign(&vouch_protocol::v1::approve_challenge(&raw));
+        DecisionV1::ApproveNative(vouch_protocol::ApproveNativeV1 {
             version: VERSION_V1,
             request_id: request.request_id.clone(),
             device_fingerprint: device.fingerprint.clone(),
@@ -8083,17 +8485,17 @@ mod auth_tests {
         decision: Option<Vec<u8>>,
     ) {
         let (mut stream, _) = listener.accept().await.unwrap();
-        let mut prefix = [0u8; oshioki_protocol::socket_v1::FRAME_LEN_BYTES];
+        let mut prefix = [0u8; vouch_protocol::socket_v1::FRAME_LEN_BYTES];
         stream.read_exact(&mut prefix).await.unwrap();
-        let length = oshioki_protocol::socket_v1::decode_frame_len(prefix).unwrap();
+        let length = vouch_protocol::socket_v1::decode_frame_len(prefix).unwrap();
         let mut request = vec![0u8; length];
         stream.read_exact(&mut request).await.unwrap();
-        let alive = oshioki_protocol::AliveV1::for_request(&ack_id);
-        let frame = oshioki_protocol::socket_v1::encode_frame(&serde_json::to_vec(&alive).unwrap())
-            .unwrap();
+        let alive = vouch_protocol::AliveV1::for_request(&ack_id);
+        let frame =
+            vouch_protocol::socket_v1::encode_frame(&serde_json::to_vec(&alive).unwrap()).unwrap();
         let _ = stream.write_all(&frame).await;
         if let Some(decision) = decision {
-            let frame = oshioki_protocol::socket_v1::encode_frame(&decision).unwrap();
+            let frame = vouch_protocol::socket_v1::encode_frame(&decision).unwrap();
             let _ = stream.write_all(&frame).await;
         }
         let _ = stream.flush().await;
@@ -8112,7 +8514,7 @@ mod auth_tests {
         let socket = directory.join("agent.sock");
         fs::write(
             directory.join("config.env"),
-            format!("OSHIOKI_AGENT_SOCKET={}\n", socket.display()),
+            format!("VOUCH_AGENT_SOCKET={}\n", socket.display()),
         )
         .unwrap();
         if let Some(origin) = server_origin {
@@ -8274,7 +8676,7 @@ mod auth_tests {
     #[tokio::test]
     async fn command_lane_host_faults_are_unavailable() {
         let (device, _) = super::tests::deny_test_device();
-        let socket_only = "OSHIOKI_AGENT_SOCKET=/nonexistent/oshioki-h2.sock\n";
+        let socket_only = "VOUCH_AGENT_SOCKET=/nonexistent/vouch-h2.sock\n";
 
         let directory = h2_dir("no-config", socket_only, vec![device.clone()]);
         fs::remove_file(directory.join("config.env")).unwrap();

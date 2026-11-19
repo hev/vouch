@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- Entitlements for the signed Oshioki.app (#23). codesign substitutes
+<!-- Entitlements for the signed Vouch.app (#23). codesign substitutes
      $(AppIdentifierPrefix) with the signing Team ID, so one file serves
      Apple Development signatures on a laptop and Developer ID signatures
      for distribution. The keychain group lets the agent's box secret stay
@@ -10,7 +10,7 @@
 <dict>
   <key>keychain-access-groups</key>
   <array>
-    <string>$(AppIdentifierPrefix)dev.oshioki.agent</string>
+    <string>$(AppIdentifierPrefix)dev.hev.vouch.agent</string>
   </array>
 </dict>
 </plist>

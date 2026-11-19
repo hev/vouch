@@ -24,7 +24,7 @@ pub const PATH: &str = "/usr/bin:/bin";
 /// Set on the one re-exec. A process that carries it has already been
 /// restarted, so a still-unclean environment is refused rather than
 /// restarted again.
-pub const REEXEC_MARKER: &str = "OSHIOKI_SUDO_LANE_REEXEC";
+pub const REEXEC_MARKER: &str = "VOUCH_SUDO_LANE_REEXEC";
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 
@@ -154,7 +154,7 @@ mod tests {
         assert_eq!(
             classify(pairs(&[
                 ("PATH", PATH),
-                ("OSHIOKI_CONFIG_DIR", "/tmp/attacker"),
+                ("VOUCH_CONFIG_DIR", "/tmp/attacker"),
             ])),
             Entry::Reexec
         );
@@ -191,7 +191,9 @@ mod tests {
         lines.sort_unstable();
         let marker = format!("{REEXEC_MARKER}=1");
         let path = format!("PATH={PATH}");
-        assert_eq!(lines, [marker.as_str(), path.as_str()]);
+        let mut expected = [marker.as_str(), path.as_str()];
+        expected.sort_unstable();
+        assert_eq!(lines, expected);
         let received = lines.iter().map(|line| {
             let (name, value) = line.split_once('=').unwrap();
             (OsString::from(name), OsString::from(value))

@@ -4,19 +4,19 @@ umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
-SESSION_FILE="${OSHIOKI_ACCEPTANCE_SESSION_FILE:-$REPO_ROOT/.acceptance-session}"
-TAILSCALE_BIN="${OSHIOKI_ACCEPTANCE_TAILSCALE_BIN:-tailscale}"
-PRIVILEGE_BIN="${OSHIOKI_ACCEPTANCE_PRIVILEGE_BIN:-sudo}"
-NATS_SERVER_BIN="${OSHIOKI_ACCEPTANCE_NATS_SERVER_BIN:-nats-server}"
-NATS_BIN="${OSHIOKI_ACCEPTANCE_NATS_BIN:-nats}"
-CARGO_BIN="${OSHIOKI_ACCEPTANCE_CARGO_BIN:-cargo}"
-CURL_BIN="${OSHIOKI_ACCEPTANCE_CURL_BIN:-curl}"
-OPENSSL_BIN="${OSHIOKI_ACCEPTANCE_OPENSSL_BIN:-openssl}"
-JQ_BIN="${OSHIOKI_ACCEPTANCE_JQ_BIN:-jq}"
-NODE_BIN="${OSHIOKI_ACCEPTANCE_NODE_BIN:-node}"
-SETSID_BIN="${OSHIOKI_ACCEPTANCE_SETSID_BIN:-setsid}"
-SERVER_BIN="${OSHIOKI_ACCEPTANCE_SERVER_BIN:-$REPO_ROOT/target/debug/oshioki-server}"
-HOOK_BIN="${OSHIOKI_ACCEPTANCE_HOOK_BIN:-$REPO_ROOT/target/debug/oshioki}"
+SESSION_FILE="${VOUCH_ACCEPTANCE_SESSION_FILE:-$REPO_ROOT/.acceptance-session}"
+TAILSCALE_BIN="${VOUCH_ACCEPTANCE_TAILSCALE_BIN:-tailscale}"
+PRIVILEGE_BIN="${VOUCH_ACCEPTANCE_PRIVILEGE_BIN:-sudo}"
+NATS_SERVER_BIN="${VOUCH_ACCEPTANCE_NATS_SERVER_BIN:-nats-server}"
+NATS_BIN="${VOUCH_ACCEPTANCE_NATS_BIN:-nats}"
+CARGO_BIN="${VOUCH_ACCEPTANCE_CARGO_BIN:-cargo}"
+CURL_BIN="${VOUCH_ACCEPTANCE_CURL_BIN:-curl}"
+OPENSSL_BIN="${VOUCH_ACCEPTANCE_OPENSSL_BIN:-openssl}"
+JQ_BIN="${VOUCH_ACCEPTANCE_JQ_BIN:-jq}"
+NODE_BIN="${VOUCH_ACCEPTANCE_NODE_BIN:-node}"
+SETSID_BIN="${VOUCH_ACCEPTANCE_SETSID_BIN:-setsid}"
+SERVER_BIN="${VOUCH_ACCEPTANCE_SERVER_BIN:-$REPO_ROOT/target/debug/vouch-server}"
+HOOK_BIN="${VOUCH_ACCEPTANCE_HOOK_BIN:-$REPO_ROOT/target/debug/vouch}"
 
 usage() {
   printf 'usage: scripts/dev-acceptance up [--state-dir PATH] | mac [--label NAME] | enroll | test | status | down\n' >&2
@@ -129,7 +129,7 @@ free_port() {
 }
 
 allocate_ports() {
-  local fixed_nats="${OSHIOKI_ACCEPTANCE_NATS_PORT:-}" fixed_server="${OSHIOKI_ACCEPTANCE_SERVER_PORT:-}"
+  local fixed_nats="${VOUCH_ACCEPTANCE_NATS_PORT:-}" fixed_server="${VOUCH_ACCEPTANCE_SERVER_PORT:-}"
   for _ in $(seq 1 20); do
     nats_port="${fixed_nats:-$(free_port)}"
     server_port="${fixed_server:-$(free_port)}"
@@ -232,7 +232,7 @@ validate_state_root() {
     temp_root="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
     [ "$(dirname "$root")" = "$temp_root" ] || die "refusing unsafe managed state path: $root"
     case "$(basename "$root")" in
-      oshioki-acceptance.*) ;;
+      vouch-acceptance.*) ;;
       *) die "refusing unsafe managed state path: $root" ;;
     esac
   fi
@@ -300,9 +300,9 @@ write_session() {
 
 wait_for_nats() {
   local password="$1"
-  for _ in $(seq 1 "${OSHIOKI_ACCEPTANCE_READY_ATTEMPTS:-100}"); do
+  for _ in $(seq 1 "${VOUCH_ACCEPTANCE_READY_ATTEMPTS:-100}"); do
     process_is_owned "$nats_pid" "$nats_start" || die "NATS stopped during startup"
-    if NATS_PASSWORD="$password" "$NATS_BIN" --server "nats://$nats_host:$nats_port" --user oshioki stream ls >/dev/null 2>&1; then
+    if NATS_PASSWORD="$password" "$NATS_BIN" --server "nats://$nats_host:$nats_port" --user vouch stream ls >/dev/null 2>&1; then
       return
     fi
     sleep 0.1
@@ -311,7 +311,7 @@ wait_for_nats() {
 }
 
 wait_for_server() {
-  for _ in $(seq 1 "${OSHIOKI_ACCEPTANCE_READY_ATTEMPTS:-100}"); do
+  for _ in $(seq 1 "${VOUCH_ACCEPTANCE_READY_ATTEMPTS:-100}"); do
     process_is_owned "$server_pid" "$server_start" || die "server stopped during startup"
     if "$CURL_BIN" --fail --silent "http://127.0.0.1:$server_port/healthz" >/dev/null; then
       return
@@ -334,7 +334,7 @@ verify_serve_route() {
 }
 
 wait_for_origin() {
-  for _ in $(seq 1 "${OSHIOKI_ACCEPTANCE_HTTPS_READY_ATTEMPTS:-300}"); do
+  for _ in $(seq 1 "${VOUCH_ACCEPTANCE_HTTPS_READY_ATTEMPTS:-300}"); do
     if verify_serve_route && "$CURL_BIN" --fail --silent "$origin/healthz" >/dev/null 2>&1; then
       return
     fi
@@ -357,7 +357,7 @@ start_session() {
   if [ "$#" -eq 0 ]; then
     local temp_root
     temp_root="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
-    state_root="$(mktemp -d "$temp_root/oshioki-acceptance.XXXXXX")"
+    state_root="$(mktemp -d "$temp_root/vouch-acceptance.XXXXXX")"
   elif [ "$#" -eq 2 ] && [ "$1" = --state-dir ]; then
     mkdir -p "$2"
     state_root="$(cd "$2" && pwd -P)"
@@ -397,7 +397,7 @@ start_session() {
   allocate_ports
   nats_host="${acceptance_nats_host:-127.0.0.1}"
   validate_nats_host "$nats_host"
-  https_port="${OSHIOKI_ACCEPTANCE_HTTPS_PORT:-8443}"
+  https_port="${VOUCH_ACCEPTANCE_HTTPS_PORT:-8443}"
   validate_port "$nats_port"
   validate_port "$server_port"
   validate_port "$https_port"
@@ -416,30 +416,30 @@ start_session() {
 
   password="$($OPENSSL_BIN rand -hex 32)"
   nats_config="$state_root/nats/auth.conf"
-  printf 'authorization {\n  users = [{user: "oshioki", password: "%s"}]\n}\n' "$password" >"$nats_config"
+  printf 'authorization {\n  users = [{user: "vouch", password: "%s"}]\n}\n' "$password" >"$nats_config"
   chmod 0600 "$nats_config"
   start_detached "$state_root/nats.pid" "$state_root/logs/nats.log" \
     "$NATS_SERVER_BIN" -c "$nats_config" -js -sd "$state_root/nats/store" -a "$nats_host" -p "$nats_port"
   nats_pid="$detached_pid"
   nats_start="$detached_start"
   wait_for_nats "$password"
-  NATS_PASSWORD="$password" "$NATS_BIN" --server "nats://$nats_host:$nats_port" --user oshioki \
+  NATS_PASSWORD="$password" "$NATS_BIN" --server "nats://$nats_host:$nats_port" --user vouch \
     stream info OSHIOKI >/dev/null 2>&1 || \
-    NATS_PASSWORD="$password" "$NATS_BIN" --server "nats://$nats_host:$nats_port" --user oshioki \
+    NATS_PASSWORD="$password" "$NATS_BIN" --server "nats://$nats_host:$nats_port" --user vouch \
       stream add OSHIOKI --subjects 'oshioki.request.>' --storage file \
       --retention limits --discard old --max-age 10m --defaults >/dev/null
 
   # shellcheck disable=SC2016 # jq fields use jq variables, not shell expansion.
   "$JQ_BIN" -n --arg origin "$origin" --arg rp_id "$rp_id" \
     '{version:1,origin:$origin,rp_id:$rp_id,server_base_url:$origin}' >"$state_root/hook/hook.json"
-  printf 'NATS_URL=nats://%s:%s\nNATS_USER=oshioki\nNATS_PASS=%s\n' \
+  printf 'NATS_URL=nats://%s:%s\nNATS_USER=vouch\nNATS_PASS=%s\n' \
     "$nats_host" "$nats_port" "$password" >"$state_root/hook/config.env"
   # The hook refuses plaintext NATS past loopback; a tailnet session is
   # exactly that, so it carries the testing opt-out. A loopback session
   # needs nothing.
   case "$nats_host" in
     localhost|127.*|::1) ;;
-    *) printf 'OSHIOKI_ALLOW_PLAINTEXT_NATS=1\n' >>"$state_root/hook/config.env" ;;
+    *) printf 'VOUCH_ALLOW_PLAINTEXT_NATS=1\n' >>"$state_root/hook/config.env" ;;
   esac
   if [ ! -e "$state_root/hook/devices.json" ]; then
     printf '%s\n' '{"version":1,"devices":[]}' >"$state_root/hook/devices.json"
@@ -447,12 +447,12 @@ start_session() {
   chmod 0600 "$state_root/hook/hook.json" "$state_root/hook/config.env" "$state_root/hook/devices.json"
 
   NATS_URL="nats://$nats_host:$nats_port" \
-  NATS_USER=oshioki \
+  NATS_USER=vouch \
   NATS_PASS="$password" \
-  OSHIOKI_STATE_PATH="$state_root/server/state.sqlite3" \
-  OSHIOKI_LISTEN="127.0.0.1:$server_port" \
-  OSHIOKI_ORIGIN="$origin" \
-  OSHIOKI_RP_ID="$rp_id" \
+  VOUCH_STATE_PATH="$state_root/server/state.sqlite3" \
+  VOUCH_LISTEN="127.0.0.1:$server_port" \
+  VOUCH_ORIGIN="$origin" \
+  VOUCH_RP_ID="$rp_id" \
     start_detached "$state_root/server.pid" "$state_root/logs/server.log" "$SERVER_BIN"
   server_pid="$detached_pid"
   server_start="$detached_start"
@@ -474,14 +474,14 @@ run_hook() {
   read_session
   process_is_owned "$nats_pid" "$nats_start" || die "acceptance NATS is not running"
   process_is_owned "$server_pid" "$server_start" || die "acceptance server is not running"
-  OSHIOKI_CONFIG_DIR="$state_root/hook" "$HOOK_BIN" "$verb"
+  VOUCH_CONFIG_DIR="$state_root/hook" "$HOOK_BIN" "$verb"
 }
 
 # The Mac needs one line: where NATS is, which enrollment URL to consume, and
 # what to build. `enroll` blocks until the Mac answers, so the line is printed
 # from inside the stream rather than after it.
 #
-# `run` executes the binary inside Oshioki.app rather than the bare one,
+# `run` executes the binary inside Vouch.app rather than the bare one,
 # because the Touch ID sheet takes its name and icon from the calling process's
 # bundle. `pair` shows a sheet too, but only once, and the acceptance item is
 # about the request sheets.
@@ -493,7 +493,7 @@ print_mac_command() {
   password="$(sed -n 's/^NATS_PASS=//p' "$state_root/hook/config.env")"
   [ -n "$password" ] || die "no NATS password in $state_root/hook/config.env"
   printf '\n--- paste this on the Mac ---\n'
-  printf "OSHIOKI_ALLOW_PLAINTEXT_NATS=1 NATS_URL=nats://%s:%s NATS_USER=oshioki NATS_PASS=%s sh -c 'cd ~/git/oshioki && git pull --ff-only && export PATH=\$HOME/.cargo/bin:\$PATH && cargo build --release -p oshioki-agent && scripts/mac/bundle-agent && target/mac/Oshioki.app/Contents/MacOS/oshioki-agent pair \"%s\" --label %s && exec target/mac/Oshioki.app/Contents/MacOS/oshioki-agent run'\n" \
+  printf "VOUCH_ALLOW_PLAINTEXT_NATS=1 NATS_URL=nats://%s:%s NATS_USER=vouch NATS_PASS=%s sh -c 'cd ~/git/vouch && git pull --ff-only && export PATH=\$HOME/.cargo/bin:\$PATH && cargo build --release -p vouch-agent && scripts/mac/bundle-agent && target/mac/Vouch.app/Contents/MacOS/vouch-agent pair \"%s\" --label %s && exec target/mac/Vouch.app/Contents/MacOS/vouch-agent run'\n" \
     "$nats_host" "$nats_port" "$password" "$url" "$label"
   printf -- '--- end ---\n\nwaiting for the Mac to pair\n\n'
 }
@@ -503,7 +503,7 @@ print_mac_command() {
 forward_enrollment() {
   local label="$1" line printed=0 pending=0 skip=0 trimmed
   while IFS= read -r line; do
-    # The hook prints its own `oshioki-agent pair` hint, which is the same URL
+    # The hook prints its own `vouch-agent pair` hint, which is the same URL
     # without the NATS settings the Mac needs. Two pair commands on screen is
     # one too many, so that hint is dropped for the line printed below.
     if [ "$skip" -gt 0 ]; then
@@ -552,7 +552,7 @@ run_mac() {
   [ "$nats_host" != 127.0.0.1 ] ||
     die "this session's NATS is bound to loopback and the Mac cannot reach it; run scripts/dev-acceptance down, then scripts/dev-acceptance mac"
   set +o pipefail
-  OSHIOKI_CONFIG_DIR="$state_root/hook" "$HOOK_BIN" enroll | forward_enrollment "$label"
+  VOUCH_CONFIG_DIR="$state_root/hook" "$HOOK_BIN" enroll | forward_enrollment "$label"
   statuses=("${PIPESTATUS[@]}")
   set -o pipefail
   [ "${statuses[0]}" -eq 0 ] || exit "${statuses[0]}"

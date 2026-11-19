@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hermetic tests for scripts/oshioki-phone-setup.
+"""Hermetic tests for scripts/vouch-phone-setup.
 
 No service manager, NATS daemon, Tailscale client, HTTPS endpoint, sudo, or
 system configuration is used.  The tests still drive the helper's validation,
@@ -24,9 +24,9 @@ from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parent.parent
-SOURCE = ROOT / "scripts" / "oshioki-phone-setup"
-LOADER = importlib.machinery.SourceFileLoader("oshioki_phone_setup", str(SOURCE))
-SPEC = importlib.util.spec_from_loader("oshioki_phone_setup", LOADER)
+SOURCE = ROOT / "scripts" / "vouch-phone-setup"
+LOADER = importlib.machinery.SourceFileLoader("vouch_phone_setup", str(SOURCE))
+SPEC = importlib.util.spec_from_loader("vouch_phone_setup", LOADER)
 assert SPEC and SPEC.loader
 phone = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(phone)
@@ -34,12 +34,12 @@ SPEC.loader.exec_module(phone)
 
 class PhoneSetupTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.temp = tempfile.TemporaryDirectory(prefix="oshioki-phone-setup-test-")
+        self.temp = tempfile.TemporaryDirectory(prefix="vouch-phone-setup-test-")
         self.root = Path(self.temp.name)
         self.home_patcher = mock.patch.object(phone.Path, "home", return_value=self.root / "home")
         self.home_patcher.start()
         self.state = self.root / "state"
-        self.config = self.root / "etc" / "oshioki"
+        self.config = self.root / "etc" / "vouch"
         self.nats_env = self.root / "nats.env"
         self.nats_env.write_text("NATS_URL=nats://127.0.0.1:4222\nNATS_USER=u\nNATS_PASS=p\n", encoding="utf-8")
         self.nats_env.chmod(0o600)
@@ -112,9 +112,9 @@ class PhoneSetupTests(unittest.TestCase):
         self.state.mkdir(mode=0o700)
         creds = {
             "version": 1,
-            "hook_user": "oshioki-hook",
+            "hook_user": "vouch-hook",
             "hook_pass": "hook-secret",
-            "server_user": "oshioki-server",
+            "server_user": "vouch-server",
             "server_pass": "server-secret",
         }
         (self.state / "credentials.json").write_text(json.dumps(creds), encoding="utf-8")
@@ -149,10 +149,10 @@ class PhoneSetupTests(unittest.TestCase):
         hook.write_text(json.dumps({"version": 1, "origin": "https://old.example", "rp_id": "old.example", "server_base_url": "https://old.example", "future": "keep"}), encoding="utf-8")
         hook.chmod(0o600)
         config_env = self.config / "config.env"
-        config_env.write_text("OSHIOKI_AGENT_SOCKET=/tmp/agent.sock\nOSHIOKI_LOCAL=1\nCUSTOM=keep\n", encoding="utf-8")
+        config_env.write_text("VOUCH_AGENT_SOCKET=/tmp/agent.sock\nVOUCH_LOCAL=1\nCUSTOM=keep\n", encoding="utf-8")
         config_env.chmod(0o600)
         install_env = self.config / "install.env"
-        install_env.write_text("OSHIOKI_AGENT_SOCKET=/tmp/agent.sock\nOSHIOKI_LOCAL=1\n", encoding="utf-8")
+        install_env.write_text("VOUCH_AGENT_SOCKET=/tmp/agent.sock\nVOUCH_LOCAL=1\n", encoding="utf-8")
         install_env.chmod(0o600)
         devices = self.config / "devices.json"
         devices.write_text('{"version":1,"devices":[]}', encoding="utf-8")
@@ -162,8 +162,8 @@ class PhoneSetupTests(unittest.TestCase):
         staging.write_text(json.dumps({"version": 1, "origin": "https://phone.example", "rp_id": "phone.example", "nats_url": "nats://127.0.0.1:4222", "nats_user": "hook", "nats_pass": "secret"}), encoding="utf-8")
         staging.chmod(0o600)
         phone._install_config(staging, self.config)
-        self.assertIn(b"OSHIOKI_AGENT_SOCKET=/tmp/agent.sock", config_env.read_bytes())
-        self.assertIn(b"OSHIOKI_LOCAL=1", install_env.read_bytes())
+        self.assertIn(b"VOUCH_AGENT_SOCKET=/tmp/agent.sock", config_env.read_bytes())
+        self.assertIn(b"VOUCH_LOCAL=1", install_env.read_bytes())
         self.assertIn(b"CUSTOM=keep", config_env.read_bytes())
         self.assertEqual(devices_before, devices.read_bytes())
         self.assertEqual(json.loads(hook.read_text())["future"], "keep")
@@ -246,9 +246,9 @@ class PhoneSetupTests(unittest.TestCase):
         state = self.root / "state"
         state.mkdir(mode=0o700)
         credentials = {
-            "hook_user": "oshioki-hook",
+            "hook_user": "vouch-hook",
             "hook_pass": "hook-secret",
-            "server_user": "oshioki-server",
+            "server_user": "vouch-server",
             "server_pass": "server-secret",
         }
         config = phone._nats_config(state, credentials, 14222)
@@ -260,15 +260,15 @@ class PhoneSetupTests(unittest.TestCase):
         state = self.root / "state"
         state.mkdir(mode=0o700)
         credentials = {
-            "hook_user": "oshioki-hook",
+            "hook_user": "vouch-hook",
             "hook_pass": "hook-secret",
-            "server_user": "oshioki-server",
+            "server_user": "vouch-server",
             "server_pass": "server-secret",
         }
         config = phone._nats_config(state, credentials, 14222)
         rendered = config.read_text(encoding="utf-8")
-        hook_block = self._user_block(rendered, "oshioki-hook")
-        server_block = self._user_block(rendered, "oshioki-server")
+        hook_block = self._user_block(rendered, "vouch-hook")
+        server_block = self._user_block(rendered, "vouch-server")
         hook_publish = hook_block.split("publish:", 1)[1].split("subscribe:", 1)[0]
         server_subscribe = server_block.split("subscribe:", 1)[1]
         self.assertIn('"oshioki.auth.>"', hook_publish)
@@ -299,21 +299,21 @@ class PhoneSetupTests(unittest.TestCase):
         state = self.root / "state"
         state.mkdir(mode=0o700)
         credentials = {
-            "hook_user": "oshioki-hook",
+            "hook_user": "vouch-hook",
             "hook_pass": "hook-secret",
-            "server_user": "oshioki-server",
+            "server_user": "vouch-server",
             "server_pass": "server-secret",
         }
         config = phone._nats_config(state, credentials, 14222)
         text = config.read_text(encoding="utf-8")
 
-        hook_block = self._user_block(text, "oshioki-hook")
+        hook_block = self._user_block(text, "vouch-hook")
         hook_subscribe_start = hook_block.index("subscribe:")
         hook_subscribe_block = hook_block[hook_subscribe_start:]
         self.assertIn('"oshioki.ack.>"', hook_subscribe_block)
         self.assertIn('"oshioki.delivery.>"', hook_subscribe_block)
 
-        server_block = self._user_block(text, "oshioki-server")
+        server_block = self._user_block(text, "vouch-server")
         server_publish_start = server_block.index("publish:")
         server_subscribe_start = server_block.index("subscribe:")
         server_publish_block = server_block[server_publish_start:server_subscribe_start]
@@ -323,7 +323,7 @@ class PhoneSetupTests(unittest.TestCase):
         # hook waiting on its reply_subject via an outbox row
         # (server/src/db.rs) that the outbox worker publishes
         # (server/src/main.rs); that grant must stay in the server's
-        # publish permissions or `sudo oshioki enroll` never completes.
+        # publish permissions or `sudo vouch enroll` never completes.
         self.assertIn('"oshioki.enrollment.submission.>"', server_publish_block)
 
     def test_command_shims_and_script_path_remain_lexically_stable(self) -> None:
@@ -337,9 +337,9 @@ class PhoneSetupTests(unittest.TestCase):
         resolved = phone._binary(str(shim), "UNUSED_BINARY_ENV", [], "tool")
         self.assertEqual(resolved, Path(os.path.abspath(shim)))
 
-        script_target = self.root / "Cellar" / "oshioki-phone-setup"
+        script_target = self.root / "Cellar" / "vouch-phone-setup"
         script_target.write_text("", encoding="utf-8")
-        script_link = self.root / "bin" / "oshioki-phone-setup"
+        script_link = self.root / "bin" / "vouch-phone-setup"
         script_link.symlink_to(script_target)
         with mock.patch.object(phone, "__file__", str(script_link)):
             self.assertEqual(phone._script_path(), Path(os.path.abspath(script_link)))
@@ -350,14 +350,14 @@ class PhoneSetupTests(unittest.TestCase):
         state = self.root / "state"
         log.parent.mkdir(parents=True)
         plist.parent.mkdir(parents=True)
-        changed = phone._plist(plist, "com.oshioki.phone-server.nats", "nats", state, log)
+        changed = phone._plist(plist, "com.hev.vouch.phone-server.nats", "nats", state, log)
         self.assertTrue(changed)
         old = plistlib.loads(plist.read_bytes())
         marker = old["ProgramArguments"].index("--run-service")
-        old["ProgramArguments"] = ["/old/homebrew/python3", "/old/Cellar/oshioki-phone-setup"] + old["ProgramArguments"][marker:]
+        old["ProgramArguments"] = ["/old/homebrew/python3", "/old/Cellar/vouch-phone-setup"] + old["ProgramArguments"][marker:]
         plist.write_bytes(plistlib.dumps(old, fmt=plistlib.FMT_XML))
         plist.chmod(0o600)
-        self.assertTrue(phone._plist(plist, "com.oshioki.phone-server.nats", "nats", state, log))
+        self.assertTrue(phone._plist(plist, "com.hev.vouch.phone-server.nats", "nats", state, log))
         updated = plistlib.loads(plist.read_bytes())
         self.assertEqual(updated["ProgramArguments"], phone._service_args("nats", state))
 
@@ -365,7 +365,7 @@ class PhoneSetupTests(unittest.TestCase):
         collision["ProgramArguments"] = phone._service_args("server", state)
         plist.write_bytes(plistlib.dumps(collision, fmt=plistlib.FMT_XML))
         plist.chmod(0o600)
-        self.assert_setup_error(phone._plist, plist, "com.oshioki.phone-server.nats", "nats", state, log)
+        self.assert_setup_error(phone._plist, plist, "com.hev.vouch.phone-server.nats", "nats", state, log)
 
     def test_systemd_upgrade_reloads_owned_unit_and_refuses_role_collision(self) -> None:
         log = self.root / "logs" / "server.log"
@@ -373,22 +373,22 @@ class PhoneSetupTests(unittest.TestCase):
         state = self.root / "state"
         log.parent.mkdir(parents=True)
         unit.parent.mkdir(parents=True)
-        self.assertTrue(phone._systemd_unit(unit, "Oshioki phone setup server", "server", state, log))
+        self.assertTrue(phone._systemd_unit(unit, "Vouch phone setup server", "server", state, log))
         old_lines = unit.read_text(encoding="utf-8").splitlines()
         old_lines = [
-            "ExecStart=/old/homebrew/python3 /old/Cellar/oshioki-phone-setup --run-service --role server --state-dir " + shlex.quote(str(state))
+            "ExecStart=/old/homebrew/python3 /old/Cellar/vouch-phone-setup --run-service --role server --state-dir " + shlex.quote(str(state))
             if line.startswith("ExecStart=") else line
             for line in old_lines
         ]
         unit.write_text("\n".join(old_lines) + "\n", encoding="utf-8")
         unit.chmod(0o600)
-        self.assertTrue(phone._systemd_unit(unit, "Oshioki phone setup server", "server", state, log))
+        self.assertTrue(phone._systemd_unit(unit, "Vouch phone setup server", "server", state, log))
         self.assertIn("/usr/bin/env python3", unit.read_text(encoding="utf-8"))
 
         collision_lines = unit.read_text(encoding="utf-8").replace("--role server", "--role nats")
         unit.write_text(collision_lines, encoding="utf-8")
         unit.chmod(0o600)
-        self.assert_setup_error(phone._systemd_unit, unit, "Oshioki phone setup server", "server", state, log)
+        self.assert_setup_error(phone._systemd_unit, unit, "Vouch phone setup server", "server", state, log)
 
     def test_linux_updated_unit_is_restarted_after_reload(self) -> None:
         state = self.root / "state"
@@ -397,20 +397,20 @@ class PhoneSetupTests(unittest.TestCase):
         completed = subprocess.CompletedProcess([], 0, b"", b"")
         with mock.patch.dict(os.environ, {phone.PLATFORM_ENV: "Linux"}), mock.patch.object(phone, "_run", side_effect=lambda argv, **kwargs: calls.append(argv) or completed):
             phone._ensure_services(state, runtime, roles=("server",))
-        self.assertTrue(any(command[-2:] == ["--now", "oshioki-phone-server.service"] for command in calls))
-        self.assertTrue(any(command[-2:] == ["restart", "oshioki-phone-server.service"] for command in calls))
+        self.assertTrue(any(command[-2:] == ["--now", "vouch-phone-server.service"] for command in calls))
+        self.assertTrue(any(command[-2:] == ["restart", "vouch-phone-server.service"] for command in calls))
 
     def test_nats_then_server_phases_preserve_and_then_reload_old_server_unit(self) -> None:
         state = self.root / "state"
-        server_unit = self.root / "home" / ".config" / "systemd" / "user" / "oshioki-phone-server.service"
+        server_unit = self.root / "home" / ".config" / "systemd" / "user" / "vouch-phone-server.service"
         log = state / "logs" / "server.log"
         state.mkdir(mode=0o700)
         log.parent.mkdir(parents=True)
         server_unit.parent.mkdir(parents=True)
-        self.assertTrue(phone._systemd_unit(server_unit, "Oshioki phone setup server", "server", state, log))
+        self.assertTrue(phone._systemd_unit(server_unit, "Vouch phone setup server", "server", state, log))
         old_lines = server_unit.read_text(encoding="utf-8").splitlines()
         old_lines = [
-            "ExecStart=/old/python3 /old/oshioki-phone-setup --run-service --role server --state-dir " + shlex.quote(str(state))
+            "ExecStart=/old/python3 /old/vouch-phone-setup --run-service --role server --state-dir " + shlex.quote(str(state))
             if line.startswith("ExecStart=") else line
             for line in old_lines
         ]
@@ -424,7 +424,7 @@ class PhoneSetupTests(unittest.TestCase):
             self.assertEqual(before, server_unit.read_bytes())
             phone._ensure_services(state, {"version": 1}, roles=("server",))
         self.assertIn("/usr/bin/env python3", server_unit.read_text(encoding="utf-8"))
-        self.assertTrue(any(command[-2:] == ["restart", "oshioki-phone-server.service"] for command in calls))
+        self.assertTrue(any(command[-2:] == ["restart", "vouch-phone-server.service"] for command in calls))
 
     def test_serve_collision_is_refused_before_local_state_or_service_start(self) -> None:
         fake = self.root / "tailscale"
@@ -651,12 +651,12 @@ tcp4       0      0  *.443                  *.*                    LISTEN      1
         runtime = {
             "version": 1,
             "nats_bin": "/usr/bin/nats-server",
-            "server_bin": "/usr/bin/oshioki-server",
+            "server_bin": "/usr/bin/vouch-server",
             "nats_port": 14222,
             "server_port": 18443,
             "origin": origin,
             "rp_id": "phone.example",
-            "script": "/usr/bin/oshioki-phone-setup",
+            "script": "/usr/bin/vouch-phone-setup",
         }
         (self.state / "runtime.json").write_text(json.dumps(runtime), encoding="utf-8")
         (self.state / "runtime.json").chmod(0o600)

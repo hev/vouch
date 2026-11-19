@@ -20,7 +20,13 @@ permissions:
   contents: read
 
 jobs:
+  # Publishing is off until Adam sets up a release signer and an apt key for
+  # hev/vouch. Every other job needs this one, so nothing builds, releases
+  # or deploys the apt repository unless the repository is hev/vouch and the
+  # VOUCH_RELEASES_ENABLED repository variable is "true". This repository
+  # never publishes to upstream Oshioki's releases, tap or apt repository.
   gate:
+    if: ${{ github.repository == 'hev/vouch' && vars.VOUCH_RELEASES_ENABLED == 'true' }}
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -83,24 +89,24 @@ jobs:
         with:
           shared-key: compat-upgrade
           save-if: false
-      # The oshioki-pam workspace member links libpam.
+      # The vouch-pam workspace member links libpam.
       - run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libpam0g-dev
-      - run: cargo build --locked --release -p oshioki-hook -p oshioki-server -p oshioki-plugin -p oshioki-pam -p oshioki-browser-relay
+      - run: cargo build --locked --release -p vouch-hook -p vouch-server -p vouch-plugin -p vouch-pam -p vouch-browser-relay
       - run: |
           mkdir -p stage
-          install -m 0755 target/release/oshioki target/release/oshioki-server target/release/oshioki-browser-relay stage/
-          install -m 0755 scripts/oshioki-google-login-setup scripts/oshioki-browser-service stage/
-          install -m 0644 target/release/liboshioki_plugin.so stage/
-          install -m 0644 target/release/liboshioki_pam.so stage/
-          (cd stage && sha256sum oshioki liboshioki_plugin.so liboshioki_pam.so oshioki-browser-relay oshioki-google-login-setup oshioki-browser-service > SHA256SUMS)
+          install -m 0755 target/release/vouch target/release/vouch-server target/release/vouch-browser-relay stage/
+          install -m 0755 scripts/vouch-google-login-setup scripts/vouch-browser-service stage/
+          install -m 0644 target/release/libvouch_plugin.so stage/
+          install -m 0644 target/release/libvouch_pam.so stage/
+          (cd stage && sha256sum vouch libvouch_plugin.so libvouch_pam.so vouch-browser-relay vouch-google-login-setup vouch-browser-service > SHA256SUMS)
           ./packaging/build-deb stage "${{ needs.gate.outputs.version }}" \
-            "oshioki_${{ needs.gate.outputs.version }}_amd64.deb"
+            "vouch_${{ needs.gate.outputs.version }}_amd64.deb"
       - name: Verify the packaged browser helper
         run: |
           verify="$(mktemp -d)"
-          dpkg-deb --extract "oshioki_${{ needs.gate.outputs.version }}_amd64.deb" "$verify"
-          scripts/test-browser-relay-package "$verify/usr/bin/oshioki-browser-relay" \
-            "$verify/usr/share/oshioki/SHA256SUMS" --with-installers
+          dpkg-deb --extract "vouch_${{ needs.gate.outputs.version }}_amd64.deb" "$verify"
+          scripts/test-browser-relay-package "$verify/usr/bin/vouch-browser-relay" \
+            "$verify/usr/share/vouch/SHA256SUMS" --with-installers
       - run: sudo apt-get install --yes --no-install-recommends nats-server
       - run: scripts/test-browser-relay
       - name: Stage verified source identity with package
@@ -110,13 +116,13 @@ jobs:
         with:
           name: deb
           path: |
-            oshioki_*_amd64.deb
+            vouch_*_amd64.deb
             build-deb-source.json
 
   build-mac:
     needs: gate
     if: ${{ github.event_name != 'workflow_dispatch' || !inputs.publish_apt_repository }}
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -141,29 +147,29 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: scripts/build-darwin-artifact dist
       # COPYFILE_DISABLE keeps bsdtar from writing ._ AppleDouble members for
-      # extended attributes. Inside Oshioki.app those would be unsealed
+      # extended attributes. Inside Vouch.app those would be unsealed
       # contents and `codesign --verify` on the poured bundle would fail.
       - run: |
-          COPYFILE_DISABLE=1 tar -czf "oshioki-macos-arm64-${{ needs.gate.outputs.version }}.tar.gz" -C dist \
-            oshioki oshioki.dylib liboshioki_pam.dylib oshioki-agent oshioki-server oshioki-browser-relay install-oshioki-hook oshioki-laptop-setup oshioki-phone-setup oshioki-google-login-setup oshioki-browser-service manifest.json SHA256SUMS Oshioki.app
-          tar -tzf "oshioki-macos-arm64-${{ needs.gate.outputs.version }}.tar.gz" | sort
+          COPYFILE_DISABLE=1 tar -czf "vouch-macos-arm64-${{ needs.gate.outputs.version }}.tar.gz" -C dist \
+            vouch vouch.dylib libvouch_pam.dylib vouch-agent vouch-server vouch-browser-relay install-vouch-hook vouch-laptop-setup vouch-phone-setup vouch-google-login-setup vouch-browser-service manifest.json SHA256SUMS Vouch.app
+          tar -tzf "vouch-macos-arm64-${{ needs.gate.outputs.version }}.tar.gz" | sort
       # What the tar step produced is what a brew user actually pours, so the
       # bundle is checked after the round trip rather than only in the
       # staging directory: a tar that dropped the _CodeSignature seal or an
       # AppleDouble member that unsealed it would otherwise ship.
       - run: |
           verify="$(mktemp -d)"
-          tar -xzf "oshioki-macos-arm64-${{ needs.gate.outputs.version }}.tar.gz" -C "$verify"
-          scripts/test-browser-relay-package "$verify/oshioki-browser-relay" "$verify/SHA256SUMS" --with-installers
+          tar -xzf "vouch-macos-arm64-${{ needs.gate.outputs.version }}.tar.gz" -C "$verify"
+          scripts/test-browser-relay-package "$verify/vouch-browser-relay" "$verify/SHA256SUMS" --with-installers
           cd "$verify"
-          codesign --verify --strict --verbose=1 oshioki-browser-relay
-          file oshioki-browser-relay | grep -q 'arm64'
-          codesign --verify --deep --strict --verbose=1 Oshioki.app
-          grep -E '  (oshioki-agent|Oshioki\.app/Contents/MacOS/oshioki-agent)$' SHA256SUMS \
+          codesign --verify --strict --verbose=1 vouch-browser-relay
+          file vouch-browser-relay | grep -q 'arm64'
+          codesign --verify --deep --strict --verbose=1 Vouch.app
+          grep -E '  (vouch-agent|Vouch\.app/Contents/MacOS/vouch-agent)$' SHA256SUMS \
             > agent-sums
           test "$(wc -l < agent-sums)" -eq 2
           shasum -a 256 -c agent-sums
-          file Oshioki.app/Contents/MacOS/oshioki-agent | grep -q 'arm64'
+          file Vouch.app/Contents/MacOS/vouch-agent | grep -q 'arm64'
       - run: brew install nats-server
       - run: scripts/test-browser-relay
       - name: Stage verified source identity with package
@@ -173,7 +179,7 @@ jobs:
         with:
           name: mac
           path: |
-            oshioki-macos-arm64-*.tar.gz
+            vouch-macos-arm64-*.tar.gz
             build-mac-source.json
 
   compat:
@@ -216,13 +222,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           scripts/test-compat-release-selection
-          tag="$(scripts/select-compat-previous-release)"
-          echo "OSHIOKI_COMPAT_PREV_TAG=$tag" >> "$GITHUB_ENV"
+          # hev/vouch has no published releases yet. Until it does, fall back
+          # to the newest tag that is not HEAD (the last Oshioki release),
+          # which is what test-compat-upgrade picks when no tag is given.
+          if [ -n "$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName --jq '.[].tagName')" ]; then
+            tag="$(scripts/select-compat-previous-release)"
+            echo "VOUCH_COMPAT_PREV_TAG=$tag" >> "$GITHUB_ENV"
+          else
+            echo "no published release on $GITHUB_REPOSITORY; test-compat-upgrade uses the newest tag" >> "$GITHUB_STEP_SUMMARY"
+          fi
       - run: cargo test --workspace --locked
       - run: scripts/test-nats-lane-upgrade
       - run: scripts/test-compat-upgrade
         env:
-          OSHIOKI_COMPAT_PREV_TARGET: ${{ runner.temp }}/compat-prev-target
+          VOUCH_COMPAT_PREV_TARGET: ${{ runner.temp }}/compat-prev-target
 
   release:
     needs: [gate, build-deb, build-mac, compat]
@@ -258,17 +271,17 @@ jobs:
           test -n "$APT_SIGNING_PRIVATE_KEY"
           test -n "$APT_SIGNING_KEY_FINGERPRINT"
           umask 077
-          key="$RUNNER_TEMP/oshioki-provenance-key.asc"
+          key="$RUNNER_TEMP/vouch-provenance-key.asc"
           trap 'rm -f "$key"' EXIT
           printf '%s' "$APT_SIGNING_PRIVATE_KEY" >"$key"
-          (cd artifacts && sha256sum oshioki_*_amd64.deb oshioki-macos-arm64-*.tar.gz > SHA256SUMS)
+          (cd artifacts && sha256sum vouch_*_amd64.deb vouch-macos-arm64-*.tar.gz > SHA256SUMS)
           scripts/release-provenance sign "$key" "$APT_SIGNING_KEY_FINGERPRINT" \
             "$RUNNER_TEMP/release-source.json" artifacts
       - run: |
           gh release create "${GITHUB_REF#refs/tags/}" \
-            --title "Oshioki ${GITHUB_REF#refs/tags/}" \
+            --title "Vouch ${GITHUB_REF#refs/tags/}" \
             --notes "See CHANGELOG.md for what is in this release." \
-            artifacts/oshioki_*_amd64.deb "artifacts/oshioki-macos-arm64-${{ needs.gate.outputs.version }}.tar.gz" artifacts/SHA256SUMS artifacts/RELEASE-PROVENANCE.json.asc
+            artifacts/vouch_*_amd64.deb "artifacts/vouch-macos-arm64-${{ needs.gate.outputs.version }}.tar.gz" artifacts/SHA256SUMS artifacts/RELEASE-PROVENANCE.json.asc
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -281,7 +294,7 @@ jobs:
            (github.event_name == 'workflow_dispatch' && inputs.publish_apt_repository)) }}
     runs-on: ubuntu-24.04
     concurrency:
-      group: oshioki-apt-repository
+      group: vouch-apt-repository
       cancel-in-progress: false
     permissions:
       contents: read
@@ -339,7 +352,7 @@ jobs:
           APT_SIGNING_PRIVATE_KEY: ${{ secrets.APT_SIGNING_PRIVATE_KEY }}
         run: |
           umask 077
-          printf '%s' "$APT_SIGNING_PRIVATE_KEY" >"$RUNNER_TEMP/oshioki-apt-signing-key.asc"
+          printf '%s' "$APT_SIGNING_PRIVATE_KEY" >"$RUNNER_TEMP/vouch-apt-signing-key.asc"
       - name: Build signed repository from stable releases
         if: steps.signing.outputs.configured == 'true'
         env:
@@ -347,13 +360,13 @@ jobs:
           APT_SIGNING_KEY_FINGERPRINT: ${{ vars.APT_SIGNING_KEY_FINGERPRINT }}
         run: |
           scripts/build-apt-repository \
-            --output-dir "$RUNNER_TEMP/oshioki-apt-site" \
-            --signing-key "$RUNNER_TEMP/oshioki-apt-signing-key.asc" \
+            --output-dir "$RUNNER_TEMP/vouch-apt-site" \
+            --signing-key "$RUNNER_TEMP/vouch-apt-signing-key.asc" \
             --fingerprint "$APT_SIGNING_KEY_FINGERPRINT"
       - uses: actions/upload-pages-artifact@v3
         if: steps.signing.outputs.configured == 'true'
         with:
-          path: ${{ runner.temp }}/oshioki-apt-site
+          path: ${{ runner.temp }}/vouch-apt-site
       - id: deployment
         uses: actions/deploy-pages@v4
         if: steps.signing.outputs.configured == 'true'
@@ -364,5 +377,5 @@ jobs:
         run: |
           {
             echo "Published the signed apt repository at $PAGE_URL"
-            echo "Fingerprint: $(cat "$RUNNER_TEMP/oshioki-apt-site/KEY-FINGERPRINT")"
+            echo "Fingerprint: $(cat "$RUNNER_TEMP/vouch-apt-site/KEY-FINGERPRINT")"
           } >>"$GITHUB_STEP_SUMMARY"

@@ -1,18 +1,18 @@
 # Approve local sudo
 
-On a Mac, Oshioki can approve sudo through Touch ID without a server or network.
+On a Mac, Vouch can approve sudo through Touch ID without a server or network.
 
 ## Set up
 
-[Install Oshioki](install.md), then run as your logged-in user:
+[Install Vouch](install.md), then run as your logged-in user:
 
 ```sh
-oshioki-laptop-setup --local
+vouch-laptop-setup --local
 ```
 
 Setup creates a Secure Enclave identity, pins its public record on this host,
 configures a local socket, and starts the agent at login. Re-running it preserves
-the identity. Linux source users run `scripts/oshioki-laptop-setup --local`;
+the identity. Linux source users run `scripts/vouch-laptop-setup --local`;
 their software agent needs an open terminal and the normal sudo password.
 
 ## Use and verify
@@ -22,7 +22,7 @@ summary on the Touch ID sheet and approve. The command runs after approval.
 For an explicit check:
 
 ```sh
-sudo oshioki status
+sudo vouch status
 sudo -k
 sudo true
 ```
@@ -41,7 +41,7 @@ See [Mac approvals](mac-approvals.md) for what the prompt shows and
 
 ## Sudo authentication through PAM
 
-Oshioki has two sudo modes:
+Vouch has two sudo modes:
 
 | Mode | What you approve | Password and timestamp behavior |
 | --- | --- | --- |
@@ -55,8 +55,8 @@ To migrate an already configured Mac, first keep a second root shell open
 and confirm you have a working password/console recovery path:
 
 ```sh
-oshioki-laptop-setup --local --contextual-pam
-sudo install-oshioki-hook --contextual-pam-status
+vouch-laptop-setup --local --contextual-pam
+sudo install-vouch-hook --contextual-pam-status
 sudo -k
 sudo true
 ```

@@ -1,4 +1,9 @@
-# Develop Oshioki
+# Develop Vouch
+
+Vouch is maintained by Adam Hevenor at
+[github.com/hev/vouch](https://github.com/hev/vouch). Open issues and pull
+requests there, against `main`. Report vulnerabilities privately as
+described in [SECURITY.md](SECURITY.md), not in an issue.
 
 Use Rust through rustup (the checkout pins its toolchain), Node.js/npm for
 browser tests, and Python 3 for setup tests. Linux needs `libpam0g-dev`.
@@ -25,7 +30,7 @@ Choose additional checks for the behavior changed:
 | `scripts/dev test` | Quick checks plus disposable Compose and real Linux sudo integration |
 | `scripts/test-browser-relay` | Google ceremony orchestration, authenticated NATS, and subprocess cleanup with fake provider/device boundaries |
 | `scripts/test-pam-acceptance` | PAM integration in a disposable container |
-| `scripts/test-oshioki-phone-setup` | Phone setup with service and privilege boundaries replaced |
+| `scripts/test-vouch-phone-setup` | Phone setup with service and privilege boundaries replaced |
 
 The automated sudo tests run in containers; they do not install a plugin on
 your host. Failed full-suite runs retain their state path and Compose logs.
@@ -41,7 +46,7 @@ scripts/dev down
 The server is at `http://127.0.0.1:8443`. An explicit state directory survives
 `down`; without one, setup creates temporary state and removes it on shutdown.
 The wrapper handles rootful/rootless Docker UID mapping. Direct Compose users
-must set `OSHIOKI_UID` themselves (host UID for rootful Docker, 0 for rootless).
+must set `VOUCH_UID` themselves (host UID for rootful Docker, 0 for rootless).
 
 ## Before a PR
 
@@ -68,14 +73,14 @@ and runtime dependencies.
 The release workflow extracts each package and runs:
 
 ```sh
-scripts/test-browser-relay-package /path/to/oshioki-browser-relay /path/to/SHA256SUMS --with-installers
+scripts/test-browser-relay-package /path/to/vouch-browser-relay /path/to/SHA256SUMS --with-installers
 ```
 
 This checks the shipped helper's hash, commands, private key creation, and
 the extracted gcloud/service setup tools' hashes and CLI help without
-contacting Google or asking for Touch ID. The separate Homebrew tap installs
-the setup tools when the release archive contains them; its formula test
-requires their manifest entries and checks their hashes and CLI help.
+contacting Google or asking for Touch ID. Vouch has no Homebrew tap yet, and
+the release workflow is off until a release signer is configured (see
+[release and recovery](docs/releases.md#publishing-is-off)).
 
 ## Supervised acceptance
 

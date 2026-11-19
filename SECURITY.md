@@ -1,6 +1,6 @@
 # Security policy
 
-Oshioki sits in the sudo approval path and handles keys and approvals.
+Vouch sits in the sudo approval path and handles keys and approvals.
 Please treat it accordingly.
 
 ## Supported versions
@@ -8,18 +8,20 @@ Please treat it accordingly.
 Pre-1.0: only the current `main` branch receives security fixes. Once 1.0
 ships, the two most recent minor releases will be supported.
 
-From v0.4.1 forward, new commits and annotated release tags are signed, and
-published package hashes are bound to their verified source. The public
-signer fingerprint, rotation and emergency recovery procedures are in the
-[release guide](docs/releases.md). This is prospective: older history is
-not rewritten. After a security fix, recovery must use a fixed release or
+Vouch has not published a release yet. Releases will be signed annotated
+tags with package hashes bound to their verified source; the signer,
+rotation and emergency recovery procedures are in the
+[release guide](docs/releases.md). Tags up to v0.5.1 are upstream Oshioki
+releases; report issues in them that also affect Vouch here. After a security fix, recovery must use a fixed release or
 newer; do not roll back to a version known to be vulnerable.
 
 ## Reporting a vulnerability
 
 Do **not** open a public issue or PR for a suspected vulnerability.
 
-Use GitHub's private vulnerability reporting on this repository
+Vouch is maintained by Adam Hevenor. Report privately through GitHub's
+private vulnerability reporting on
+[hev/vouch](https://github.com/hev/vouch/security/advisories/new)
 (Security tab → Report a vulnerability). Include:
 
 - What you think is affected (crate, endpoint, device kind).
@@ -34,15 +36,18 @@ investigating.
 
 ## Scope notes for reviewers
 
-- Plaintext sudo commands must never enter SQLite, logs, notifications, or
-  metrics. ntfy messages may carry host, user, request ID, and `/r/<id>` URL
-  only.
+- Plaintext sudo commands must never enter the server's SQLite, logs,
+  notifications, or metrics. ntfy messages may carry host, user, request ID,
+  and `/r/<id>` URL only. Two local records are the exception by design:
+  the approving Mac's private approval log (argv, never environment values)
+  and the host's authpriv syslog line per verdict (argv), which sits beside
+  sudo's own log of the same command.
 - The server stores routing data and opaque ciphertext; it must never be able
   to produce an approval the hook accepts.
-- The sudo lanes (`oshioki check`, `oshioki authenticate`) never consult the
+- The sudo lanes (`vouch check`, `vouch authenticate`) never consult the
   caller's environment or working directory for configuration, transport, or
   helper execution: they restart in `/` with only a fixed `PATH`, read only
-  `/etc/oshioki`, and run curl with `-q`.
+  `/etc/vouch`, and run curl with `-q`.
 - Release agent builds must offer no prompt bypass: `run --auto` exists only
   under the `unattended` cargo feature.
 - `unsafe` is confined to the macOS `enclave` crate and the existing sudo

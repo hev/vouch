@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { startTlsProxy } from "../../../scripts/e2e-tls-proxy.mjs";
 
-const origin = process.env.OSHIOKI_ORIGIN ?? "https://sudo.test";
+const origin = process.env.VOUCH_ORIGIN ?? "https://sudo.test";
 let proxy;
 
 test.beforeAll(async () => { proxy = await startTlsProxy(); });
@@ -23,7 +23,7 @@ test("setup accepts only same-origin enrollment URLs and clears the fragment", a
   await navigate(page, `${origin}/setup`);
   await page.locator("#enrollment-url").fill("https://other.example/enroll/test-enrollment-1#AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
   await page.getByRole("button", { name: "Continue" }).click();
-  await expect(page.locator("#status")).toContainText("Oshioki origin");
+  await expect(page.locator("#status")).toContainText("Vouch origin");
   await expect(page).toHaveURL(/\/setup$/);
 
   const secret = "A".repeat(43);
@@ -111,9 +111,9 @@ for (const replace of [false, true]) {
     await mockedPushBrowser(page, { fresh: !replace });
     const result = await page.evaluate(async replace => {
       window.__pushRejectBearer = "Bearer first-token";
-      const status = await OshiokiPush.enablePushForDevice(null, { replace });
-      return { registered: status.registered, text: OshiokiPush.pushStatusText(status),
-        statuses: window.__pushStatusCalls, calls: window.__pushCalls, binding: await OshiokiPush.getSetting("pushBinding") };
+      const status = await VouchPush.enablePushForDevice(null, { replace });
+      return { registered: status.registered, text: VouchPush.pushStatusText(status),
+        statuses: window.__pushStatusCalls, calls: window.__pushCalls, binding: await VouchPush.getSetting("pushBinding") };
     }, replace);
     expect(result.registered).toBe(1);
     expect(result.text).toContain("1 of 2");
@@ -124,8 +124,8 @@ for (const replace of [false, true]) {
     expect(result.binding.state).toBe("bound");
     expect(result.binding.registrations).toEqual({ second: "second-token-membership" });
     const retried = await page.evaluate(async () => {
-      await OshiokiPush.syncOwnedPushSubscription();
-      return { binding: await OshiokiPush.getSetting("pushBinding"), statuses: window.__pushStatusCalls,
+      await VouchPush.syncOwnedPushSubscription();
+      return { binding: await VouchPush.getSetting("pushBinding"), statuses: window.__pushStatusCalls,
         unsubscribed: window.__pushUnsubscribed, subscribed: window.__pushSubscribed, prompts: window.__pushPermissionRequests };
     });
     expect(retried.binding).toEqual(result.binding);
@@ -142,8 +142,8 @@ test("a failed fresh bootstrap retries only its persisted active enrollment and 
     window.__pushRejectBearer = "Bearer first-token";
     window.__pushUnavailableBearer = "Bearer second-token";
     let message;
-    try { await OshiokiPush.enablePushForDevice(null); } catch (error) { message = error.message; }
-    return { message, binding: await OshiokiPush.getSetting("pushBinding"), calls: window.__pushCalls };
+    try { await VouchPush.enablePushForDevice(null); } catch (error) { message = error.message; }
+    return { message, binding: await VouchPush.getSetting("pushBinding"), calls: window.__pushCalls };
   });
   expect(pending.message).toContain("registration failed (503)");
   expect(pending.binding.state).toBe("pending");
@@ -151,8 +151,8 @@ test("a failed fresh bootstrap retries only its persisted active enrollment and 
   expect(pending.calls.map(call => call.headers.authorization)).toEqual(["Bearer second-token"]);
   const retried = await page.evaluate(async () => {
     window.__pushUnavailableBearer = null;
-    const result = await OshiokiPush.syncOwnedPushSubscription();
-    return { registered: result.registered, failures: result.failures.length, binding: await OshiokiPush.getSetting("pushBinding"),
+    const result = await VouchPush.syncOwnedPushSubscription();
+    return { registered: result.registered, failures: result.failures.length, binding: await VouchPush.getSetting("pushBinding"),
       calls: window.__pushCalls, statuses: window.__pushStatusCalls, unsubscribed: window.__pushUnsubscribed,
       subscribed: window.__pushSubscribed, prompts: window.__pushPermissionRequests };
   });
@@ -174,14 +174,14 @@ for (const replace of [false, true]) {
     test(`${replace ? "replacement" : "first enable"} preserves subscription state after ${failure} preflight and retries`, async ({ page }) => {
       await mockedPushBrowser(page, { fresh: !replace });
       const failed = await page.evaluate(async ({ replace, failure }) => {
-        if (replace) await OshiokiPush.syncOwnedPushSubscription();
-        const previous = await OshiokiPush.getSetting("pushBinding");
+        if (replace) await VouchPush.syncOwnedPushSubscription();
+        const previous = await VouchPush.getSetting("pushBinding");
         window.__pushCalls = [];
         window.__pushStatusCalls = [];
         window.__pushStatusFailure = failure;
         let message;
-        try { await OshiokiPush.enablePushForDevice(null, { replace }); } catch (error) { message = error.message; }
-        return { message, previous, binding: await OshiokiPush.getSetting("pushBinding"), calls: window.__pushCalls,
+        try { await VouchPush.enablePushForDevice(null, { replace }); } catch (error) { message = error.message; }
+        return { message, previous, binding: await VouchPush.getSetting("pushBinding"), calls: window.__pushCalls,
           statuses: window.__pushStatusCalls, endpoint: window.__pushSubscriptionEndpoint,
           subscribed: window.__pushSubscribed, unsubscribed: window.__pushUnsubscribed };
       }, { replace, failure });
@@ -195,8 +195,8 @@ for (const replace of [false, true]) {
       expect(failed.unsubscribed).toBe(0);
       if (replace) {
         const preserved = await page.evaluate(async () => {
-          const result = await OshiokiPush.syncOwnedPushSubscription();
-          return { registered: result.registered, binding: await OshiokiPush.getSetting("pushBinding"),
+          const result = await VouchPush.syncOwnedPushSubscription();
+          return { registered: result.registered, binding: await VouchPush.getSetting("pushBinding"),
             calls: window.__pushCalls, statuses: window.__pushStatusCalls };
         });
         expect(preserved.registered).toBe(2);
@@ -211,8 +211,8 @@ for (const replace of [false, true]) {
       const retried = await page.evaluate(async replace => {
         window.__pushStatusFailure = null;
         window.__pushStatusCalls = [];
-        const status = await OshiokiPush.enablePushForDevice(null, { replace });
-        return { registered: status.registered, failures: status.failures.length, binding: await OshiokiPush.getSetting("pushBinding"),
+        const status = await VouchPush.enablePushForDevice(null, { replace });
+        return { registered: status.registered, failures: status.failures.length, binding: await VouchPush.getSetting("pushBinding"),
           statuses: window.__pushStatusCalls, subscribed: window.__pushSubscribed,
           unsubscribed: window.__pushUnsubscribed, prompts: window.__pushPermissionRequests };
       }, replace);
@@ -231,9 +231,9 @@ for (const replace of [false, true]) {
 test("shared browser claims its legacy owner first and preserves other memberships after revocation", async ({ page }) => {
   await mockedPushBrowser(page);
   const first = await page.evaluate(async () => {
-    const result = await OshiokiPush.syncOwnedPushSubscription();
-    return { result, calls: window.__pushCalls, binding: await OshiokiPush.getSetting("pushBinding"),
-      legacyOwner: await OshiokiPush.getSetting("pushOwnerFingerprint") };
+    const result = await VouchPush.syncOwnedPushSubscription();
+    return { result, calls: window.__pushCalls, binding: await VouchPush.getSetting("pushBinding"),
+      legacyOwner: await VouchPush.getSetting("pushOwnerFingerprint") };
   });
   expect(first.result.registered).toBe(2);
   expect(first.calls.map(call => call.headers.authorization)).toEqual(["Bearer second-token", "Bearer first-token"]);
@@ -244,8 +244,8 @@ test("shared browser claims its legacy owner first and preserves other membershi
 
   const revoked = await page.evaluate(async () => {
     window.__pushRejectBearer = "Bearer first-token";
-    const result = await OshiokiPush.syncOwnedPushSubscription();
-    return { registered: result.registered, failures: result.failures.length, binding: await OshiokiPush.getSetting("pushBinding"),
+    const result = await VouchPush.syncOwnedPushSubscription();
+    return { registered: result.registered, failures: result.failures.length, binding: await VouchPush.getSetting("pushBinding"),
       unsubscribed: window.__pushUnsubscribed, subscribed: window.__pushSubscribed, prompts: window.__pushPermissionRequests };
   });
   expect(revoked.registered).toBe(1);
@@ -261,11 +261,11 @@ test("real IndexedDB atomic bootstrap and conditional merges survive concurrent 
   await mockedPushBrowser(page);
   const result = await page.evaluate(async () => {
     const [one, two] = await Promise.all([
-      OshiokiPush.createPushBinding("https://push.example/browser", "second"),
-      OshiokiPush.createPushBinding("https://push.example/browser", "first"),
+      VouchPush.createPushBinding("https://push.example/browser", "second"),
+      VouchPush.createPushBinding("https://push.example/browser", "first"),
     ]);
-    await Promise.all([OshiokiPush.syncOwnedPushSubscription(), OshiokiPush.syncOwnedPushSubscription()]);
-    return { one, two, binding: await OshiokiPush.getSetting("pushBinding"), calls: window.__pushCalls };
+    await Promise.all([VouchPush.syncOwnedPushSubscription(), VouchPush.syncOwnedPushSubscription()]);
+    return { one, two, binding: await VouchPush.getSetting("pushBinding"), calls: window.__pushCalls };
   });
   expect(result.one.installation_token).toBe(result.two.installation_token);
   expect(result.one.bootstrap_fingerprint).toBe(result.two.bootstrap_fingerprint);
@@ -284,13 +284,13 @@ test("real IndexedDB atomic bootstrap and conditional merges survive concurrent 
       if (String(args[0]).endsWith("/push/subscriptions")) started();
       return originalFetch(...args);
     };
-    const syncing = OshiokiPush.syncOwnedPushSubscription().then(() => null, error => error.message);
+    const syncing = VouchPush.syncOwnedPushSubscription().then(() => null, error => error.message);
     await entered;
-    const replacement = await OshiokiPush.createPushBinding("https://push.example/replacement", "second");
+    const replacement = await VouchPush.createPushBinding("https://push.example/replacement", "second");
     window.__pushHold = null;
     release();
     const error = await syncing;
-    return { replacement, error, saved: await OshiokiPush.getSetting("pushBinding") };
+    return { replacement, error, saved: await VouchPush.getSetting("pushBinding") };
   });
   expect(stale.error).toContain("subscription changed");
   expect(stale.saved).toEqual(stale.replacement);
@@ -301,8 +301,8 @@ test("separate tabs serialize first claim and reuse the persisted installation c
   const other = await context.newPage();
   await mockedPushBrowser(other);
   const reconcile = tab => tab.evaluate(async () => {
-    const result = await OshiokiPush.syncOwnedPushSubscription();
-    return { registered: result.registered, binding: await OshiokiPush.getSetting("pushBinding"), calls: window.__pushCalls };
+    const result = await VouchPush.syncOwnedPushSubscription();
+    return { registered: result.registered, binding: await VouchPush.getSetting("pushBinding"), calls: window.__pushCalls };
   });
   const [first, second] = await Promise.all([reconcile(page), reconcile(other)]);
   expect(first.registered).toBe(2);

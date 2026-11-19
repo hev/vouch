@@ -18,19 +18,19 @@ chmod 0700 "$TEST_ROOT/gnupg" "$TEST_ROOT/verify-gnupg"
 make_deb() {
   local version="$1"
   local package_root="$TEST_ROOT/package-$version"
-  mkdir -p "$package_root/DEBIAN" "$package_root/usr/share/oshioki"
+  mkdir -p "$package_root/DEBIAN" "$package_root/usr/share/vouch"
   cat >"$package_root/DEBIAN/control" <<EOF
-Package: oshioki
+Package: vouch
 Version: $version
 Architecture: amd64
-Maintainer: Oshioki apt test <apt-test@example.invalid>
+Maintainer: Vouch apt test <apt-test@example.invalid>
 Description: Disposable package for apt repository integration test
 EOF
-  printf 'test package %s\n' "$version" >"$package_root/usr/share/oshioki/version"
-  dpkg-deb --build --root-owner-group "$package_root" "$TEST_ROOT/assets/oshioki_${version}_amd64.deb" >/dev/null
+  printf 'test package %s\n' "$version" >"$package_root/usr/share/vouch/version"
+  dpkg-deb --build --root-owner-group "$package_root" "$TEST_ROOT/assets/vouch_${version}_amd64.deb" >/dev/null
   (
     cd "$TEST_ROOT/assets"
-    sha256sum "oshioki_${version}_amd64.deb" >"SHA256SUMS-$version"
+    sha256sum "vouch_${version}_amd64.deb" >"SHA256SUMS-$version"
   )
 }
 
@@ -55,7 +55,7 @@ for version, prerelease, draft in (
     ("0.4.3", False, True),
     ("0.4.0", False, False),
 ):
-    deb_name = f"oshioki_{version}_amd64.deb"
+    deb_name = f"vouch_{version}_amd64.deb"
     sums_name = f"SHA256SUMS-{version}"
     releases.append(
         {
@@ -72,7 +72,7 @@ releases_path.write_text(json.dumps(releases), encoding="utf-8")
 PY
 
 GNUPGHOME="$TEST_ROOT/gnupg" gpg --batch --pinentry-mode loopback --passphrase '' \
-  --quick-generate-key 'Oshioki apt repository test <apt-test@example.invalid>' rsa3072 sign 1d >/dev/null 2>&1
+  --quick-generate-key 'Vouch apt repository test <apt-test@example.invalid>' rsa3072 sign 1d >/dev/null 2>&1
 SIGNING_FINGERPRINT="$(GNUPGHOME="$TEST_ROOT/gnupg" gpg --batch --with-colons --list-secret-keys \
   | awk -F: '$1 == "fpr" { print $10; exit }')"
 GNUPGHOME="$TEST_ROOT/gnupg" gpg --batch --armor --export-secret-keys "$SIGNING_FINGERPRINT" \
@@ -97,9 +97,9 @@ for version in ("0.4.1", "0.4.2"):
     identity.write_text(subprocess.check_output([str(root / "scripts/verify-release-tag"), f"v{version}"], cwd=repo, text=True))
     assets = test / f"assets-{version}"
     assets.mkdir()
-    shutil.copy(test / "assets" / f"oshioki_{version}_amd64.deb", assets)
+    shutil.copy(test / "assets" / f"vouch_{version}_amd64.deb", assets)
     shutil.copy(test / "assets" / f"SHA256SUMS-{version}", assets / "SHA256SUMS")
-    (assets / f"oshioki-macos-arm64-{version}.tar.gz").write_bytes(b"disposable archive fixture")
+    (assets / f"vouch-macos-arm64-{version}.tar.gz").write_bytes(b"disposable archive fixture")
     subprocess.run([str(root / "scripts/release-provenance"), "sign", str(test / "signing-key.asc"), fingerprint, str(identity), str(assets)], check=True)
     shutil.copy(assets / "RELEASE-PROVENANCE.json.asc", test / "assets" / f"PROVENANCE-{version}.asc")
 releases = json.loads((test / "releases.json").read_text())
@@ -111,7 +111,7 @@ PYFIXTURE
 # Verification policy comes from this fixture's origin/main, never a trust-file override.
 cd "$TEST_ROOT/source"
 
-printf '%064d  %s\n' 0 "oshioki_0.4.2_amd64.deb" >"$TEST_ROOT/assets/SHA256SUMS-invalid"
+printf '%064d  %s\n' 0 "vouch_0.4.2_amd64.deb" >"$TEST_ROOT/assets/SHA256SUMS-invalid"
 python3 - "$TEST_ROOT/releases.json" "$TEST_ROOT/releases-invalid-sums.json" \
   "$TEST_ROOT/assets/SHA256SUMS-invalid" <<'PY'
 import json
@@ -138,10 +138,10 @@ fi
 grep -q 'provenance checksum hash mismatch' "$TEST_ROOT/invalid-sums.log"
 
 # Replacing both co-hosted package and checksum still fails signed provenance.
-cp "$TEST_ROOT/assets/oshioki_0.4.2_amd64.deb" "$TEST_ROOT/original.deb"
+cp "$TEST_ROOT/assets/vouch_0.4.2_amd64.deb" "$TEST_ROOT/original.deb"
 cp "$TEST_ROOT/assets/SHA256SUMS-0.4.2" "$TEST_ROOT/original.sums"
-printf 'tamper\n' >>"$TEST_ROOT/assets/oshioki_0.4.2_amd64.deb"
-(cd "$TEST_ROOT/assets" && sha256sum oshioki_0.4.2_amd64.deb >SHA256SUMS-0.4.2)
+printf 'tamper\n' >>"$TEST_ROOT/assets/vouch_0.4.2_amd64.deb"
+(cd "$TEST_ROOT/assets" && sha256sum vouch_0.4.2_amd64.deb >SHA256SUMS-0.4.2)
 if "$BUILD_REPOSITORY" --releases-json "$TEST_ROOT/releases.json" \
   --output-dir "$TEST_ROOT/repository-replaced-assets" \
   --signing-key "$TEST_ROOT/signing-key.asc" --fingerprint "$SIGNING_FINGERPRINT" \
@@ -150,7 +150,7 @@ if "$BUILD_REPOSITORY" --releases-json "$TEST_ROOT/releases.json" \
   exit 1
 fi
 grep -q 'provenance package hash mismatch' "$TEST_ROOT/replaced-assets.log"
-cp "$TEST_ROOT/original.deb" "$TEST_ROOT/assets/oshioki_0.4.2_amd64.deb"
+cp "$TEST_ROOT/original.deb" "$TEST_ROOT/assets/vouch_0.4.2_amd64.deb"
 cp "$TEST_ROOT/original.sums" "$TEST_ROOT/assets/SHA256SUMS-0.4.2"
 
 # A valid provenance signature for another source is insufficient.
@@ -167,7 +167,7 @@ grep -q 'provenance source identity mismatch' "$TEST_ROOT/wrong-source.log"
 cp "$TEST_ROOT/original-provenance.asc" "$TEST_ROOT/assets/PROVENANCE-0.4.2.asc"
 
 # Editing signed provenance is rejected even when the JSON is still valid.
-sed 's/"repository": "epsalmond\/oshioki"/"repository": "attacker\/oshioki"/' \
+sed 's/"repository": "hev\/vouch"/"repository": "attacker\/vouch"/' \
   "$TEST_ROOT/original-provenance.asc" >"$TEST_ROOT/assets/PROVENANCE-0.4.2.asc"
 if "$BUILD_REPOSITORY" --releases-json "$TEST_ROOT/releases.json" \
   --output-dir "$TEST_ROOT/repository-tampered-provenance" \
@@ -194,10 +194,10 @@ if grep -q '^Version: 0\.4\.3~rc1$\|^Version: 0\.4\.3$\|^Version: 0\.4\.0$' "$PA
   exit 1
 fi
 
-GNUPGHOME="$TEST_ROOT/verify-gnupg" gpg --batch --import "$REPOSITORY/oshioki-archive-keyring.gpg" >/dev/null 2>&1
+GNUPGHOME="$TEST_ROOT/verify-gnupg" gpg --batch --import "$REPOSITORY/vouch-archive-keyring.gpg" >/dev/null 2>&1
 GNUPGHOME="$TEST_ROOT/verify-gnupg" gpg --batch --verify "$REPOSITORY/dists/stable/InRelease" >/dev/null 2>&1
 cp "$REPOSITORY/dists/stable/InRelease" "$TEST_ROOT/InRelease.tampered"
-sed 's/Origin: Oshioki/Origin: Tampered/' "$TEST_ROOT/InRelease.tampered" >"$TEST_ROOT/InRelease.changed"
+sed 's/Origin: Vouch/Origin: Tampered/' "$TEST_ROOT/InRelease.tampered" >"$TEST_ROOT/InRelease.changed"
 mv "$TEST_ROOT/InRelease.changed" "$TEST_ROOT/InRelease.tampered"
 if GNUPGHOME="$TEST_ROOT/verify-gnupg" gpg --batch --verify "$TEST_ROOT/InRelease.tampered" >/dev/null 2>&1; then
   echo 'test-apt-repository: modified InRelease unexpectedly passed signature verification' >&2
@@ -215,19 +215,19 @@ prepare_apt_root() {
     "$apt_root/etc/apt/trusted.gpg.d" \
     "$apt_root/lists/partial" \
     "$apt_root/cache/archives/partial"
-  cp "$REPOSITORY/oshioki-archive-keyring.gpg" "$apt_root/etc/apt/keyrings/oshioki.gpg"
+  cp "$REPOSITORY/vouch-archive-keyring.gpg" "$apt_root/etc/apt/keyrings/vouch.gpg"
   cat >"$apt_root/status" <<'EOF'
-Package: oshioki
+Package: vouch
 Status: install ok installed
 Priority: optional
 Section: admin
 Architecture: amd64
 Version: 0.4.1
-Description: Installed synthetic Oshioki package
+Description: Installed synthetic Vouch package
 
 EOF
   printf 'deb [arch=amd64 signed-by=%s] file:%s/ stable main\n' \
-    "$apt_root/etc/apt/keyrings/oshioki.gpg" "$repository" >"$apt_root/sources.list"
+    "$apt_root/etc/apt/keyrings/vouch.gpg" "$repository" >"$apt_root/sources.list"
   cat >"$apt_root/apt.conf" <<EOF
 Dir::Etc "$apt_root/etc/apt";
 Dir::Etc::main "$apt_root/etc/apt/apt.conf";
@@ -277,7 +277,7 @@ chmod 0755 "$APT_ROOT"
 TAMPERED_REPOSITORY="$TEST_ROOT/repository-tampered-signature"
 cp -a "$REPOSITORY" "$TAMPERED_REPOSITORY"
 for signed_file in InRelease Release; do
-  sed 's/Origin: Oshioki/Origin: Tampered/' \
+  sed 's/Origin: Vouch/Origin: Tampered/' \
     "$TAMPERED_REPOSITORY/dists/stable/$signed_file" \
     >"$TAMPERED_REPOSITORY/dists/stable/$signed_file.changed"
   mv "$TAMPERED_REPOSITORY/dists/stable/$signed_file.changed" \
@@ -298,15 +298,15 @@ if ! grep -Eiq 'BADSIG|signature.*(invalid|couldn.t be verified)|couldn.t be ver
 fi
 
 apt_get "$APT_ROOT" update -qq
-SIMULATION="$(apt_get "$APT_ROOT" --simulate install --only-upgrade oshioki 2>&1)"
-if ! grep -Eq 'Inst oshioki \[0\.4\.1\] \(0\.4\.2 ' <<<"$SIMULATION"; then
+SIMULATION="$(apt_get "$APT_ROOT" --simulate install --only-upgrade vouch 2>&1)"
+if ! grep -Eq 'Inst vouch \[0\.4\.1\] \(0\.4\.2 ' <<<"$SIMULATION"; then
   printf '%s\n' "$SIMULATION" >&2
   echo 'test-apt-repository: apt did not select 0.4.2 over installed 0.4.1' >&2
   exit 1
 fi
 
-printf 'tamper\n' >>"$REPOSITORY/pool/main/o/oshioki/oshioki_0.4.2_amd64.deb"
-if apt_get "$APT_ROOT" --download-only --assume-yes install --only-upgrade oshioki \
+printf 'tamper\n' >>"$REPOSITORY/pool/main/o/vouch/vouch_0.4.2_amd64.deb"
+if apt_get "$APT_ROOT" --download-only --assume-yes install --only-upgrade vouch \
   >"$TEST_ROOT/tampered-download.log" 2>&1; then
   echo 'test-apt-repository: modified package unexpectedly passed apt hash verification' >&2
   exit 1

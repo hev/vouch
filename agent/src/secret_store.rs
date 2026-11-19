@@ -1,7 +1,7 @@
 //! Key material that must not sit in the identity file.
 //!
 //! On macOS the box secret lives in the login keychain under the
-//! `dev.oshioki.agent` service and the identity file keeps only the account
+//! `dev.hev.vouch.agent` service and the identity file keeps only the account
 //! name that finds it. Anywhere else the file keeps carrying the secret
 //! itself: a second 0600 file next to the first buys nothing.
 
@@ -77,7 +77,7 @@ pub struct KeychainStore {
 #[cfg(target_os = "macos")]
 impl KeychainStore {
     /// The store the shipped agent uses.
-    pub fn oshioki() -> Self {
+    pub fn vouch() -> Self {
         Self {
             service: KEYCHAIN_SERVICE,
         }
@@ -171,12 +171,12 @@ mod tests {
     }
 
     /// Touches the real login keychain, so it stays off unless asked: run
-    /// with `OSHIOKI_TEST_KEYCHAIN=1`. Uses a random account under a test
+    /// with `VOUCH_TEST_KEYCHAIN=1`. Uses a random account under a test
     /// service and deletes it afterwards.
     #[cfg(target_os = "macos")]
     #[test]
     fn the_keychain_store_round_trips() {
-        if std::env::var_os("OSHIOKI_TEST_KEYCHAIN").is_none() {
+        if std::env::var_os("VOUCH_TEST_KEYCHAIN").is_none() {
             return;
         }
         let store = KeychainStore::under("dev.oshioki.agent-test");
@@ -197,6 +197,6 @@ mod tests {
         use rand::RngCore as _;
         let mut bytes = [0_u8; 16];
         rand::thread_rng().fill_bytes(&mut bytes);
-        oshioki_protocol::encode_base64url(&bytes)
+        vouch_protocol::encode_base64url(&bytes)
     }
 }

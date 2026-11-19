@@ -19,9 +19,9 @@ from pathlib import Path
 LABELS = {
     "receiver": "io.oshioki.browser-relay.receiver",
     "tunnel": "io.oshioki.browser-relay.tunnel",
-    "broker": "oshioki-browser-relay-nats.service",
+    "broker": "vouch-browser-relay-nats.service",
 }
-MANIFEST_REL = Path(".config/oshioki/browser-relay/services/manifest.json")
+MANIFEST_REL = Path(".config/vouch/browser-relay/services/manifest.json")
 
 
 class SetupError(Exception):
@@ -151,7 +151,7 @@ def read_manifest(home, create=False):
 
 
 def atomic_write(path, data, mode=0o600):
-    fd, temporary = tempfile.mkstemp(prefix=".oshioki-service-", dir=path.parent)
+    fd, temporary = tempfile.mkstemp(prefix=".vouch-service-", dir=path.parent)
     try:
         os.fchmod(fd, mode)
         with os.fdopen(fd, "wb") as stream:
@@ -232,7 +232,7 @@ def systemd_unit(nats_server, config):
     # absolute binary path as an argument to env so $$ is decoded consistently.
     args = ["/usr/bin/env", "--", str(nats_server), "--config", str(config)]
     return (
-        "[Unit]\nDescription=Oshioki browser relay NATS broker\nAfter=network.target\n\n"
+        "[Unit]\nDescription=Vouch browser relay NATS broker\nAfter=network.target\n\n"
         "[Service]\nType=simple\nUMask=0077\nRestart=on-failure\nRestartSec=2\n"
         f"ExecStart={' '.join(systemd_quote(arg) for arg in args)}\n\n"
         "[Install]\nWantedBy=default.target\n"
@@ -342,7 +342,7 @@ def ensure_platform(role):
 def build_receiver(args, home):
     config = checked_path(args.config, "approver config", private=True)
     relay = checked_path(args.relay, "relay binary", executable=True)
-    log_dir = home / "Library/Logs/Oshioki/browser-relay"
+    log_dir = home / "Library/Logs/Vouch/browser-relay"
     ensure_tree(log_dir, home, private_final=True)
     label = LABELS["receiver"]
     for suffix in ("out", "err"):
@@ -356,7 +356,7 @@ def build_tunnel(args, home):
     local, remote = args.local_port, args.remote_port
     if not 1 <= local <= 65535 or not 1 <= remote <= 65535:
         raise SetupError("tunnel ports must be between 1 and 65535")
-    log_dir = home / "Library/Logs/Oshioki/browser-relay"
+    log_dir = home / "Library/Logs/Vouch/browser-relay"
     ensure_tree(log_dir, home, private_final=True)
     for suffix in ("out", "err"):
         ensure_private_log(log_dir / f"tunnel.{suffix}.log", home)
@@ -504,10 +504,10 @@ def main(argv=None):
         else:
             install(args, args.role)
     except SetupError as error:
-        print(f"oshioki-browser-service: {error}", file=sys.stderr)
+        print(f"vouch-browser-service: {error}", file=sys.stderr)
         return 1
     except OSError:
-        print("oshioki-browser-service: filesystem operation failed", file=sys.stderr)
+        print("vouch-browser-service: filesystem operation failed", file=sys.stderr)
         return 1
     return 0
 

@@ -1,16 +1,16 @@
 //! Fixed vectors for native enrollment and approval.
 //!
-//! Regenerate with `OSHIOKI_WRITE_VECTORS=1 cargo test -p oshioki-agent
+//! Regenerate with `VOUCH_WRITE_VECTORS=1 cargo test -p vouch-agent
 //! --test native_vectors` after an intentional protocol change, and say so in
 //! the commit message. ECDSA here is RFC 6979 deterministic, so the
 //! signatures are stable.
 
-use oshioki_agent::Identity;
-use oshioki_protocol::{
+use serde::{Deserialize, Serialize};
+use vouch_agent::Identity;
+use vouch_protocol::{
     DecisionV1, RequestV1, VERSION_V1, approve_challenge, encode_base64url,
     native_enrollment_proof, verify_native_approval_v1, verify_software_native_enrollment_v1,
 };
-use serde::{Deserialize, Serialize};
 
 const PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/vectors/native_v1.json");
 
@@ -50,6 +50,7 @@ fn request() -> RequestV1 {
         pid_chain: vec!["1 systemd".into()],
         env: vec![],
         session: None,
+        reason: None,
         issued_at: 1_700_000_000,
         expires_at: 1_700_000_090,
     }
@@ -68,7 +69,7 @@ fn generate() -> Vectors {
     let raw = request().raw_json().unwrap();
     let DecisionV1::ApproveNative(approval) = identity
         .approve(
-            &oshioki_agent::OpenedRequest {
+            &vouch_agent::OpenedRequest {
                 request: request(),
                 raw: raw.clone(),
             },
@@ -110,7 +111,7 @@ fn generate() -> Vectors {
 #[test]
 fn native_vectors_are_stable() {
     let generated = generate();
-    if std::env::var_os("OSHIOKI_WRITE_VECTORS").is_some() {
+    if std::env::var_os("VOUCH_WRITE_VECTORS").is_some() {
         std::fs::write(
             PATH,
             serde_json::to_string_pretty(&generated).unwrap() + "\n",

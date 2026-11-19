@@ -1,5 +1,5 @@
 [package]
-name = "oshioki-hook"
+name = "vouch-hook"
 edition = { workspace = true }
 rust-version = { workspace = true }
 version = { workspace = true }
@@ -10,12 +10,12 @@ publish = { workspace = true }
 # Binary: the hook sudo runs. Verbs: check, enroll, pin, status, test, watch.
 
 [[bin]]
-name = "oshioki"
+name = "vouch"
 path = "src/main.rs"
 
 [dependencies]
-oshioki-protocol = { path = "../protocol" }
-oshioki-transport = { path = "../transport" }
+vouch-protocol = { path = "../protocol" }
+vouch-transport = { path = "../transport" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

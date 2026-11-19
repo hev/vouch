@@ -8,7 +8,7 @@ struct TempDir(std::path::PathBuf);
 impl TempDir {
     fn new() -> Self {
         let path = std::env::temp_dir().join(format!(
-            "oshioki-installed-approval-command-{}",
+            "vouch-installed-approval-command-{}",
             uuid::Uuid::new_v4()
         ));
         fs::create_dir(&path).unwrap();
@@ -47,11 +47,11 @@ fn exact_installed_commands_reach_both_native_request_adapters() {
         fs::create_dir(directory).unwrap();
         fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).unwrap();
     }
-    let approvals_root = config_home.join("oshioki/approvals");
+    let approvals_root = config_home.join("vouch/approvals");
     fs::create_dir_all(&approvals_root).unwrap();
     fs::set_permissions(&approvals_root, fs::Permissions::from_mode(0o700)).unwrap();
 
-    let executable = env!("CARGO_BIN_EXE_oshioki");
+    let executable = env!("CARGO_BIN_EXE_vouch");
     let installed = Command::new(executable)
         .args(["approvals", "install", "codex", "claude"])
         .env("HOME", &home)
@@ -65,17 +65,17 @@ fn exact_installed_commands_reach_both_native_request_adapters() {
         String::from_utf8_lossy(&installed.stderr)
     );
 
-    let native_event = br#"{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"printf fixture"},"cwd":"/tmp/oshioki-fixture"}"#;
+    let native_event = br#"{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"printf fixture"},"cwd":"/tmp/vouch-fixture"}"#;
     let configurations = [
         (
             "codex",
             codex_home.join("hooks.json"),
-            "oshioki-managed-hook-v1-codex",
+            "vouch-managed-hook-v1-codex",
         ),
         (
             "claude",
             home.join(".claude/settings.json"),
-            "oshioki-managed-hook-v1-claude",
+            "vouch-managed-hook-v1-claude",
         ),
     ];
     for (harness, settings, marker) in configurations {
@@ -102,7 +102,7 @@ fn exact_installed_commands_reach_both_native_request_adapters() {
         assert!(output.stdout.is_empty(), "{harness} must not decide");
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
-            stderr.contains("Oshioki approval unavailable"),
+            stderr.contains("Vouch approval unavailable"),
             "{harness} installed command did not reach the request adapter: {stderr}"
         );
     }

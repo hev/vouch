@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mock NATS subscriber for the oshioki container E2E test.
+"""Mock NATS subscriber for the vouch container E2E test.
 
 Speaks just enough of the NATS text protocol to subscribe to
 `oshioki.request.>`, capture the JSON envelope published by the hook, unseal
@@ -30,8 +30,8 @@ SHARE = os.environ["SHARE_DIR"]
 NATS_HOST = os.environ["NATS_HOST"]
 NATS_PORT = int(os.environ["NATS_PORT"])
 TIMEOUT = int(os.environ.get("TIMEOUT", "120"))
-ORIGIN = os.environ.get("OSHIOKI_ORIGIN", "https://sudo.test")
-RP_ID = os.environ.get("OSHIOKI_RP_ID", "sudo.test")
+ORIGIN = os.environ.get("VOUCH_ORIGIN", "https://sudo.test")
+RP_ID = os.environ.get("VOUCH_RP_ID", "sudo.test")
 # Number of sudo invocations the harness will make against this subscriber
 # before it exits. Defaults to 1 (the original single-request contract); the
 # hostile-caller-environment case drives this subscriber through three sudo

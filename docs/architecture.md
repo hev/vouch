@@ -1,6 +1,6 @@
 # Architecture
 
-Oshioki's server routes encrypted requests and stores ciphertext. The host
+Vouch's server routes encrypted requests and stores ciphertext. The host
 verifies the device's signature before accepting approval; the server cannot
 manufacture that signature.
 
@@ -77,7 +77,7 @@ plugin password prompt. Darwin has no plugin password branch.
 
 ## Contextual PAM
 
-The opt-in PAM installation removes the Oshioki approval plugin and its
+The opt-in PAM installation removes the Vouch approval plugin and its
 passwordless sudoers rule. A service-specific PAM entry invokes the hook's
 `authenticate` command; sudo retains its own policy, timestamps, and password
 path.

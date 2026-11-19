@@ -44,7 +44,7 @@ def verify(tag, expected_commit=None, expected_object=None):
     for path in (".github/signing/allowed_signers", ".github/signing/revoked_keys",
                  "scripts/verify-release-tag", ".github/workflows/release.yml"):
         require(git("show", f"{commit}:{path}"), f"tag source is missing bootstrap artifact: {path}")
-    with tempfile.TemporaryDirectory(prefix="oshioki-tag-policy-") as directory:
+    with tempfile.TemporaryDirectory(prefix="vouch-tag-policy-") as directory:
         policy = pathlib.Path(directory)
         for name in ("allowed_signers", "revoked_keys"):
             content = git("show", f"{main}:.github/signing/{name}")

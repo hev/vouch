@@ -1,5 +1,5 @@
 [package]
-name = "oshioki-browser-relay"
+name = "vouch-browser-relay"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,8 +13,8 @@ anyhow.workspace = true
 async-nats.workspace = true
 clap.workspace = true
 futures.workspace = true
-oshioki-protocol = { path = "../protocol" }
-oshioki-agent = { path = "../agent" }
+vouch-protocol = { path = "../protocol" }
+vouch-agent = { path = "../agent" }
 p256.workspace = true
 percent-encoding = "2"
 rand.workspace = true
@@ -30,4 +30,4 @@ nix = { workspace = true, features = ["signal"] }
 workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
-oshioki-enclave = { path = "../enclave" }
+vouch-enclave = { path = "../enclave" }

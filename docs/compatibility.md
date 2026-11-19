@@ -6,7 +6,7 @@ ability back to the previous release. Starting the new binary is not success.
 
 For operator steps, see [update and restore](update.md).
 This page is the release contract. Protocol, persistence, and CI changes
-must keep it true. The v1 cryptographic domain strings (`oshioki/...`) and
+must keep it true. The v1 cryptographic domain strings (`vouch/...`) and
 existing test vectors do not change.
 
 ## Compatibility sets
@@ -84,7 +84,7 @@ PR. Do not set `#[serde(deny_unknown_fields)]` on public wire types.
 
 Goldens live in `tests/compat/goldens/`. A protocol PR that changes a
 serialized shape must update the matching golden and a matrix row, not only
-a unit test. Regenerate with `OSHIOKI_WRITE_COMPAT_GOLDENS=1` as documented
+a unit test. Regenerate with `VOUCH_WRITE_COMPAT_GOLDENS=1` as documented
 in each golden test.
 
 ## SQLite rule
@@ -97,7 +97,7 @@ Two classes, no third:
 2. **Breaking (`user_version` bump).** Anything that would make an older
    binary's SQL or `ready()` wrong. Before applying it, the server writes a
    verified restore snapshot of the **current** live file next to
-   `OSHIOKI_STATE_PATH`, named `<stem>.pre-v<from>.sqlite3` (for
+   `VOUCH_STATE_PATH`, named `<stem>.pre-v<from>.sqlite3` (for
    `state.sqlite3` at version 2, `state.pre-v2.sqlite3`). A snapshot already
    at that path is renamed aside (`<stem>.pre-v<from>.<timestamp>.sqlite3`)
    so a second upgrade after rollback cannot rewind past enrollments made
@@ -181,7 +181,7 @@ permanent outage. The required checks are:
    they do not hang or silently allow.
 
 Both CI upgrade jobs use `scripts/select-compat-previous-release` to set
-`OSHIOKI_COMPAT_PREV_TAG` to the highest version among published, non-draft,
+`VOUCH_COMPAT_PREV_TAG` to the highest version among published, non-draft,
 non-prerelease GitHub releases whose existing `vMAJOR.MINOR.PATCH` tag is a
 strict ancestor of the checked-out candidate. The selector reads every release
 page and requires full Git history and tags. It excludes the candidate itself,
@@ -189,13 +189,13 @@ future or divergent commits, and unpublished tags (such as the failed `v0.5.0`
 release), so post-publication and historical reruns keep a valid predecessor.
 It fails with a diagnostic when none exists.
 
-For local runs, set `OSHIOKI_COMPAT_PREV_TAG` explicitly to select a baseline
+For local runs, set `VOUCH_COMPAT_PREV_TAG` explicitly to select a baseline
 when unpublished tags exist. This operator override requires an existing
 version tag pointing to a different commit; it does not enforce GitHub
 publication or ancestry. Without an override, the upgrade script selects the
 newest local tag pointing to a different commit. To use CI's published-release
-policy locally, export `GITHUB_REPOSITORY=epsalmond/oshioki` and run
-`tag="$(scripts/select-compat-previous-release)" && OSHIOKI_COMPAT_PREV_TAG="$tag" scripts/test-compat-upgrade`.
+policy locally, export `GITHUB_REPOSITORY=hev/vouch` and run
+`tag="$(scripts/select-compat-previous-release)" && VOUCH_COMPAT_PREV_TAG="$tag" scripts/test-compat-upgrade`.
 
 `scripts/test-compat-upgrade` keeps the previous-release hook waiting while
 the server restarts. The candidate native agent subscribes before that
@@ -211,8 +211,8 @@ remain required checks.
 
 Before its temporary previous-release artifacts are cleaned up, the upgrade
 runner requires `scripts/test-browser-local --compat-continuity`. It passes
-`OSHIOKI_COMPAT_PREV_HOOK`, `OSHIOKI_COMPAT_PREV_APP_JS`, and
-`OSHIOKI_COMPAT_PREV_TAG` from that same prior-release build. The browser lane
+`VOUCH_COMPAT_PREV_HOOK`, `VOUCH_COMPAT_PREV_APP_JS`, and
+`VOUCH_COMPAT_PREV_TAG` from that same prior-release build. The browser lane
 must fail if required artifacts are missing. It enrolls using the old hook
 and app assets once, then retains the browser profile and virtual
 authenticator while navigating to candidate assets. Every push-failure case

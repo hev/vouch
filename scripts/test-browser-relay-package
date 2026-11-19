@@ -23,20 +23,20 @@ def main():
     with_installers = len(sys.argv) == 4
     assert binary.is_file() and os.access(binary, os.X_OK), "helper is not executable"
     expected = [line.split()[0] for line in sums.read_text().splitlines()
-                if len(line.split()) == 2 and line.split()[1] == "oshioki-browser-relay"]
+                if len(line.split()) == 2 and line.split()[1] == "vouch-browser-relay"]
     digest = hashlib.sha256(binary.read_bytes()).hexdigest()
     assert expected == [digest], "missing, duplicate, or incorrect helper checksum"
     manifest = sums.with_name("manifest.json")
     if manifest.exists():
         entries = [item for item in json.loads(manifest.read_text())["files"]
-                   if item["name"] == "oshioki-browser-relay"]
+                   if item["name"] == "vouch-browser-relay"]
         assert len(entries) == 1 and entries[0]["sha256"] == digest, "incorrect manifest entry"
         assert entries[0]["mode"] == "755", "incorrect manifest mode"
     help_text = run(str(binary), "--help")
     for command in ("local-login", "login", "serve", "keygen"):
         assert command in help_text, f"missing {command} command"
         assert "Usage:" in run(str(binary), command, "--help")
-    with tempfile.TemporaryDirectory(prefix="oshioki-package-") as directory:
+    with tempfile.TemporaryDirectory(prefix="vouch-package-") as directory:
         key = Path(directory) / "signing.key"
         public = run(str(binary), "keygen", str(key)).strip()
         assert len(base64.urlsafe_b64decode(public + "==")) == 65, "invalid public key"
@@ -46,7 +46,7 @@ def main():
         retry = subprocess.run([str(binary), "keygen", str(key)], capture_output=True, timeout=10)
         assert retry.returncode != 0 and key.read_bytes() == secret, "keygen overwrote a key"
     if with_installers:
-        for name in ("oshioki-google-login-setup", "oshioki-browser-service"):
+        for name in ("vouch-google-login-setup", "vouch-browser-service"):
             helper = binary.with_name(name)
             assert helper.is_file() and os.access(helper, os.X_OK), f"missing executable {name}"
             expected_helper = [line.split()[0] for line in sums.read_text().splitlines()

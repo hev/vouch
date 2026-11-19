@@ -3,8 +3,8 @@
 // forward every request to the plain-HTTP server. The Playwright spec
 // imports `startTlsProxy` from here so there is one proxy, not two; running
 // this file starts the same proxy for the hook's `enroll` read-back and
-// `pin` steps after Playwright exits. Reads OSHIOKI_TLS_KEY, OSHIOKI_TLS_CERT,
-// OSHIOKI_HTTPS_PORT (default 443), and OSHIOKI_SERVER_HTTP.
+// `pin` steps after Playwright exits. Reads VOUCH_TLS_KEY, VOUCH_TLS_CERT,
+// VOUCH_HTTPS_PORT (default 443), and VOUCH_SERVER_HTTP.
 import { readFileSync } from "node:fs";
 import http from "node:http";
 import https from "node:https";
@@ -13,10 +13,10 @@ import { pathToFileURL } from "node:url";
 
 /// Starts the TLS proxy and resolves once it is listening.
 export async function startTlsProxy() {
-  const target = new URL(process.env.OSHIOKI_SERVER_HTTP ?? "http://server:8443");
+  const target = new URL(process.env.VOUCH_SERVER_HTTP ?? "http://server:8443");
   const proxy = https.createServer({
-    key: readFileSync(process.env.OSHIOKI_TLS_KEY),
-    cert: readFileSync(process.env.OSHIOKI_TLS_CERT),
+    key: readFileSync(process.env.VOUCH_TLS_KEY),
+    cert: readFileSync(process.env.VOUCH_TLS_CERT),
   }, (request, response) => {
     const upstream = http.request({
       hostname: target.hostname,
@@ -38,7 +38,7 @@ export async function startTlsProxy() {
   });
   await new Promise((resolve, reject) => {
     proxy.once("error", reject);
-    proxy.listen(Number(process.env.OSHIOKI_HTTPS_PORT ?? "443"), "127.0.0.1", resolve);
+    proxy.listen(Number(process.env.VOUCH_HTTPS_PORT ?? "443"), "127.0.0.1", resolve);
   });
   return proxy;
 }

@@ -6,14 +6,14 @@
 //!
 //! sudo `dlopen`s this plugin by the absolute path in `sudo.conf`, so the id
 //! is never consulted at load time; it exists here only to make Homebrew's
-//! fixup a no-op. Override with `OSHIOKI_PLUGIN_INSTALL_NAME` for an Intel
+//! fixup a no-op. Override with `VOUCH_PLUGIN_INSTALL_NAME` for an Intel
 //! or otherwise non-default Homebrew prefix.
 
 /// The keg path the tap's arm64 bottle always lands on. Note the basename:
-/// the release artifact renames `liboshioki_plugin.dylib` to `oshioki.dylib`
+/// the release artifact renames `libvouch_plugin.dylib` to `vouch.dylib`
 /// and Homebrew derives the new id from the basename of the *old* id, so
 /// this has to spell the installed name, not the cargo output name.
-const DEFAULT_INSTALL_NAME: &str = "/opt/homebrew/opt/oshioki/libexec/oshioki.dylib";
+const DEFAULT_INSTALL_NAME: &str = "/opt/homebrew/opt/vouch/libexec/vouch.dylib";
 
 /// Rejects an override that would not survive the linker command line. The
 /// value is spliced into `-Wl,-install_name,<name>`: a comma there splits
@@ -41,12 +41,12 @@ fn checked_install_name(var: &str, name: &str) -> String {
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-env-changed=OSHIOKI_PLUGIN_INSTALL_NAME");
+    println!("cargo:rerun-if-env-changed=VOUCH_PLUGIN_INSTALL_NAME");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
         return;
     }
-    let name = match std::env::var("OSHIOKI_PLUGIN_INSTALL_NAME") {
-        Ok(name) => checked_install_name("OSHIOKI_PLUGIN_INSTALL_NAME", &name),
+    let name = match std::env::var("VOUCH_PLUGIN_INSTALL_NAME") {
+        Ok(name) => checked_install_name("VOUCH_PLUGIN_INSTALL_NAME", &name),
         Err(_) => DEFAULT_INSTALL_NAME.to_owned(),
     };
     println!("cargo:rustc-cdylib-link-arg=-Wl,-install_name,{name}");

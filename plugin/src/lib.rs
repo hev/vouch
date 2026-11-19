@@ -1,7 +1,7 @@
 //! `approval_exec` — the sudo approval plugin (cdylib).
 //!
 //! Exports the `SUDO_APPROVAL_PLUGIN` vtable sudo looks up when it loads this
-//! library. The plugin forks `oshioki check` and maps
+//! library. The plugin forks `vouch check` and maps
 //! its exit code to the sudo approval API contract.
 //!
 //! This module contains the sudo plugin's unsafe FFI code. Every unsafe block
@@ -26,7 +26,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use oshioki_protocol::PRIVATE_PLUGIN_HOOK_PROTOCOL_VERSION;
+use vouch_protocol::PRIVATE_PLUGIN_HOOK_PROTOCOL_VERSION;
 
 // ---------------------------------------------------------------------------
 // Sudo plugin ABI constants (from /usr/include/sudo_plugin.h)
@@ -53,7 +53,7 @@ const SUDO_CONV_INFO_MSG: c_int = 0x0004;
 /// treats its presence as positive proof that the sudo on this host actually
 /// loaded the approval plugin, and refuses the passwordless sudoers rule
 /// without it. Keep the prefix stable.
-const VERSION_BANNER_PREFIX: &str = "Oshioki approval plugin version ";
+const VERSION_BANNER_PREFIX: &str = "Vouch approval plugin version ";
 
 // ---------------------------------------------------------------------------
 // Callback type aliases matching sudo_plugin.h
@@ -194,13 +194,20 @@ struct OpenState {
     /// runs with" — it is a label, sourced from bytes the executed command
     /// never sees.
     session_env: Option<String>,
+    /// The agent's own reason, from `VOUCH_REASON` in the same `submit_envp`
+    /// and for the same reason kept apart from `env.*`: it is display text,
+    /// never part of the environment the command runs with.
+    reason_env: Option<String>,
 }
 
-/// The one environment variable this plugin reads out of the invoking
-/// user's original environment to label a session. Kept as a single-item
-/// list (rather than a bare constant) so a future label source can be added
-/// here without reshaping the extraction helper.
-const SESSION_ENV_VARS: &[&str] = &["OSHIOKI_SESSION"];
+/// The environment variables this plugin reads out of the invoking user's
+/// original environment to label a session, in order of preference.
+/// `OSHIOKI_SESSION` is accepted for one release after the rename to vouch,
+/// so shells that still export the old name keep their label.
+const SESSION_ENV_VARS: &[&str] = &["VOUCH_SESSION", "OSHIOKI_SESSION"];
+
+/// The environment variable carrying the agent's own reason for a request.
+const REASON_ENV_VAR: &str = "VOUCH_REASON";
 
 /// Capture the invoking identity for the following one-shot approval check.
 ///
@@ -260,6 +267,7 @@ unsafe fn capture_open_state(
         // every sudo invocation from that environment.
         let submit_envp = unsafe { parse_sudo_env_lenient(submit_envp) };
         let session_env = extract_session_env(&submit_envp);
+        let reason_env = extract_reason_env(&submit_envp);
         if !has_required_identity(&user_info) {
             return Some(false);
         }
@@ -270,6 +278,7 @@ unsafe fn capture_open_state(
             user_info,
             noninteractive,
             session_env,
+            reason_env,
         });
         Some(true)
     });
@@ -352,6 +361,7 @@ unsafe fn gather_context_after_open(
             run_envp,
             &state.user_info,
             state.session_env.as_deref(),
+            state.reason_env.as_deref(),
             state.noninteractive,
         )
     }
@@ -380,23 +390,23 @@ fn has_required_identity(info: &[(String, String)]) -> bool {
 /// yield `None`; the last matching entry wins, matching how every other
 /// sudo array in this plugin is read.
 fn extract_session_env(envp: &[(String, String)]) -> Option<String> {
-    for name in SESSION_ENV_VARS {
-        let value = envp
-            .iter()
-            .rev()
-            .find_map(|(key, value)| (key == name).then_some(value.as_str()));
-        if let Some(value) = value {
-            let trimmed = value.trim();
-            if trimmed.is_empty()
-                || trimmed.chars().count() > 64
-                || trimmed.chars().any(char::is_control)
-            {
-                continue;
-            }
-            return Some(trimmed.to_owned());
-        }
-    }
-    None
+    SESSION_ENV_VARS.iter().find_map(|name| {
+        last_env_value(envp, name).and_then(vouch_protocol::normalize_session_label)
+    })
+}
+
+/// Pull the agent's reason out of `submit_envp`. Bounded to the limits
+/// `RequestV1::validate` enforces for `reason` (see
+/// `vouch_protocol::MAX_REASON_CHARS`), with control characters refused, so
+/// an invalid value is dropped here instead of failing the request later.
+fn extract_reason_env(envp: &[(String, String)]) -> Option<String> {
+    last_env_value(envp, REASON_ENV_VAR).and_then(vouch_protocol::normalize_reason)
+}
+
+fn last_env_value<'a>(envp: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    envp.iter()
+        .rev()
+        .find_map(|(key, value)| (key == name).then_some(value.as_str()))
 }
 
 /// Collect all sudo arrays into a single payload we can pipe to the hook.
@@ -413,6 +423,7 @@ unsafe fn gather_context(
     run_envp: *const *const c_char,
     user_info: &[(String, String)],
     session_env: Option<&str>,
+    reason_env: Option<&str>,
     noninteractive: bool,
 ) -> Option<SudoContext> {
     // SAFETY: command_info, run_argv, and run_envp are valid NUL-terminated
@@ -457,7 +468,12 @@ unsafe fn gather_context(
     // prefixes would let a display-only label masquerade as part of the
     // authenticated execution environment.
     if let Some(value) = session_env {
-        push_kv(&mut payload, "session.", "OSHIOKI_SESSION", value);
+        push_kv(&mut payload, "session.", "VOUCH_SESSION", value);
+    }
+    // The reason travels the same way and for the same reason: it is the
+    // agent's description, shown to the approver and never executed.
+    if let Some(value) = reason_env {
+        push_kv(&mut payload, "session.", "VOUCH_REASON", value);
     }
     // These markers are part of the private plugin-to-hook framing, not the
     // v1 request wire format. Both sides require the version and environment
@@ -641,11 +657,11 @@ fn push_kv(buf: &mut Vec<u8>, prefix: &str, key: &str, value: &str) {
 // ---------------------------------------------------------------------------
 
 /// Full path to the helper binary.
-const HOOK_PATH: &str = "/usr/local/sbin/oshioki";
+const HOOK_PATH: &str = "/usr/local/sbin/vouch";
 
 /// Argument vector passed to the hook.
 const HOOK_PROTOCOL_ARG: &str = "--plugin-protocol-version=2";
-const HOOK_ARGV: &[&str] = &["oshioki", "check", HOOK_PROTOCOL_ARG];
+const HOOK_ARGV: &[&str] = &["vouch", "check", HOOK_PROTOCOL_ARG];
 
 /// Fork the hook and wait for its verdict. On Linux, a cancellable password/PAM
 /// attempt races the hook. Hook status 0 approves, status 1 explicitly denies,
@@ -662,7 +678,7 @@ fn run_hook(ctx: &SudoContext) -> c_int {
     let mut hook = spawn_hook(ctx).unwrap_or_else(|| {
         write_fd(
             libc::STDERR_FILENO,
-            b"[sudo/oshioki] could not start the approval hook\n",
+            b"[sudo/vouch] could not start the approval hook\n",
         );
         HookChild {
             pid: None,
@@ -753,11 +769,11 @@ impl Drop for InterruptGuard {
 const SUDO_PAM_SERVICE_FILES: [&str; 2] = ["/etc/pam.d/sudo", "/etc/pam.d/sudo_local"];
 
 /// True when any of `paths` has an uncommented `auth` line naming
-/// `liboshioki_pam`, i.e. the contextual PAM lane is live for sudo.
+/// `libvouch_pam`, i.e. the contextual PAM lane is live for sudo.
 ///
 /// This plugin's password lane calls `pam_start("sudo", ...)`. If the
 /// contextual module were live at the same time, that call would recurse into
-/// `liboshioki_pam` and a device approval could satisfy the password branch.
+/// `libvouch_pam` and a device approval could satisfy the password branch.
 /// The installer's ordering makes the two mutually exclusive, but nothing in
 /// the binaries enforced it; this is the binary-side check.
 ///
@@ -780,7 +796,7 @@ fn contextual_pam_lane_live(paths: &[&str]) -> bool {
             fields
                 .next()
                 .is_some_and(|kind| kind.eq_ignore_ascii_case("auth"))
-                && fields.any(|field| field.contains("liboshioki_pam"))
+                && fields.any(|field| field.contains("libvouch_pam"))
         })
     })
 }
@@ -793,9 +809,9 @@ fn run_hook_with_password(ctx: &SudoContext, hook: &mut HookChild) -> c_int {
     if contextual_pam_live {
         write_fd(
             libc::STDERR_FILENO,
-            b"[sudo/oshioki] the contextual PAM module is live in the sudo PAM service; \
-refusing the approval plugin's password lane (it would recurse into liboshioki_pam). \
-Run `install-oshioki-hook --contextual-pam-status` and remove one of the two lanes.\n",
+            b"[sudo/vouch] the contextual PAM module is live in the sudo PAM service; \
+refusing the approval plugin's password lane (it would recurse into libvouch_pam). \
+Run `install-vouch-hook --contextual-pam-status` and remove one of the two lanes.\n",
         );
         audit_pam_lane_conflict();
     }
@@ -849,7 +865,7 @@ Run `install-oshioki-hook --contextual-pam-status` and remove one of the two lan
             password_done = true;
             password_result = Some(result);
             if matches!(result, PasswordResult::Rejected) {
-                write_fd(libc::STDERR_FILENO, b"[sudo/oshioki] password rejected\n");
+                write_fd(libc::STDERR_FILENO, b"[sudo/vouch] password rejected\n");
             }
         }
 
@@ -901,7 +917,7 @@ fn run_hook_without_password(hook: &mut HookChild) -> c_int {
 #[cfg(target_os = "linux")]
 fn audit_pam_lane_conflict() {
     let Ok(message) = CString::new(
-        "[oshioki] approval plugin password lane refused: liboshioki_pam is live in the sudo PAM service",
+        "[vouch] approval plugin password lane refused: libvouch_pam is live in the sudo PAM service",
     ) else {
         return;
     };
@@ -912,7 +928,7 @@ fn audit_pam_lane_conflict() {
 
 #[cfg(target_os = "linux")]
 fn audit_password_fallback(username: &str) {
-    let Ok(format) = CString::new("[oshioki] password fallback approved for %s") else {
+    let Ok(format) = CString::new("[vouch] password fallback approved for %s") else {
         return;
     };
     let Ok(user) = CString::new(username) else {
@@ -976,7 +992,7 @@ fn spawn_hook(ctx: &SudoContext) -> Option<HookChild> {
 
 /// The child's entire environment. Sudo hands the plugin the invoking user's
 /// environment, and the hook runs as root, so nothing of it may cross into
-/// the hook: no `OSHIOKI_CONFIG_DIR`, `HOME`/`CURL_HOME` (curl config),
+/// the hook: no `VOUCH_CONFIG_DIR`, `HOME`/`CURL_HOME` (curl config),
 /// `SSL_CERT_*`, proxies, or key-log paths. The PAM module does the same
 /// with an empty environment; the hook uses absolute paths throughout.
 const HOOK_ENV: &str = "PATH=/usr/bin:/bin";
@@ -1315,7 +1331,7 @@ fn spawn_password_process(username: &str) -> Option<PasswordWorker> {
         return None;
     }
     let username = username.to_owned();
-    let prompt = format!("[sudo/oshioki] password for {username}: ").into_bytes();
+    let prompt = format!("[sudo/vouch] password for {username}: ").into_bytes();
     // SAFETY: This fork occurs before any worker threads. The child only uses
     // inherited tty/cancellation fds and exits after tty/PAM cleanup.
     let forked = unsafe { nix::unistd::fork() };
@@ -1515,7 +1531,7 @@ fn read_and_authenticate_password(
         saved,
         flush_input: false,
     };
-    let prompt = format!("[sudo/oshioki] password for {username}: ");
+    let prompt = format!("[sudo/vouch] password for {username}: ");
     if tty_file.write_all(prompt.as_bytes()).is_err() || tty_file.flush().is_err() {
         guard.flush_input = true;
         return PasswordResult::Unavailable;
@@ -2098,7 +2114,7 @@ mod tests {
         static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let serial = NEXT.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
-            "oshioki-plugin-pam-{tag}-{}-{serial}",
+            "vouch-plugin-pam-{tag}-{}-{serial}",
             std::process::id()
         ));
         std::fs::write(&path, contents).expect("write the fixture PAM service file");
@@ -2154,23 +2170,23 @@ mod tests {
     fn contextual_pam_lane_detected_only_on_a_live_auth_line() {
         let live = temp_pam_file(
             "live",
-            "#%PAM-1.0\n# BEGIN oshioki pam\nauth       sufficient     /lib/security/liboshioki_pam.so\n# END oshioki pam\n@include common-auth\n",
+            "#%PAM-1.0\n# BEGIN vouch pam\nauth       sufficient     /lib/security/libvouch_pam.so\n# END vouch pam\n@include common-auth\n",
         );
         let indented = temp_pam_file(
             "indented",
-            "\tauth sufficient /usr/local/lib/pam/liboshioki_pam.dylib\n",
+            "\tauth sufficient /usr/local/lib/pam/libvouch_pam.dylib\n",
         );
         let commented = temp_pam_file(
             "commented",
-            "#%PAM-1.0\n#auth      sufficient     liboshioki_pam.so\n  # auth sufficient liboshioki_pam.so\n@include common-auth\n",
+            "#%PAM-1.0\n#auth      sufficient     libvouch_pam.so\n  # auth sufficient libvouch_pam.so\n@include common-auth\n",
         );
-        let other_type = temp_pam_file("session", "session    optional       liboshioki_pam.so\n");
+        let other_type = temp_pam_file("session", "session    optional       libvouch_pam.so\n");
         let stock = temp_pam_file(
             "stock",
             "#%PAM-1.0\n@include common-auth\n@include common-account\n",
         );
         let absent =
-            std::env::temp_dir().join(format!("oshioki-plugin-pam-absent-{}", std::process::id()));
+            std::env::temp_dir().join(format!("vouch-plugin-pam-absent-{}", std::process::id()));
 
         let as_str = |path: &std::path::Path| path.to_str().unwrap().to_owned();
         assert!(contextual_pam_lane_live(&[&as_str(&live)]));
@@ -2235,6 +2251,7 @@ mod tests {
                 envp_ptrs.as_ptr(),
                 &user_info,
                 session_env,
+                None,
                 false,
             )
         }
@@ -2372,7 +2389,7 @@ mod tests {
         assert_eq!(
             banner.to_str().unwrap(),
             concat!(
-                "Oshioki approval plugin version ",
+                "Vouch approval plugin version ",
                 env!("CARGO_PKG_VERSION"),
                 "\n"
             )
@@ -2442,7 +2459,7 @@ mod tests {
 
     #[test]
     fn hook_invocation_carries_the_private_protocol_handshake() {
-        assert_eq!(HOOK_ARGV, &["oshioki", "check", HOOK_PROTOCOL_ARG]);
+        assert_eq!(HOOK_ARGV, &["vouch", "check", HOOK_PROTOCOL_ARG]);
         assert_eq!(HOOK_PROTOCOL_ARG, "--plugin-protocol-version=2");
     }
 
@@ -2677,7 +2694,7 @@ mod tests {
     fn extract_session_env_reads_present_value() {
         let envp = vec![
             ("PATH".to_owned(), "/usr/bin".to_owned()),
-            ("OSHIOKI_SESSION".to_owned(), "claude-1b".to_owned()),
+            ("VOUCH_SESSION".to_owned(), "claude-1b".to_owned()),
         ];
         assert_eq!(extract_session_env(&envp), Some("claude-1b".into()));
     }
@@ -2690,40 +2707,98 @@ mod tests {
 
     #[test]
     fn extract_session_env_empty_value_yields_none() {
-        let envp = vec![("OSHIOKI_SESSION".to_owned(), String::new())];
+        let envp = vec![("VOUCH_SESSION".to_owned(), String::new())];
         assert_eq!(extract_session_env(&envp), None);
     }
 
     #[test]
     fn extract_session_env_overlong_value_yields_none() {
-        let envp = vec![("OSHIOKI_SESSION".to_owned(), "x".repeat(65))];
+        let envp = vec![("VOUCH_SESSION".to_owned(), "x".repeat(65))];
         assert_eq!(extract_session_env(&envp), None);
     }
 
     #[test]
     fn extract_session_env_rejects_control_characters() {
-        let envp = vec![("OSHIOKI_SESSION".to_owned(), "bad\u{0007}name".to_owned())];
+        let envp = vec![("VOUCH_SESSION".to_owned(), "bad\u{0007}name".to_owned())];
         assert_eq!(extract_session_env(&envp), None);
     }
 
     #[test]
     fn extract_session_env_trims_whitespace() {
-        let envp = vec![("OSHIOKI_SESSION".to_owned(), "  claude  ".to_owned())];
+        let envp = vec![("VOUCH_SESSION".to_owned(), "  claude  ".to_owned())];
         assert_eq!(extract_session_env(&envp), Some("claude".into()));
     }
 
     #[test]
     fn extract_session_env_last_value_wins_on_duplicate() {
         let envp = vec![
-            ("OSHIOKI_SESSION".to_owned(), "first".to_owned()),
-            ("OSHIOKI_SESSION".to_owned(), "second".to_owned()),
+            ("VOUCH_SESSION".to_owned(), "first".to_owned()),
+            ("VOUCH_SESSION".to_owned(), "second".to_owned()),
         ];
         assert_eq!(extract_session_env(&envp), Some("second".into()));
     }
 
+    #[test]
+    fn extract_session_env_accepts_oshioki_session_for_one_release() {
+        let envp = vec![("OSHIOKI_SESSION".to_owned(), "legacy".to_owned())];
+        assert_eq!(extract_session_env(&envp), Some("legacy".into()));
+        let both = vec![
+            ("OSHIOKI_SESSION".to_owned(), "legacy".to_owned()),
+            ("VOUCH_SESSION".to_owned(), "current".to_owned()),
+        ];
+        assert_eq!(extract_session_env(&both), Some("current".into()));
+    }
+
+    #[test]
+    fn extract_reason_env_reads_bounds_and_refuses() {
+        let envp = |value: &str| vec![("VOUCH_REASON".to_owned(), value.to_owned())];
+        assert_eq!(
+            extract_reason_env(&envp("  Reload hevd  ")),
+            Some("Reload hevd".into())
+        );
+        assert_eq!(extract_reason_env(&envp("")), None);
+        assert_eq!(extract_reason_env(&envp("two\nlines")), None);
+        assert_eq!(
+            extract_reason_env(&envp(&"x".repeat(vouch_protocol::MAX_REASON_CHARS + 1))),
+            None
+        );
+        assert_eq!(extract_reason_env(&[]), None);
+    }
+
+    #[test]
+    fn gather_context_writes_the_reason_under_the_session_prefix() {
+        let (_command_info_strings, command_info_ptrs) = c_array(&[b"command=/bin/true"]);
+        let (_argv_strings, argv_ptrs) = c_array(&[b"/bin/true"]);
+        let (_envp_strings, envp_ptrs) = c_array(&[b"PATH=/usr/bin"]);
+        let user_info = vec![
+            ("user".to_owned(), "approvalcaller".to_owned()),
+            ("uid".to_owned(), "12345".to_owned()),
+        ];
+        // SAFETY: Each pointer array is NUL-terminated and its C strings live
+        // for the duration of the call.
+        let context = unsafe {
+            gather_context(
+                command_info_ptrs.as_ptr(),
+                argv_ptrs.as_ptr(),
+                envp_ptrs.as_ptr(),
+                &user_info,
+                None,
+                Some("Reload hevd"),
+                false,
+            )
+        }
+        .expect("context");
+        let payload = String::from_utf8(context.payload).unwrap();
+        assert!(
+            payload.contains("session.VOUCH_REASON=Reload hevd\n"),
+            "{payload}"
+        );
+        assert!(!payload.contains("env.VOUCH_REASON"), "{payload}");
+    }
+
     // -----------------------------------------------------------------
     // open() -> check() threading: the session label captured from
-    // submit_envp in open() must reach the payload as session.OSHIOKI_SESSION,
+    // submit_envp in open() must reach the payload as session.VOUCH_SESSION,
     // completely separately from run_envp's env.* entries.
     // -----------------------------------------------------------------
 
@@ -2734,7 +2809,7 @@ mod tests {
         assert_eq!(
             capture_test_open_with_envp(
                 &[b"user=approvalcaller", b"uid=12345"],
-                &[b"OSHIOKI_SESSION=claude-1b", b"PATH=/usr/bin"],
+                &[b"VOUCH_SESSION=claude-1b", b"PATH=/usr/bin"],
             ),
             SUDO_RC_OK
         );
@@ -2747,10 +2822,10 @@ mod tests {
         .expect("captured identity must yield a context");
 
         let payload = String::from_utf8(context.payload).unwrap();
-        assert!(payload.contains("session.OSHIOKI_SESSION=claude-1b\n"));
-        // submit_envp's OSHIOKI_SESSION must never leak into env.* — only
+        assert!(payload.contains("session.VOUCH_SESSION=claude-1b\n"));
+        // submit_envp's VOUCH_SESSION must never leak into env.* — only
         // run_envp's (post-env_reset) entries go there.
-        assert!(!payload.contains("env.OSHIOKI_SESSION"));
+        assert!(!payload.contains("env.VOUCH_SESSION"));
     }
 
     #[test]
@@ -2780,7 +2855,7 @@ mod tests {
     fn open_with_overlong_session_env_omits_session_prefix() {
         let _serial = identity_test();
 
-        let overlong = format!("OSHIOKI_SESSION={}", "x".repeat(65));
+        let overlong = format!("VOUCH_SESSION={}", "x".repeat(65));
         assert_eq!(
             capture_test_open_with_envp(
                 &[b"user=approvalcaller", b"uid=12345"],
@@ -2811,7 +2886,7 @@ mod tests {
                 &[b"user=approvalcaller", b"uid=12345"],
                 &[
                     b"CI_COMMIT_MESSAGE=subject\n\nbody line",
-                    b"OSHIOKI_SESSION=claude-1b",
+                    b"VOUCH_SESSION=claude-1b",
                     b"PATH=/usr/bin",
                 ],
             ),
@@ -2826,7 +2901,7 @@ mod tests {
         .expect("captured identity must yield a context");
 
         let payload = String::from_utf8(context.payload).unwrap();
-        assert!(payload.contains("session.OSHIOKI_SESSION=claude-1b\n"));
+        assert!(payload.contains("session.VOUCH_SESSION=claude-1b\n"));
         assert!(!payload.contains("CI_COMMIT_MESSAGE"));
     }
 
@@ -2837,7 +2912,7 @@ mod tests {
         assert_eq!(
             capture_test_open_with_envp(
                 &[b"user=approvalcaller", b"uid=12345"],
-                &[b"OSHIOKI_SESSION=claude\n1b", b"PATH=/usr/bin"],
+                &[b"VOUCH_SESSION=claude\n1b", b"PATH=/usr/bin"],
             ),
             SUDO_RC_OK
         );
@@ -2863,7 +2938,7 @@ mod tests {
                 &[
                     b"LATIN1=caf\xe9",
                     b"NO_SEPARATOR",
-                    b"OSHIOKI_SESSION=claude-1b",
+                    b"VOUCH_SESSION=claude-1b",
                 ],
             ),
             SUDO_RC_OK
@@ -2877,7 +2952,7 @@ mod tests {
         .expect("captured identity must yield a context");
 
         let payload = String::from_utf8(context.payload).unwrap();
-        assert!(payload.contains("session.OSHIOKI_SESSION=claude-1b\n"));
+        assert!(payload.contains("session.VOUCH_SESSION=claude-1b\n"));
     }
 
     #[test]
@@ -2890,7 +2965,7 @@ mod tests {
         )
         .expect("valid sudo arrays must yield a context");
         let payload = String::from_utf8(context.payload).unwrap();
-        assert!(payload.contains("session.OSHIOKI_SESSION=claude-1b\n"));
+        assert!(payload.contains("session.VOUCH_SESSION=claude-1b\n"));
     }
 
     #[cfg(target_os = "linux")]
@@ -3051,7 +3126,7 @@ mod tests {
 
     /// The hook runs as root, but sudo hands the plugin the invoking user's
     /// environment. The child must start in `/` with only the fixed
-    /// `HOOK_ENV`, so nothing the caller exported (`OSHIOKI_CONFIG_DIR`,
+    /// `HOOK_ENV`, so nothing the caller exported (`VOUCH_CONFIG_DIR`,
     /// `CURL_HOME`, `HOME`, `SSL_CERT_FILE`, ...) reaches the root hook.
     #[cfg(target_os = "linux")]
     #[test]

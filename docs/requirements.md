@@ -11,11 +11,11 @@ Provide:
 - NATS 2.10 or newer with JetStream, reachable by hooks, server, and native agents.
 - An existing `OSHIOKI` stream covering `oshioki.request.>` and `oshioki.auth.>`.
   The server repairs an older stream's subjects, but does not create a missing one.
-- One active Oshioki server per SQLite database, with a persistent writable
-  `OSHIOKI_STATE_PATH` and persistent VAPID key for Web Push.
+- One active Vouch server per SQLite database, with a persistent writable
+  `VOUCH_STATE_PATH` and persistent VAPID key for Web Push.
 - A trusted HTTPS origin reachable from enrolled browsers and hooks.
-  Set `OSHIOKI_ORIGIN=https://sudo.example.com` and
-  `OSHIOKI_RP_ID=sudo.example.com`.
+  Set `VOUCH_ORIGIN=https://sudo.example.com` and
+  `VOUCH_RP_ID=sudo.example.com`.
 - Service supervision, backups, health monitoring, and a previous release for restore.
 
 Each sudo host on the approval plugin lane needs Todd Miller's sudo 1.9 or
@@ -24,11 +24,11 @@ and later, cannot load the plugin. The installer refuses that lane there, and
 refuses the passwordless rule while the `sudo-rs` package is installed at all.
 See [supported sudo](install.md#supported-sudo).
 
-The Debian package includes `oshioki-server.service`, running as user
-`oshioki` with `/etc/oshioki/server.env`. Start it after provisioning its
+The Debian package includes `vouch-server.service`, running as user
+`vouch` with `/etc/vouch/server.env`. Start it after provisioning its
 environment and broker. A fresh package install enables the unit but does not
 start it. An example environment ships under
-`/usr/share/doc/oshioki/examples/server.env.example`.
+`/usr/share/doc/vouch/examples/server.env.example`.
 
 Homebrew includes the server binary. Manage it through phone setup or your
 own service supervisor. The repository also has a Compose development stack;

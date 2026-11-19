@@ -1,6 +1,6 @@
 //! Frozen base-generated inputs; never regenerate these with candidate libraries.
 use super::*;
-use oshioki_protocol::{decode_base64url, encode_base64url};
+use vouch_protocol::{decode_base64url, encode_base64url};
 
 fn legacy() -> serde_json::Value {
     serde_json::from_slice(include_bytes!(
@@ -101,7 +101,7 @@ fn frozen_old_vapid_signatures_and_claims_match_fixed_metadata() {
 #[test]
 fn frozen_old_vapid_pem_keeps_bytes_scalar_and_advertised_identity() {
     let fixtures = legacy();
-    let dir = std::env::temp_dir().join(format!("oshioki-old-vapid-{}", uuid::Uuid::new_v4()));
+    let dir = std::env::temp_dir().join(format!("vouch-old-vapid-{}", uuid::Uuid::new_v4()));
     fs::create_dir(&dir).unwrap();
     let path = dir.join("vapid-private.pem");
     let old_pem = include_bytes!("../../test-vectors/legacy-crypto-v043/vapid-test-only.pem");
@@ -119,7 +119,7 @@ fn frozen_old_vapid_pem_keeps_bytes_scalar_and_advertised_identity() {
 }
 
 fn load_frozen_vapid_for_fresh_push(fixtures: &serde_json::Value) -> VapidConfig {
-    let dir = std::env::temp_dir().join(format!("oshioki-fresh-vapid-{}", uuid::Uuid::new_v4()));
+    let dir = std::env::temp_dir().join(format!("vouch-fresh-vapid-{}", uuid::Uuid::new_v4()));
     fs::create_dir(&dir).unwrap();
     let pem_path = dir.join("vapid-private.pem");
     let old_pem = include_bytes!("../../test-vectors/legacy-crypto-v043/vapid-test-only.pem");
@@ -220,7 +220,7 @@ fn candidate_push_preserves_fresh_ttl_headers_claims_and_provider_size_boundary(
             // Only public test material is exported; normal test runs emit nothing.
             if ttl == 300
                 && item.payload == bytes(&push["plaintext"])
-                && let Some(path) = std::env::var_os("OSHIOKI_TEST_PUSH_ORACLE_DIR")
+                && let Some(path) = std::env::var_os("VOUCH_TEST_PUSH_ORACLE_DIR")
             {
                 let path = PathBuf::from(path);
                 fs::create_dir(&path).unwrap(); // Refuse to overwrite evidence.

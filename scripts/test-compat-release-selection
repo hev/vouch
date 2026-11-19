@@ -17,7 +17,7 @@ def release(tag, **flags):
 
 class SelectionTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="oshioki-compat-selection-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="vouch-compat-selection-")
         self.addCleanup(self.temporary.cleanup)
         self.directory = Path(self.temporary.name)
         self.repo = self.directory / "repo"
@@ -27,7 +27,7 @@ class SelectionTests(unittest.TestCase):
         self.env = {
             **os.environ, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null",
             "GIT_AUTHOR_DATE": "2026-10-25T00:00:00Z", "GIT_COMMITTER_DATE": "2026-10-25T00:00:00Z",
-            "GITHUB_REPOSITORY": "fixture/oshioki", "RELEASE_FIXTURE": str(self.fixture),
+            "GITHUB_REPOSITORY": "fixture/vouch", "RELEASE_FIXTURE": str(self.fixture),
             "PATH": str(self.bin) + os.pathsep + os.environ["PATH"],
         }
         # Assert production requests all pages; the fixture has gh --slurp's
@@ -35,7 +35,7 @@ class SelectionTests(unittest.TestCase):
         gh = self.bin / "gh"
         gh.write_text('''#!/usr/bin/env python3
 import os, pathlib, sys
-assert sys.argv[1:] == ["api", "--paginate", "--slurp", "repos/fixture/oshioki/releases?per_page=100"]
+assert sys.argv[1:] == ["api", "--paginate", "--slurp", "repos/fixture/vouch/releases?per_page=100"]
 if os.environ.get("FAIL_GH"):
     sys.exit("fixture release API unavailable")
 print(pathlib.Path(os.environ["RELEASE_FIXTURE"]).read_text())

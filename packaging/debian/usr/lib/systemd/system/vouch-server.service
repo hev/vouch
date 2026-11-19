@@ -1,0 +1,18 @@
+[Unit]
+Description=Vouch sudo approval server
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/vouch/server.env
+
+[Service]
+Type=simple
+User=vouch
+Group=vouch
+EnvironmentFile=/etc/vouch/server.env
+ExecStart=/usr/sbin/vouch-server
+StateDirectory=vouch
+StateDirectoryMode=0750
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

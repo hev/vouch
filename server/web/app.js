@@ -140,7 +140,7 @@ function withPushLifecycle(action) {
   if (!navigator.locks?.request) {
     throw new Error("Notification setup needs a browser with Web Locks support. Existing notifications were preserved.");
   }
-  return navigator.locks.request("oshioki-push-lifecycle-v1", { mode: "exclusive" }, action);
+  return navigator.locks.request("vouch-push-lifecycle-v1", { mode: "exclusive" }, action);
 }
 
 const PUSH_VERSION = 1;
@@ -413,8 +413,8 @@ function parseEnrollmentUrl(value, origin = location.origin) {
   let parsed;
   try { parsed = new URL(value.trim()); } catch { throw new Error("that is not a valid enrollment URL"); }
   let expectedOrigin;
-  try { expectedOrigin = new URL(origin).origin; } catch { throw new Error("this Oshioki origin is invalid"); }
-  if (parsed.origin !== expectedOrigin) throw new Error("the enrollment URL must use this Oshioki origin");
+  try { expectedOrigin = new URL(origin).origin; } catch { throw new Error("this Vouch origin is invalid"); }
+  if (parsed.origin !== expectedOrigin) throw new Error("the enrollment URL must use this Vouch origin");
   const parts = parsed.pathname.split("/").filter(Boolean);
   if (parts.length !== 2 || parts[0] !== "enroll" || !SAFE_PUSH_ID.test(parts[1])) throw new Error("the URL must point to /enroll/<id>");
   if (parsed.search || !parsed.hash.slice(1) || !/^[A-Za-z0-9_-]{1,256}$/.test(parsed.hash.slice(1))) throw new Error("the enrollment URL must include its fragment secret");
@@ -543,9 +543,9 @@ async function enrollment() {
     } catch (error) {
       button.disabled = false;
       if (String(error?.message || error).includes("enrollment expired")) {
-        text("status", "This enrollment URL expired. Run sudo oshioki enroll again to get a fresh five-minute URL.");
+        text("status", "This enrollment URL expired. Run sudo vouch enroll again to get a fresh five-minute URL.");
       } else if (String(error?.message || error).includes("enrollment rejected")) {
-        text("status", "The server rejected this enrollment. Run sudo oshioki enroll again.");
+        text("status", "The server rejected this enrollment. Run sudo vouch enroll again.");
       } else failure(error);
     }
   }, { once: true });
@@ -803,8 +803,8 @@ async function authentication() {
 // Keep the formatter available to the small, DOM-free unit test as well as
 // the page. The approval flow still starts only in a browser document.
 if (typeof globalThis !== "undefined") {
-  globalThis.OshiokiApprovalReview = { formatEnvironment, quoteReviewString, formatInvocation };
-  globalThis.OshiokiPush = {
+  globalThis.VouchApprovalReview = { formatEnvironment, quoteReviewString, formatInvocation };
+  globalThis.VouchPush = {
     parseEnrollmentUrl, pushSupport, pushSubscriptionRequest, pushStatusText,
     deviceByFingerprint, getSetting, setSetting, createPushBinding, savePushRegistration, syncOwnedPushSubscription, enablePushForDevice,
   };

@@ -1,0 +1,29 @@
+[package]
+name = "vouch-panel"
+edition = { workspace = true }
+rust-version = { workspace = true }
+version = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+publish = { workspace = true }
+description = "The review panel shown beside the Touch ID sheet: who is asking, why, and what will run"
+readme = "../README.md"
+keywords = ["sudo", "touch-id", "approval"]
+categories = ["gui"]
+
+[dependencies]
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+# Every AppKit call in the workspace lives in this crate, and only on macOS.
+# Other targets build the model alone, so Linux CI still tests it.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSAttributedString", "NSDate", "NSTimer", "NSRunLoop", "NSGeometry", "NSObject", "NSArray", "NSDictionary", "NSValue", "NSThread", "NSRange", "NSString", "objc2-core-foundation"] }
+objc2-quartz-core = { version = "0.3", default-features = false, features = ["std", "CALayer", "objc2-core-graphics", "objc2-core-foundation"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSWindow", "NSPanel", "NSView", "NSControl", "NSTextField", "NSButton", "NSButtonCell", "NSCell", "NSColor", "NSFont", "NSStackView", "NSBox", "NSScreen", "NSVisualEffectView", "NSLayoutConstraint", "NSLayoutAnchor", "NSAppearance", "NSGraphics", "NSUserInterfaceLayout", "NSRunningApplication", "NSAttributedString", "NSText", "NSEvent", "NSColorSpace", "NSParagraphStyle", "NSProgressIndicator", "NSWindowController", "NSFontDescriptor", "NSTitlebarAccessoryViewController", "NSViewController", "objc2-core-foundation", "objc2-quartz-core", "objc2-core-graphics"] }
+
+[lints]
+workspace = true

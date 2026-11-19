@@ -1,5 +1,5 @@
 #!/bin/sh
-# oshioki postrm: drop the systemd enablement on remove; on purge also drop
+# vouch postrm: drop the systemd enablement on remove; on purge also drop
 # server state, hook state (including cleartext NATS credentials), and the
 # hook/plugin files the installer placed outside dpkg's manifest.
 #
@@ -9,12 +9,12 @@
 set -e
 
 SUDOERS_D="${SUDOERS_D:-/etc/sudoers.d}"
-SUDOERS_FILE="${SUDOERS_FILE:-$SUDOERS_D/oshioki}"
+SUDOERS_FILE="${SUDOERS_FILE:-$SUDOERS_D/vouch}"
 PAM_D="${PAM_D:-/etc/pam.d}"
 # Overridable only so the package-script tests can point the sweep at a
 # fixture tree; on a real host these are the two multiarch-shaped locations
 # the installer will ever have written the module to.
-PAM_MODULE_GLOBS="${PAM_MODULE_GLOBS:-/usr/lib/*/security/liboshioki_pam.so /lib/*/security/liboshioki_pam.so /usr/lib/security/liboshioki_pam.so /lib/security/liboshioki_pam.so /usr/lib/*/security/liboshioki_pam.so.oshioki-new /usr/lib/*/security/liboshioki_pam.so.oshioki-previous /lib/*/security/liboshioki_pam.so.oshioki-new /lib/*/security/liboshioki_pam.so.oshioki-previous /usr/lib/security/liboshioki_pam.so.oshioki-new /usr/lib/security/liboshioki_pam.so.oshioki-previous /lib/security/liboshioki_pam.so.oshioki-new /lib/security/liboshioki_pam.so.oshioki-previous}"
+PAM_MODULE_GLOBS="${PAM_MODULE_GLOBS:-/usr/lib/*/security/libvouch_pam.so /lib/*/security/libvouch_pam.so /usr/lib/security/libvouch_pam.so /lib/security/libvouch_pam.so /usr/lib/*/security/libvouch_pam.so.vouch-new /usr/lib/*/security/libvouch_pam.so.vouch-previous /lib/*/security/libvouch_pam.so.vouch-new /lib/*/security/libvouch_pam.so.vouch-previous /usr/lib/security/libvouch_pam.so.vouch-new /usr/lib/security/libvouch_pam.so.vouch-previous /lib/security/libvouch_pam.so.vouch-new /lib/security/libvouch_pam.so.vouch-previous}"
 
 valid_sudoers_user() {
   case "$1" in
@@ -24,8 +24,8 @@ valid_sudoers_user() {
 
 # The package may be gone by the time postrm runs. Keep this verifier here,
 # independent of the installer, and remove only the complete root-owned 0440
-# Oshioki rule. Both the current NOSETENV form and the pre-#50 form are
-# recognized so upgrades cannot strand the older Oshioki artifact.
+# Vouch rule. Both the current NOSETENV form and the pre-#50 form are
+# recognized so upgrades cannot strand the older Vouch artifact.
 owned_sudoers_dropin_user() {
   local line user owner mode lines last
   [ -f "$SUDOERS_FILE" ] && [ ! -L "$SUDOERS_FILE" ] || return 1
@@ -62,8 +62,8 @@ owned_sudoers_dropin_user() {
 # missing module is the state the install path exists to avoid. Only our own
 # exact filename is ever removed. The multiarch globs cover the usual
 # Debian layouts; the two unglobbed paths cover the non-multiarch ones a
-# discovery run could equally have chosen, and the .oshioki-new /
-# .oshioki-previous names cover a refresh that was interrupted between
+# discovery run could equally have chosen, and the .vouch-new /
+# .vouch-previous names cover a refresh that was interrupted between
 # staging and the rename.
 # Returns non-zero when a module was found but deliberately kept, because
 # /etc/pam.d still names it. The caller must then keep the helper the module
@@ -78,10 +78,10 @@ sweep_pam_module() {
     break
   done
   [ "$found" -eq 1 ] || return 0
-  if [ -d "$PAM_D" ] && grep -rl liboshioki_pam "$PAM_D" >/dev/null 2>&1; then
+  if [ -d "$PAM_D" ] && grep -rl libvouch_pam "$PAM_D" >/dev/null 2>&1; then
     for module in $PAM_MODULE_GLOBS; do
       [ -f "$module" ] || continue
-      echo "oshioki: warning: $PAM_D still references liboshioki_pam; leaving $module in place" >&2
+      echo "vouch: warning: $PAM_D still references libvouch_pam; leaving $module in place" >&2
     done
     return 1
   fi
@@ -103,30 +103,30 @@ case "$1" in
     # Mask, don't disable: the unit file is already deleted, so only a
     # mask (a symlink to /dev/null, no unit resolution) can neutralize
     # the dangling wants/ symlink. Reinstall unmasks and re-enables.
-    deb-systemd-helper mask oshioki-server.service >/dev/null || true
-    deb-systemd-helper mask oshioki-sudo-reconcile.path >/dev/null || true
+    deb-systemd-helper mask vouch-server.service >/dev/null || true
+    deb-systemd-helper mask vouch-sudo-reconcile.path >/dev/null || true
     ;;
   purge)
-    deb-systemd-helper purge oshioki-server.service >/dev/null || true
-    deb-systemd-helper unmask oshioki-server.service >/dev/null || true
-    deb-systemd-helper purge oshioki-sudo-reconcile.path >/dev/null || true
-    deb-systemd-helper unmask oshioki-sudo-reconcile.path >/dev/null || true
+    deb-systemd-helper purge vouch-server.service >/dev/null || true
+    deb-systemd-helper unmask vouch-server.service >/dev/null || true
+    deb-systemd-helper purge vouch-sudo-reconcile.path >/dev/null || true
+    deb-systemd-helper unmask vouch-sudo-reconcile.path >/dev/null || true
     # prerm normally removes this first, but purge is the last opportunity
     # after a partial or interrupted removal. This verifier is self-contained
     # because the packaged installer may already have been deleted.
     remove_verified_sudoers_dropin ||
-      echo "oshioki: warning: could not remove an unverified sudoers drop-in; leaving it in place" >&2
+      echo "vouch: warning: could not remove an unverified sudoers drop-in; leaving it in place" >&2
     # Purge deletes server state. Hook config and its helper only go when the
     # PAM module can be removed too: if sweep_pam_module kept it, /etc/pam.d
     # still execs that helper on every sudo, and removing it would leave a
     # referenced module with nothing to run.
     if sweep_pam_module; then
-      rm -rf /etc/oshioki
-      rm -f /usr/local/sbin/oshioki /usr/local/libexec/sudo/oshioki.so
+      rm -rf /etc/vouch
+      rm -f /usr/local/sbin/vouch /usr/local/libexec/sudo/vouch.so
     else
-      echo "oshioki: warning: $PAM_D still references liboshioki_pam; leaving /usr/local/sbin/oshioki and /etc/oshioki in place" >&2
+      echo "vouch: warning: $PAM_D still references libvouch_pam; leaving /usr/local/sbin/vouch and /etc/vouch in place" >&2
     fi
-    rm -rf /var/lib/oshioki
+    rm -rf /var/lib/vouch
     ;;
 esac
 

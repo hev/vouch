@@ -1,13 +1,13 @@
 //! Frozen pre-upgrade credentials, produced once by the v0.4.3 dependencies.
 //! Never regenerate these values with the current crypto libraries.
 
-use oshioki_protocol::{
-    ApproveV1, DevicePublicRecordV1, Error, HookConfigV1, decode_base64url, device_fingerprint,
-    webauthn_v1::{cose_p256_verifying_key, verify_approval_v1},
-};
 use p256::ecdsa::{Signature, SigningKey, signature::Signer as _};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
+use vouch_protocol::{
+    ApproveV1, DevicePublicRecordV1, Error, HookConfigV1, decode_base64url, device_fingerprint,
+    webauthn_v1::{cose_p256_verifying_key, verify_approval_v1},
+};
 
 fn fixture() -> Value {
     serde_json::from_str(include_str!(

@@ -1,8 +1,8 @@
 # `/etc/pam.d` layout fixtures
 
 Stock and deliberately-broken PAM service files used by
-`scripts/test-install-oshioki-hook` to exercise
-`install-oshioki-hook --contextual-pam`, `--disable-contextual-pam` and
+`scripts/test-install-vouch-hook` to exercise
+`install-vouch-hook --contextual-pam`, `--disable-contextual-pam` and
 `--contextual-pam-status` without a real PAM stack. Each directory holds a
 `pam.d/` tree that the test copies into a fake root.
 
@@ -65,7 +65,7 @@ Each must leave every file byte-identical.
   lockout accounting.
 - `refuse-two-common-auth/` — `sudo` includes `common-auth` twice. "Insert
   above the include" has no single answer.
-- `refuse-foreign-module/` — a `liboshioki_pam.so` reference that is not inside
+- `refuse-foreign-module/` — a `libvouch_pam.so` reference that is not inside
   our marker pair. Someone else owns that line; we do not adopt it.
 - `refuse-macos-custom-sudo/` — an extra `pam_krb5.so` auth line in the macOS
   `sudo` stack, so the stock-`sudo` fingerprint no longer holds.

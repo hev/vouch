@@ -1,0 +1,10 @@
+[Unit]
+Description=Remove the Vouch passwordless sudo rule if sudo no longer runs the approval plugin
+ConditionPathExists=/usr/share/vouch/install-vouch-hook
+
+[Service]
+Type=oneshot
+# Fail-safe: this mode re-checks that sudo loads the approval plugin and that
+# no sudo-rs is installed, and removes /etc/sudoers.d/vouch when either
+# fails. It never writes the rule and never edits sudo.conf.
+ExecStart=/usr/share/vouch/install-vouch-hook --reconcile-plugin-rule

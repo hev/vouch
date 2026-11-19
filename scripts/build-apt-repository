@@ -17,7 +17,7 @@ die() {
 }
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-REPOSITORY="${GITHUB_REPOSITORY:-epsalmond/oshioki}"
+REPOSITORY="${GITHUB_REPOSITORY:-hev/vouch}"
 OUTPUT_DIR=
 SIGNING_KEY=
 FINGERPRINT=
@@ -107,12 +107,12 @@ if ! awk -F: -v wanted="${FINGERPRINT^^}" '$1 == "fpr" && toupper($10) == wanted
   die 'configured fingerprint is not present in the imported secret key'
 fi
 
-GNUPGHOME="$GNUPGHOME" gpg --batch --yes --output "$OUTPUT_DIR/oshioki-archive-keyring.gpg" \
+GNUPGHOME="$GNUPGHOME" gpg --batch --yes --output "$OUTPUT_DIR/vouch-archive-keyring.gpg" \
   --export "$FINGERPRINT" || die 'could not export the public apt key'
-[[ -s "$OUTPUT_DIR/oshioki-archive-keyring.gpg" ]] || die 'exported apt key is empty'
+[[ -s "$OUTPUT_DIR/vouch-archive-keyring.gpg" ]] || die 'exported apt key is empty'
 printf '%s\n' "${FINGERPRINT^^}" >"$OUTPUT_DIR/KEY-FINGERPRINT"
 
-POOL="$OUTPUT_DIR/pool/main/o/oshioki"
+POOL="$OUTPUT_DIR/pool/main/o/vouch"
 mkdir -p "$POOL"
 declare -A seen_versions=()
 package_count=0
@@ -131,13 +131,13 @@ while IFS= read -r release; do
     continue
   fi
 
-  deb_assets="$(jq -c '[.assets[]? | select(.name | test("^oshioki_[0-9][A-Za-z0-9.+:~_-]*_amd64[.]deb$"))]' <<<"$release")"
+  deb_assets="$(jq -c '[.assets[]? | select(.name | test("^vouch_[0-9][A-Za-z0-9.+:~_-]*_amd64[.]deb$"))]' <<<"$release")"
   deb_count="$(jq 'length' <<<"$deb_assets")"
   ((deb_count == 0)) && continue
-  ((deb_count == 1)) || die "$tag_name has $deb_count amd64 Oshioki packages; expected one"
+  ((deb_count == 1)) || die "$tag_name has $deb_count amd64 Vouch packages; expected one"
 
   deb_name="$(jq -r '.[0].name' <<<"$deb_assets")"
-  expected_name="oshioki_${release_version}_amd64.deb"
+  expected_name="vouch_${release_version}_amd64.deb"
   [[ "$deb_name" == "$expected_name" ]] || die "$tag_name contains unexpected package asset $deb_name"
   deb_url="$(jq -r '.[0].browser_download_url // empty' <<<"$deb_assets")"
   [[ -n "$deb_url" ]] || die "$tag_name package asset has no download URL"
@@ -164,7 +164,7 @@ while IFS= read -r release; do
     "$provenance_url" --output "$provenance_file" || die "could not download $tag_name provenance"
   "$ROOT/scripts/verify-release-tag" "$tag_name" >"$WORK_DIR/source-$release_version.json" \
     || die "$tag_name source tag verification failed"
-  "$ROOT/scripts/release-provenance" verify "$OUTPUT_DIR/oshioki-archive-keyring.gpg" "$FINGERPRINT" \
+  "$ROOT/scripts/release-provenance" verify "$OUTPUT_DIR/vouch-archive-keyring.gpg" "$FINGERPRINT" \
     "$WORK_DIR/source-$release_version.json" "$provenance_file" "$deb_file" "$checksum_file" \
     || die "$tag_name asset provenance verification failed"
 
@@ -177,7 +177,7 @@ while IFS= read -r release; do
   package_name="$(dpkg-deb --field "$deb_file" Package 2>/dev/null)" || die "$tag_name asset is not a valid Debian package"
   package_version="$(dpkg-deb --field "$deb_file" Version 2>/dev/null)" || die "$tag_name package has no version"
   package_architecture="$(dpkg-deb --field "$deb_file" Architecture 2>/dev/null)" || die "$tag_name package has no architecture"
-  [[ "$package_name" == oshioki ]] || die "$tag_name package is $package_name, expected oshioki"
+  [[ "$package_name" == vouch ]] || die "$tag_name package is $package_name, expected vouch"
   [[ "$package_version" == "$release_version" ]] || die "$tag_name package version is $package_version"
   [[ "$package_architecture" == amd64 ]] || die "$tag_name package architecture is $package_architecture"
 
@@ -188,7 +188,7 @@ while IFS= read -r release; do
   package_count=$((package_count + 1))
 done < <(jq -c '.[] | select(.draft == false and .prerelease == false)' "$WORK_DIR/releases.json")
 
-((package_count > 0)) || die "no stable Oshioki amd64 packages found in $REPOSITORY releases"
+((package_count > 0)) || die "no stable Vouch amd64 packages found in $REPOSITORY releases"
 
 DIST="$OUTPUT_DIR/dists/stable"
 INDEX="$DIST/main/binary-amd64"
@@ -198,14 +198,14 @@ mkdir -p "$INDEX"
 gzip --no-name --best --stdout "$INDEX/Packages" >"$INDEX/Packages.gz"
 
 cat >"$DIST/Release" <<EOF
-Origin: Oshioki
-Label: Oshioki
+Origin: Vouch
+Label: Vouch
 Suite: stable
 Codename: stable
 Date: $(LC_ALL=C date -Ru)
 Architectures: amd64
 Components: main
-Description: Oshioki apt repository
+Description: Vouch apt repository
 SHA256:
 EOF
 while IFS= read -r index_file; do

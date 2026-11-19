@@ -204,11 +204,25 @@ pub struct SubmittedAuthContextV1 {
     pub session: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_label: Option<String>,
+    /// The agent's own reason, display only, with the same bounds as
+    /// `RequestV1::reason`. Absent from every 0.4.x request, which keeps
+    /// their bytes and signatures unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
     pub invocation: AuthInvocationV1,
 }
 
 impl SubmittedAuthContextV1 {
     pub fn validate(&self) -> Result<(), Error> {
+        if self.reason.as_ref().is_some_and(|reason| {
+            reason.is_empty()
+                || reason.chars().count() > crate::v1::MAX_REASON_CHARS
+                || reason.chars().any(char::is_control)
+        }) {
+            return Err(Error::InvalidRequest(
+                "invalid authentication reason".into(),
+            ));
+        }
         if self
             .session
             .as_ref()
@@ -754,6 +768,7 @@ mod tests {
             submitted: SubmittedAuthContextV1 {
                 session: Some("session-1".into()),
                 agent_label: Some("agent".into()),
+                reason: None,
                 invocation: AuthInvocationV1::Available {
                     command: "/usr/bin/id".into(),
                     argv: vec!["id".into()],
@@ -825,6 +840,7 @@ mod tests {
             pid_chain: vec![],
             env: vec![],
             session: None,
+            reason: None,
             issued_at: NOW,
             expires_at: NOW + 60,
         };

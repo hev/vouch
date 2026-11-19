@@ -7,7 +7,7 @@ the same release. An update should preserve enrolled devices and fingerprints.
 ## Before updating
 
 Keep the previous package and a second root shell available. Back up
-`/etc/oshioki`, the agent state directory, and server state, preserving ownership
+`/etc/vouch`, the agent state directory, and server state, preserving ownership
 and private permissions. Stop the server for a filesystem copy of its SQLite
 database; copying only a live SQLite file can miss WAL contents. Retain the
 VAPID key beside it so phone subscriptions keep their server identity.
@@ -18,13 +18,13 @@ Do not regenerate identities or enroll devices as a routine update step.
 
 ```sh
 brew update
-brew upgrade epsalmond/oshioki/oshioki
-oshioki-laptop-setup --local
+git pull && scripts/vouch-laptop-setup --local
+vouch-laptop-setup --local
 ```
 
-In a logged-in GUI session, Homebrew refreshes a running `com.oshioki.agent`
+In a logged-in GUI session, Homebrew refreshes a running `com.hev.vouch.agent`
 when its executable uses the formula's stable
-`opt/oshioki/Oshioki.app/Contents/MacOS/oshioki-agent` path. It preserves the
+`opt/vouch/Vouch.app/Contents/MacOS/vouch-agent` path. It preserves the
 launchd configuration, identity, enrollment, and credentials. Stopped,
 disabled, and custom-path installations are unchanged; rerun the original
 setup command for a custom path.
@@ -33,19 +33,19 @@ If refresh fails or the upgrade runs outside your GUI login session, retry from
 a logged-in Terminal:
 
 ```sh
-brew postinstall epsalmond/oshioki/oshioki
+scripts/vouch-laptop-setup --local
 ```
 
 Retry any approval interrupted by the restart.
 
 Privileged hook, plugin, and PAM updates still require the setup step above;
-automating those components is tracked in [#48](https://github.com/epsalmond/oshioki/issues/48).
+they are not automated yet.
 Use the setup mode you originally chose: omit `--local` for server-backed
 laptop setup. An existing PAM installation stays on PAM. Ordinary re-runs
 preserve the agent's configured NATS credentials; `--reconfigure` replaces them.
 
 If this Mac only runs browser ceremonies, the package upgrade is enough.
-Restart any running `oshioki-browser-relay serve` process after upgrading.
+Restart any running `vouch-browser-relay serve` process after upgrading.
 
 ## Debian or Ubuntu
 
@@ -61,20 +61,20 @@ For a one-time update on a machine installed directly from a release package,
 download the new `.deb` and install it directly:
 
 ```sh
-sudo apt install ./oshioki_X.Y.Z_amd64.deb
+sudo apt install ./vouch_X.Y.Z_amd64.deb
 ```
 
-Package configuration refreshes the hook when `/etc/oshioki/install.env`
+Package configuration refreshes the hook when `/etc/vouch/install.env`
 exists and try-restarts an already running packaged server. An existing PAM
 installation stays on PAM even if its original opt-in setting was removed.
 Read the output: a deferred PAM migration is not an active PAM installation.
 These package actions preserve enrolled devices. A running
-`oshioki-browser-relay serve` process still needs a manual restart after the
+`vouch-browser-relay serve` process still needs a manual restart after the
 upgrade.
 
 Phone setup's user services are separate from the packaged system service.
-Re-run `oshioki-phone-setup` for an owned Tailscale setup to refresh them. On
-Linux, then run `systemctl --user restart oshioki-phone-server.service` to load
+Re-run `vouch-phone-setup` for an owned Tailscale setup to refresh them. On
+Linux, then run `systemctl --user restart vouch-phone-server.service` to load
 the updated binary; setup does not restart an already-running service when its
 unit is unchanged. See the [phone guide](phone-enrollment.md#keep-it-working)
 for the status check. For external HTTPS, restart the server in its own
@@ -88,10 +88,10 @@ manifest, and repeat the [installation](install.md) using the existing state.
 Use the appropriate installer path from [installation](install.md):
 
 ```sh
-sudo oshioki status
-sudo install-oshioki-hook --prelaunch-status
+sudo vouch status
+sudo install-vouch-hook --prelaunch-status
 # On PAM installations:
-sudo install-oshioki-hook --contextual-pam-status
+sudo install-vouch-hook --contextual-pam-status
 sudo -k
 sudo true
 ```

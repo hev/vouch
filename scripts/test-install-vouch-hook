@@ -2,9 +2,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-TEST_ROOT="$(mktemp -d -t oshioki-hook-install-test.XXXXXX)"
+TEST_ROOT="$(mktemp -d -t vouch-hook-install-test.XXXXXX)"
 trap 'rm -rf "$TEST_ROOT"' EXIT
-fail() { echo "test-install-oshioki-hook: $*" >&2; exit 1; }
+fail() { echo "test-install-vouch-hook: $*" >&2; exit 1; }
 sha256_file() {
   if command -v sha256sum >/dev/null 2>&1; then
     sha256sum "$1" | awk '{print $1}'
@@ -20,29 +20,29 @@ sha256_stream() {
   fi
 }
 mkdir -p "$TEST_ROOT/fake-bin" "$TEST_ROOT/service/scripts" "$TEST_ROOT/service/target/release"
-cp "$SCRIPT_DIR/install-oshioki-hook" "$TEST_ROOT/service/scripts/"
+cp "$SCRIPT_DIR/install-vouch-hook" "$TEST_ROOT/service/scripts/"
 case "$(uname -s)" in
-  Darwin) BUILD_PLUGIN=liboshioki_plugin.dylib ;;
-  Linux) BUILD_PLUGIN=liboshioki_plugin.so ;;
+  Darwin) BUILD_PLUGIN=libvouch_plugin.dylib ;;
+  Linux) BUILD_PLUGIN=libvouch_plugin.so ;;
   *) fail "unsupported test operating system" ;;
 esac
-PLUGIN_NAME="oshioki.${BUILD_PLUGIN##*.}"
-cp /usr/bin/true "$TEST_ROOT/service/target/release/oshioki"
+PLUGIN_NAME="vouch.${BUILD_PLUGIN##*.}"
+cp /usr/bin/true "$TEST_ROOT/service/target/release/vouch"
 cp /usr/bin/true "$TEST_ROOT/service/target/release/$BUILD_PLUGIN"
 # The contextual-PAM modes only ever hash and copy this artifact; nothing in
 # the fake-root harness loads it, and the self-test is the fake helper.
-PAM_MODULE_ARTIFACT="liboshioki_pam.${BUILD_PLUGIN##*.}"
+PAM_MODULE_ARTIFACT="libvouch_pam.${BUILD_PLUGIN##*.}"
 printf 'fake pam module\n' > "$TEST_ROOT/service/target/release/$PAM_MODULE_ARTIFACT"
 # The macOS cases run under a faked `uname -s`, so they need the artifact the
 # Darwin branch names, whatever this host is.
-printf 'fake darwin pam module\n' > "$TEST_ROOT/service/target/release/liboshioki_pam.dylib"
+printf 'fake darwin pam module\n' > "$TEST_ROOT/service/target/release/libvouch_pam.dylib"
 (
   cd "$TEST_ROOT/service/target/release"
-  printf '%s  oshioki\n' "$(sha256_file oshioki)" > SHA256SUMS
+  printf '%s  vouch\n' "$(sha256_file vouch)" > SHA256SUMS
   printf '%s  %s\n' "$(sha256_file "$BUILD_PLUGIN")" "$BUILD_PLUGIN" >> SHA256SUMS
   printf '%s  %s\n' "$(sha256_file "$PAM_MODULE_ARTIFACT")" "$PAM_MODULE_ARTIFACT" >> SHA256SUMS
-  [ "$PAM_MODULE_ARTIFACT" = liboshioki_pam.dylib ] ||
-    printf '%s  liboshioki_pam.dylib\n' "$(sha256_file liboshioki_pam.dylib)" >> SHA256SUMS
+  [ "$PAM_MODULE_ARTIFACT" = libvouch_pam.dylib ] ||
+    printf '%s  libvouch_pam.dylib\n' "$(sha256_file libvouch_pam.dylib)" >> SHA256SUMS
 )
 
 for wrapper in id chown install sudo file stat cp mv rm uname; do
@@ -88,7 +88,7 @@ if [ "${1:-}" = -V ]; then
   echo 'Sudo version 1.9.15p5'
   if [ "${FAKE_SUDO_PLUGIN_UNLOADED:-0}" != 1 ] && [ -f "${SUDO_CONF:-}" ] &&
      grep -q '^Plugin approval_exec ' "$SUDO_CONF"; then
-    echo 'Oshioki approval plugin version 0.0.0-test'
+    echo 'Vouch approval plugin version 0.0.0-test'
   fi
 fi
 exit 0
@@ -121,11 +121,11 @@ case "${1:-} ${2:-}" in
     # reject, and it is the only way to model a bad mode in a fake root the
     # test user owns.
     case "${3:-}" in
-      */sudoers.d/oshioki) echo 440 ;;
+      */sudoers.d/vouch) echo 440 ;;
       */loose/security) echo 777 ;;
       # The helper the PAM module execs must carry an execute bit, or
       # helper_path_secure refuses it; a real install leaves it 0755.
-      */sbin/oshioki) echo 755 ;;
+      */sbin/vouch) echo 755 ;;
       *) echo "${FAKE_STAT_MODE:-600}" ;;
     esac ;;
   *) exec /usr/bin/stat "$@" ;;
@@ -173,13 +173,13 @@ cat > "$TEST_ROOT/fake-bin/rm" <<'SH'
 if [ -n "${INSTALL_TRACE:-}" ]; then
   for arg in "$@"; do
     case "$arg" in
-      */sudoers.d/oshioki) printf 'rm:%s\n' "$arg" >> "$INSTALL_TRACE" ;;
+      */sudoers.d/vouch) printf 'rm:%s\n' "$arg" >> "$INSTALL_TRACE" ;;
     esac
   done
 fi
 for arg in "$@"; do
   if [ "${SIGNAL_DURING_PAM_COMMIT:-0}" = 1 ] &&
-     [[ "$arg" == *.oshioki-backup.* ]] &&
+     [[ "$arg" == *.vouch-backup.* ]] &&
      [ ! -e "${SIGNAL_DURING_PAM_COMMIT_MARKER:-}" ]; then
     /bin/rm "$@" || exit 1
     : > "$SIGNAL_DURING_PAM_COMMIT_MARKER"
@@ -187,7 +187,7 @@ for arg in "$@"; do
     exit 0
   fi
   case "$arg" in
-    */sudoers.d/oshioki)
+    */sudoers.d/vouch)
       if [ "${FAIL_REMOVE_SUDOERS_ONCE:-0}" = 1 ] &&
          [ ! -e "${FAIL_REMOVE_SUDOERS_MARKER:-}" ]; then
         : > "${FAIL_REMOVE_SUDOERS_MARKER}"
@@ -210,7 +210,7 @@ for arg in "$@"; do
         exit 0
       fi
       ;;
-    */sudoers.d/oshioki.backup.*)
+    */sudoers.d/vouch.backup.*)
       if [ "${FAIL_DROPIN_BACKUP_CLEANUP:-0}" = 1 ]; then
         exit 1
       fi
@@ -244,7 +244,7 @@ echo "$*" >> "${VISUDO_CALLS:-/dev/null}"
 [ "${FAIL_VISUDO:-0}" = 1 ] && exit 1
 exit 0
 SH
-chmod 0755 "$TEST_ROOT/fake-bin"/* "$TEST_ROOT/service/scripts/install-oshioki-hook"
+chmod 0755 "$TEST_ROOT/fake-bin"/* "$TEST_ROOT/service/scripts/install-vouch-hook"
 TEST_PATH="$TEST_ROOT/fake-bin:/usr/bin:/bin"
 
 run_installer() {
@@ -257,11 +257,11 @@ run_installer() {
   root="$1"; shift
   mkdir -p "$root"
   PATH="${EXTRA_PATH:+$EXTRA_PATH:}$TEST_PATH" SUDO_CONF="$root/sudo.conf" SUDO_PLUGIN_DIR="$root/plugin" SBIN_DIR="$root/sbin" \
-    SUDOERS_D="$root/sudoers.d" MAIN_SUDOERS="$root/sudoers" OSHIOKI_STATE_DIR="$root/state" \
+    SUDOERS_D="$root/sudoers.d" MAIN_SUDOERS="$root/sudoers" VOUCH_STATE_DIR="$root/state" \
     SUDO_USER="" VISUDO_CALLS="$root/visudo.calls" \
-    OSHIOKI_SUDO_USER="$sudo_user" \
-    OSHIOKI_ORIGIN="${INSTALL_ORIGIN-https://sudo.test}" \
-    OSHIOKI_RP_ID="${INSTALL_RP_ID-sudo.test}" \
+    VOUCH_SUDO_USER="$sudo_user" \
+    VOUCH_ORIGIN="${INSTALL_ORIGIN-https://sudo.test}" \
+    VOUCH_RP_ID="${INSTALL_RP_ID-sudo.test}" \
     NATS_URL="${INSTALL_NATS_URL-nats://nats.test:4222}" \
     NATS_PASS="${INSTALL_NATS_PASS-${NATS_PASS:-test-only}}" \
     FAKE_STAT_OWNER="${FAKE_STAT_OWNER:-0}" FAKE_STAT_MODE="${FAKE_STAT_MODE:-600}" \
@@ -279,7 +279,7 @@ run_installer() {
     FAIL_SUDO_CONF_BACKUP="${FAIL_SUDO_CONF_BACKUP:-0}" \
     FAIL_SUDO_CONF_BACKUP_SOURCE="$root/sudo.conf" \
     FAIL_SUDOERS_BACKUP="${FAIL_SUDOERS_BACKUP:-0}" \
-    FAIL_SUDOERS_BACKUP_SOURCE="$root/sudoers.d/oshioki" \
+    FAIL_SUDOERS_BACKUP_SOURCE="$root/sudoers.d/vouch" \
     FAIL_DROPIN_BACKUP_CLEANUP="${FAIL_DROPIN_BACKUP_CLEANUP:-0}" \
     SIGNAL_AFTER_REMOVE="${SIGNAL_AFTER_REMOVE:-0}" \
     SIGNAL_AFTER_REMOVE_MARKER="$root/signal-after-remove.marker" \
@@ -290,8 +290,8 @@ run_installer() {
     INSTALL_TRACE="${INSTALL_TRACE:-}" \
     PAM_D="$root/pam.d" PAM_SECURITY_DIR="${PAM_SECURITY_DIR-$root/security}" \
     PAM_MODULE_BIN="${PAM_MODULE_BIN-$TEST_ROOT/service/target/release/$PAM_MODULE_ARTIFACT}" \
-    OSHIOKI_PAM_MULTIARCH="${OSHIOKI_PAM_MULTIARCH:-$root/absent-multiarch}" \
-    OSHIOKI_INSTALL_FAULT_INJECTION="${OSHIOKI_INSTALL_FAULT_INJECTION:-1}" \
+    VOUCH_PAM_MULTIARCH="${VOUCH_PAM_MULTIARCH:-$root/absent-multiarch}" \
+    VOUCH_INSTALL_FAULT_INJECTION="${VOUCH_INSTALL_FAULT_INJECTION:-1}" \
     FAIL_PAM_MODULE_INSTALL="${FAIL_PAM_MODULE_INSTALL:-0}" \
     FAIL_PAM_SELFTEST="${FAIL_PAM_SELFTEST:-0}" \
     FAIL_PAM_EDIT="${FAIL_PAM_EDIT:-}" \
@@ -299,10 +299,10 @@ run_installer() {
     FAIL_SUDO_ON_CALL="${FAIL_SUDO_ON_CALL:-}" \
     SUDO_CALL_COUNTER="$root/sudo.calls" \
     FAKE_UNAME_S="${FAKE_UNAME_S:-}" \
-    OSHIOKI_SUDO_RS_PATHS="${OSHIOKI_SUDO_RS_PATHS:-$root/absent-sudo-rs}" \
-    OSHIOKI_SETUID_SCAN_DIRS="${OSHIOKI_SETUID_SCAN_DIRS:-$root/absent-setuid-bin}" \
+    VOUCH_SUDO_RS_PATHS="${VOUCH_SUDO_RS_PATHS:-$root/absent-sudo-rs}" \
+    VOUCH_SETUID_SCAN_DIRS="${VOUCH_SETUID_SCAN_DIRS:-$root/absent-setuid-bin}" \
     FAKE_SUDO_RS_PACKAGE="${FAKE_SUDO_RS_PACKAGE:-0}" \
-    "${INSTALLER_CMD:-$TEST_ROOT/service/scripts/install-oshioki-hook}" "$@"
+    "${INSTALLER_CMD:-$TEST_ROOT/service/scripts/install-vouch-hook}" "$@"
 }
 
 if run_installer "$TEST_ROOT/no-mode" >"$TEST_ROOT/no-mode.log" 2>&1; then fail "accepted omitted mode"; fi
@@ -319,7 +319,7 @@ grep -Fq 'set all three or none' "$TEST_ROOT/creds-without-url.log" || fail "mis
 if NATS_USER='lone-user' INSTALL_NATS_PASS='' run_installer "$TEST_ROOT/user-without-pass" --prelaunch >"$TEST_ROOT/user-without-pass.log" 2>&1; then fail "accepted a NATS user without a password"; fi
 grep -Fq 'both or neither' "$TEST_ROOT/user-without-pass.log" || fail "missing one-sided creds error"
 for missing in missing-origin missing-rp-id missing-nats-url no-transports creds-without-url user-without-pass; do
-  [ ! -e "$TEST_ROOT/$missing/sbin/oshioki" ] || fail "$missing wrote an executable"
+  [ ! -e "$TEST_ROOT/$missing/sbin/vouch" ] || fail "$missing wrote an executable"
 done
 # A URL without a password is a no-auth server: it installs, and no
 # credential lines are written (never placeholders).
@@ -328,18 +328,18 @@ grep -Fq 'NATS_URL=nats://nats.test:4222' "$TEST_ROOT/no-auth-nats/state/config.
 if grep -Eq '^NATS_(USER|PASS)=' "$TEST_ROOT/no-auth-nats/state/config.env"; then fail "no-auth install wrote credential lines"; fi
 # No URL with a socket is socket-only: no NATS keys at all.
 SOCKET_ONLY="$TEST_ROOT/socket-only"; mkdir -p "$SOCKET_ONLY"
-if INSTALL_NATS_URL='' INSTALL_NATS_PASS='' OSHIOKI_AGENT_SOCKET=/run/oshioki/agent.sock run_installer "$SOCKET_ONLY" --prelaunch >"$SOCKET_ONLY/log" 2>&1; then
+if INSTALL_NATS_URL='' INSTALL_NATS_PASS='' VOUCH_AGENT_SOCKET=/run/vouch/agent.sock run_installer "$SOCKET_ONLY" --prelaunch >"$SOCKET_ONLY/log" 2>&1; then
   :
 else
   fail "rejected a socket-only install"
 fi
 if grep -Eq '^NATS_' "$SOCKET_ONLY/state/config.env"; then fail "socket-only install wrote NATS keys"; fi
-grep -Fq 'OSHIOKI_AGENT_SOCKET=/run/oshioki/agent.sock' "$SOCKET_ONLY/state/config.env" || fail "socket-only install dropped the socket"
+grep -Fq 'VOUCH_AGENT_SOCKET=/run/vouch/agent.sock' "$SOCKET_ONLY/state/config.env" || fail "socket-only install dropped the socket"
 
 CONFIG_ROOT="$TEST_ROOT/config-file"; mkdir -p "$CONFIG_ROOT"
 printf '%s\n' \
-  'OSHIOKI_ORIGIN=https://config.test' \
-  'OSHIOKI_RP_ID=config.test' \
+  'VOUCH_ORIGIN=https://config.test' \
+  'VOUCH_RP_ID=config.test' \
   'NATS_URL=nats://config.test:4222' \
   'NATS_USER=config-user' \
   'NATS_PASS=config-secret' > "$CONFIG_ROOT/install.env"
@@ -369,14 +369,14 @@ QUOTED_CONFIG="$TEST_ROOT/quoted-config"; mkdir -p "$QUOTED_CONFIG"; cp "$CONFIG
 if run_installer "$QUOTED_CONFIG" --prelaunch --config-file "$QUOTED_CONFIG/install.env" >"$QUOTED_CONFIG/log" 2>&1; then fail "accepted quoted config value"; fi
 grep -Fq 'config value must be unquoted and untrimmed' "$QUOTED_CONFIG/log" || fail "missing quoted config error"
 
-if grep -Fq 'OSHIOKI_AGENT_SOCKET' "$CONFIG_ROOT/state/config.env"; then fail "config.env gained an unconfigured socket"; fi
+if grep -Fq 'VOUCH_AGENT_SOCKET' "$CONFIG_ROOT/state/config.env"; then fail "config.env gained an unconfigured socket"; fi
 SOCKET_CONFIG="$TEST_ROOT/socket-config"; mkdir -p "$SOCKET_CONFIG"; cp "$CONFIG_ROOT/install.env" "$SOCKET_CONFIG/install.env"
-printf 'OSHIOKI_AGENT_SOCKET=/run/oshioki/agent.sock\n' >> "$SOCKET_CONFIG/install.env"
+printf 'VOUCH_AGENT_SOCKET=/run/vouch/agent.sock\n' >> "$SOCKET_CONFIG/install.env"
 run_installer "$SOCKET_CONFIG" --prelaunch --config-file "$SOCKET_CONFIG/install.env"
-grep -Fq 'OSHIOKI_AGENT_SOCKET=/run/oshioki/agent.sock' "$SOCKET_CONFIG/state/config.env" || fail "agent socket missing from config.env"
+grep -Fq 'VOUCH_AGENT_SOCKET=/run/vouch/agent.sock' "$SOCKET_CONFIG/state/config.env" || fail "agent socket missing from config.env"
 SOCKET_ENV="$TEST_ROOT/socket-env"
-OSHIOKI_AGENT_SOCKET=/env/agent.sock run_installer "$SOCKET_ENV" --prelaunch
-grep -Fq 'OSHIOKI_AGENT_SOCKET=/env/agent.sock' "$SOCKET_ENV/state/config.env" || fail "agent socket env missing from config.env"
+VOUCH_AGENT_SOCKET=/env/agent.sock run_installer "$SOCKET_ENV" --prelaunch
+grep -Fq 'VOUCH_AGENT_SOCKET=/env/agent.sock' "$SOCKET_ENV/state/config.env" || fail "agent socket env missing from config.env"
 
 PRELAUNCH="$TEST_ROOT/prelaunch"; mkdir -p "$PRELAUNCH/sudoers.d" "$PRELAUNCH/state"
 chmod 0750 "$PRELAUNCH/state"
@@ -393,11 +393,11 @@ devices_hash="$(sha256_file "$PRELAUNCH/state/devices.json")"
 run_installer "$PRELAUNCH" --prelaunch
 python3 -c 'import os,stat,sys; assert stat.S_IMODE(os.stat(sys.argv[1]).st_mode) == 0o700' "$PRELAUNCH/state"
 [ "$(sha256_file "$PRELAUNCH/state/devices.json")" = "$devices_hash" ] || fail "existing device state changed"
-[ "$(grep -c '^# BEGIN oshioki$' "$PRELAUNCH/sudo.conf")" -eq 1 ] || fail "managed block duplicated"
+[ "$(grep -c '^# BEGIN vouch$' "$PRELAUNCH/sudo.conf")" -eq 1 ] || fail "managed block duplicated"
 run_installer "$PRELAUNCH" --prelaunch
 [ "$(lock_identity "$PRELAUNCH/state")" = "$locks_before" ] || fail "reconfigure replaced registry locks"
 [ "$(sha256_file "$PRELAUNCH/state/devices.json")" = "$devices_hash" ] || fail "reconfigure changed devices/counters/epoch"
-[ "$(grep -c '^# BEGIN oshioki$' "$PRELAUNCH/sudo.conf")" -eq 1 ] || fail "rerun duplicated block"
+[ "$(grep -c '^# BEGIN vouch$' "$PRELAUNCH/sudo.conf")" -eq 1 ] || fail "rerun duplicated block"
 run_installer "$PRELAUNCH" --prelaunch-status | grep -Fq enabled || fail "status did not report enabled"
 
 for unsafe in foreign-owner writable symlink; do
@@ -416,7 +416,7 @@ for unsafe in foreign-owner writable symlink; do
      FAKE_STAT_SPECIAL_MODE="$mode" run_installer "$UNSAFE_DIR" --prelaunch >"$UNSAFE_DIR/log" 2>&1; then
     fail "accepted $unsafe state directory"
   fi
-  [ ! -e "$UNSAFE_DIR/sbin/oshioki" ] || fail "$unsafe state directory installed artifacts"
+  [ ! -e "$UNSAFE_DIR/sbin/vouch" ] || fail "$unsafe state directory installed artifacts"
   python3 -c 'import os,stat,sys; assert stat.S_IMODE(os.stat(sys.argv[1]).st_mode) == 0o750' "$UNSAFE_DIR/state"
 done
 
@@ -427,11 +427,11 @@ UPGRADE_VALIDATE="$TEST_ROOT/upgrade-validate"; mkdir -p "$UPGRADE_VALIDATE/stat
 printf '{"version":1,"devices":[{"fingerprint":"x","active":true}]}\n' > "$UPGRADE_VALIDATE/state/devices.json"
 printf '#includedir %s\n' "$UPGRADE_VALIDATE/sudoers.d" > "$UPGRADE_VALIDATE/sudoers"
 run_installer --sudo-user testuser "$UPGRADE_VALIDATE" --prelaunch >"$UPGRADE_VALIDATE/first.log" 2>&1
-upgrade_hook_hash="$(sha256_file "$UPGRADE_VALIDATE/sbin/oshioki")"
+upgrade_hook_hash="$(sha256_file "$UPGRADE_VALIDATE/sbin/vouch")"
 if FAIL_SUDO=1 run_installer "$UPGRADE_VALIDATE" --prelaunch >"$UPGRADE_VALIDATE/fail.log" 2>&1; then fail "replaced artifacts before validating ordinary sudo"; fi
-[ "$(sha256_file "$UPGRADE_VALIDATE/sbin/oshioki")" = "$upgrade_hook_hash" ] || fail "sudo validation failure replaced the hook"
-grep -Fq '# BEGIN oshioki' "$UPGRADE_VALIDATE/sudo.conf" || fail "sudo validation failure did not restore the plugin block"
-grep -Fxq 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL' "$UPGRADE_VALIDATE/sudoers.d/oshioki" || fail "sudo validation failure did not restore the drop-in"
+[ "$(sha256_file "$UPGRADE_VALIDATE/sbin/vouch")" = "$upgrade_hook_hash" ] || fail "sudo validation failure replaced the hook"
+grep -Fq '# BEGIN vouch' "$UPGRADE_VALIDATE/sudo.conf" || fail "sudo validation failure did not restore the plugin block"
+grep -Fxq 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL' "$UPGRADE_VALIDATE/sudoers.d/vouch" || fail "sudo validation failure did not restore the drop-in"
 
 # An unknown file at the reserved sudoers path is never touched. The check
 # happens before the legacy plugin is removed, so an administrator's rule
@@ -439,14 +439,14 @@ grep -Fxq 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL' "$UPGRADE_VALIDATE/sudoer
 UNKNOWN_UPGRADE="$TEST_ROOT/unknown-upgrade"; mkdir -p "$UNKNOWN_UPGRADE/state" "$UNKNOWN_UPGRADE/sudoers.d"
 printf '{"version":1,"devices":[{"fingerprint":"x","active":true}]}\n' > "$UNKNOWN_UPGRADE/state/devices.json"
 printf '#includedir %s\n' "$UNKNOWN_UPGRADE/sudoers.d" > "$UNKNOWN_UPGRADE/sudoers"
-printf '%s\n' '# BEGIN oshioki' "Plugin approval_exec $UNKNOWN_UPGRADE/plugin/$PLUGIN_NAME" '# END oshioki' > "$UNKNOWN_UPGRADE/sudo.conf"
-printf 'administrator ALL=(ALL) NOPASSWD: /usr/bin/id\n' > "$UNKNOWN_UPGRADE/sudoers.d/oshioki"
+printf '%s\n' '# BEGIN vouch' "Plugin approval_exec $UNKNOWN_UPGRADE/plugin/$PLUGIN_NAME" '# END vouch' > "$UNKNOWN_UPGRADE/sudo.conf"
+printf 'administrator ALL=(ALL) NOPASSWD: /usr/bin/id\n' > "$UNKNOWN_UPGRADE/sudoers.d/vouch"
 unknown_conf_hash="$(sha256_file "$UNKNOWN_UPGRADE/sudo.conf")"
-unknown_dropin_hash="$(sha256_file "$UNKNOWN_UPGRADE/sudoers.d/oshioki")"
+unknown_dropin_hash="$(sha256_file "$UNKNOWN_UPGRADE/sudoers.d/vouch")"
 if run_installer "$UNKNOWN_UPGRADE" --prelaunch >"$UNKNOWN_UPGRADE/fail.log" 2>&1; then fail "accepted an unverified upgrade drop-in"; fi
 grep -Fq 'refusing to modify unverified sudoers drop-in' "$UNKNOWN_UPGRADE/fail.log" || fail "unknown upgrade drop-in rejection was not explained"
 [ "$(sha256_file "$UNKNOWN_UPGRADE/sudo.conf")" = "$unknown_conf_hash" ] || fail "unknown upgrade changed the legacy plugin"
-[ "$(sha256_file "$UNKNOWN_UPGRADE/sudoers.d/oshioki")" = "$unknown_dropin_hash" ] || fail "unknown upgrade changed the administrator rule"
+[ "$(sha256_file "$UNKNOWN_UPGRADE/sudoers.d/vouch")" = "$unknown_dropin_hash" ] || fail "unknown upgrade changed the administrator rule"
 
 # A failed sudo.conf backup must not leave a partial backup registered for
 # rollback. The original plugin and blanket rule remain untouched.
@@ -455,11 +455,11 @@ printf '{"version":1,"devices":[{"fingerprint":"x","active":true}]}\n' > "$BACKU
 printf '#includedir %s\n' "$BACKUP_INTERRUPT/sudoers.d" > "$BACKUP_INTERRUPT/sudoers"
 run_installer --sudo-user testuser "$BACKUP_INTERRUPT" --prelaunch >"$BACKUP_INTERRUPT/first.log" 2>&1
 backup_conf_hash="$(sha256_file "$BACKUP_INTERRUPT/sudo.conf")"
-backup_dropin_hash="$(sha256_file "$BACKUP_INTERRUPT/sudoers.d/oshioki")"
+backup_dropin_hash="$(sha256_file "$BACKUP_INTERRUPT/sudoers.d/vouch")"
 if FAIL_SUDO_CONF_BACKUP=1 run_installer "$BACKUP_INTERRUPT" --prelaunch >"$BACKUP_INTERRUPT/fail.log" 2>&1; then fail "accepted a failed sudo.conf backup"; fi
 grep -Fq 'could not back up sudo.conf' "$BACKUP_INTERRUPT/fail.log" || fail "sudo.conf backup failure was not reported"
 [ "$(sha256_file "$BACKUP_INTERRUPT/sudo.conf")" = "$backup_conf_hash" ] || fail "failed sudo.conf backup changed the plugin"
-[ "$(sha256_file "$BACKUP_INTERRUPT/sudoers.d/oshioki")" = "$backup_dropin_hash" ] || fail "failed sudo.conf backup changed the blanket rule"
+[ "$(sha256_file "$BACKUP_INTERRUPT/sudoers.d/vouch")" = "$backup_dropin_hash" ] || fail "failed sudo.conf backup changed the blanket rule"
 
 # The same invariant applies when the sudoers backup itself fails: no
 # partially copied rule is eligible for rollback.
@@ -468,11 +468,11 @@ printf '{"version":1,"devices":[{"fingerprint":"x","active":true}]}\n' > "$DROPI
 printf '#includedir %s\n' "$DROPIN_BACKUP_INTERRUPT/sudoers.d" > "$DROPIN_BACKUP_INTERRUPT/sudoers"
 run_installer --sudo-user testuser "$DROPIN_BACKUP_INTERRUPT" --prelaunch >"$DROPIN_BACKUP_INTERRUPT/first.log" 2>&1
 dropin_backup_conf_hash="$(sha256_file "$DROPIN_BACKUP_INTERRUPT/sudo.conf")"
-dropin_backup_rule_hash="$(sha256_file "$DROPIN_BACKUP_INTERRUPT/sudoers.d/oshioki")"
+dropin_backup_rule_hash="$(sha256_file "$DROPIN_BACKUP_INTERRUPT/sudoers.d/vouch")"
 if FAIL_SUDOERS_BACKUP=1 run_installer "$DROPIN_BACKUP_INTERRUPT" --prelaunch >"$DROPIN_BACKUP_INTERRUPT/fail.log" 2>&1; then fail "accepted a failed sudoers backup"; fi
 grep -Fq 'could not back up the sudoers rule' "$DROPIN_BACKUP_INTERRUPT/fail.log" || fail "sudoers backup failure was not reported"
 [ "$(sha256_file "$DROPIN_BACKUP_INTERRUPT/sudo.conf")" = "$dropin_backup_conf_hash" ] || fail "failed sudoers backup changed the plugin"
-[ "$(sha256_file "$DROPIN_BACKUP_INTERRUPT/sudoers.d/oshioki")" = "$dropin_backup_rule_hash" ] || fail "failed sudoers backup changed the blanket rule"
+[ "$(sha256_file "$DROPIN_BACKUP_INTERRUPT/sudoers.d/vouch")" = "$dropin_backup_rule_hash" ] || fail "failed sudoers backup changed the blanket rule"
 
 # A real TERM after the owned rule has been removed must terminate the
 # installer. EXIT cleanup restores the plugin before the blanket rule; it
@@ -482,8 +482,8 @@ printf '{"version":1,"devices":[{"fingerprint":"x","active":true}]}\n' > "$SIGNA
 printf '#includedir %s\n' "$SIGNAL_REMOVE/sudoers.d" > "$SIGNAL_REMOVE/sudoers"
 run_installer --sudo-user testuser "$SIGNAL_REMOVE" --prelaunch >"$SIGNAL_REMOVE/first.log" 2>&1
 if SIGNAL_AFTER_REMOVE=1 run_installer "$SIGNAL_REMOVE" --prelaunch >"$SIGNAL_REMOVE/signal.log" 2>&1; then fail "ignored TERM after sudoers removal"; fi
-grep -Fq '# BEGIN oshioki' "$SIGNAL_REMOVE/sudo.conf" || fail "signal cleanup did not restore the plugin"
-grep -Fxq 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL' "$SIGNAL_REMOVE/sudoers.d/oshioki" || fail "signal cleanup did not restore the blanket rule"
+grep -Fq '# BEGIN vouch' "$SIGNAL_REMOVE/sudo.conf" || fail "signal cleanup did not restore the plugin"
+grep -Fxq 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL' "$SIGNAL_REMOVE/sudoers.d/vouch" || fail "signal cleanup did not restore the blanket rule"
 
 # A cleanup failure between the sudo.conf and sudoers backup removals must
 # leave the migrated state disabled, since rollback has already been disarmed.
@@ -493,8 +493,8 @@ printf '#includedir %s\n' "$CLEANUP_FAILURE/sudoers.d" > "$CLEANUP_FAILURE/sudoe
 run_installer --sudo-user testuser "$CLEANUP_FAILURE" --prelaunch >"$CLEANUP_FAILURE/first.log" 2>&1
 if FAIL_DROPIN_BACKUP_CLEANUP=1 run_installer "$CLEANUP_FAILURE" --prelaunch >"$CLEANUP_FAILURE/fail.log" 2>&1; then fail "accepted a backup cleanup failure"; fi
 grep -Fq 'could not remove its sudoers rollback backup' "$CLEANUP_FAILURE/fail.log" || fail "backup cleanup failure was not reported"
-if grep -Fq '# BEGIN oshioki' "$CLEANUP_FAILURE/sudo.conf"; then fail "backup cleanup failure restored the plugin"; fi
-[ ! -e "$CLEANUP_FAILURE/sudoers.d/oshioki" ] || fail "backup cleanup failure restored the blanket rule"
+if grep -Fq '# BEGIN vouch' "$CLEANUP_FAILURE/sudo.conf"; then fail "backup cleanup failure restored the plugin"; fi
+[ ! -e "$CLEANUP_FAILURE/sudoers.d/vouch" ] || fail "backup cleanup failure restored the blanket rule"
 
 # TERM in the same interval is also safe: the handler exits through EXIT
 # after cleanup disarmed rollback, so neither old artifact is restored.
@@ -503,8 +503,8 @@ printf '{"version":1,"devices":[{"fingerprint":"x","active":true}]}\n' > "$SIGNA
 printf '#includedir %s\n' "$SIGNAL_CLEANUP/sudoers.d" > "$SIGNAL_CLEANUP/sudoers"
 run_installer --sudo-user testuser "$SIGNAL_CLEANUP" --prelaunch >"$SIGNAL_CLEANUP/first.log" 2>&1
 if SIGNAL_DURING_BACKUP_CLEANUP=1 run_installer "$SIGNAL_CLEANUP" --prelaunch >"$SIGNAL_CLEANUP/signal.log" 2>&1; then fail "ignored TERM during backup cleanup"; fi
-if grep -Fq '# BEGIN oshioki' "$SIGNAL_CLEANUP/sudo.conf"; then fail "backup cleanup signal restored the plugin"; fi
-[ ! -e "$SIGNAL_CLEANUP/sudoers.d/oshioki" ] || fail "backup cleanup signal restored the blanket rule"
+if grep -Fq '# BEGIN vouch' "$SIGNAL_CLEANUP/sudo.conf"; then fail "backup cleanup signal restored the plugin"; fi
+[ ! -e "$SIGNAL_CLEANUP/sudoers.d/vouch" ] || fail "backup cleanup signal restored the blanket rule"
 
 # If removing the owned blanket rule is interrupted, the legacy plugin must
 # still be present. The injected rm failure occurs before rewrite_block.
@@ -515,7 +515,7 @@ run_installer --sudo-user testuser "$REMOVE_INTERRUPT" --prelaunch >"$REMOVE_INT
 remove_conf_hash="$(sha256_file "$REMOVE_INTERRUPT/sudo.conf")"
 if FAIL_REMOVE_SUDOERS_ONCE=1 run_installer "$REMOVE_INTERRUPT" --prelaunch >"$REMOVE_INTERRUPT/fail.log" 2>&1; then fail "accepted an interrupted sudoers removal"; fi
 [ "$(sha256_file "$REMOVE_INTERRUPT/sudo.conf")" = "$remove_conf_hash" ] || fail "interrupted sudoers removal removed the legacy plugin"
-grep -Fxq 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL' "$REMOVE_INTERRUPT/sudoers.d/oshioki" || fail "interrupted sudoers removal lost the blanket rule"
+grep -Fxq 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL' "$REMOVE_INTERRUPT/sudoers.d/vouch" || fail "interrupted sudoers removal lost the blanket rule"
 
 # If rewriting sudo.conf fails after the blanket rule has been removed,
 # rollback restores the plugin first and then the verified blanket rule.
@@ -525,10 +525,10 @@ printf '#includedir %s\n' "$ROLLBACK_ORDER/sudoers.d" > "$ROLLBACK_ORDER/sudoers
 run_installer --sudo-user testuser "$ROLLBACK_ORDER" --prelaunch >"$ROLLBACK_ORDER/first.log" 2>&1
 : > "$ROLLBACK_ORDER/trace"
 if FAIL_SUDO_CONF_MOVE=1 INSTALL_TRACE="$ROLLBACK_ORDER/trace" run_installer "$ROLLBACK_ORDER" --prelaunch >"$ROLLBACK_ORDER/fail.log" 2>&1; then fail "accepted a failed sudo.conf rewrite"; fi
-grep -Fq '# BEGIN oshioki' "$ROLLBACK_ORDER/sudo.conf" || fail "rewrite failure did not restore the legacy plugin"
-grep -Fxq 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL' "$ROLLBACK_ORDER/sudoers.d/oshioki" || fail "rewrite failure did not restore the blanket rule"
+grep -Fq '# BEGIN vouch' "$ROLLBACK_ORDER/sudo.conf" || fail "rewrite failure did not restore the legacy plugin"
+grep -Fxq 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL' "$ROLLBACK_ORDER/sudoers.d/vouch" || fail "rewrite failure did not restore the blanket rule"
 plugin_restore_line="$(awk -F: -v destination="$ROLLBACK_ORDER/sudo.conf" '$1 == "cp" && $NF == destination { print NR; exit }' "$ROLLBACK_ORDER/trace")"
-dropin_restore_line="$(awk -F: -v destination="$ROLLBACK_ORDER/sudoers.d/oshioki" '$1 == "cp" && $NF == destination { print NR; exit }' "$ROLLBACK_ORDER/trace")"
+dropin_restore_line="$(awk -F: -v destination="$ROLLBACK_ORDER/sudoers.d/vouch" '$1 == "cp" && $NF == destination { print NR; exit }' "$ROLLBACK_ORDER/trace")"
 [ -n "$plugin_restore_line" ] || fail "rollback trace did not restore sudo.conf"
 [ -n "$dropin_restore_line" ] || fail "rollback trace did not restore the sudoers rule"
 [ "$plugin_restore_line" -lt "$dropin_restore_line" ] || fail "rollback restored the blanket rule before the legacy plugin"
@@ -538,11 +538,11 @@ dropin_restore_line="$(awk -F: -v destination="$ROLLBACK_ORDER/sudoers.d/oshioki
 DRY_ORDER="$TEST_ROOT/dry-order"; mkdir -p "$DRY_ORDER/state" "$DRY_ORDER/sudoers.d"
 printf '{"version":1,"devices":[{"fingerprint":"x","active":true}]}\n' > "$DRY_ORDER/state/devices.json"
 printf '#includedir %s\n' "$DRY_ORDER/sudoers.d" > "$DRY_ORDER/sudoers"
-printf '%s\n' '# BEGIN oshioki' "Plugin approval_exec $DRY_ORDER/plugin/$PLUGIN_NAME" '# END oshioki' > "$DRY_ORDER/sudo.conf"
-printf 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL\n' > "$DRY_ORDER/sudoers.d/oshioki"
+printf '%s\n' '# BEGIN vouch' "Plugin approval_exec $DRY_ORDER/plugin/$PLUGIN_NAME" '# END vouch' > "$DRY_ORDER/sudo.conf"
+printf 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL\n' > "$DRY_ORDER/sudoers.d/vouch"
 run_installer --sudo-user testuser "$DRY_ORDER" --prelaunch --dry-run >"$DRY_ORDER/dry.log" 2>&1
-dry_dropin_line="$(grep -nF "DRY: remove $DRY_ORDER/sudoers.d/oshioki" "$DRY_ORDER/dry.log" | head -n1 | cut -d: -f1)"
-dry_plugin_line="$(grep -nF "DRY: remove the managed Oshioki plugin block from $DRY_ORDER/sudo.conf" "$DRY_ORDER/dry.log" | head -n1 | cut -d: -f1)"
+dry_dropin_line="$(grep -nF "DRY: remove $DRY_ORDER/sudoers.d/vouch" "$DRY_ORDER/dry.log" | head -n1 | cut -d: -f1)"
+dry_plugin_line="$(grep -nF "DRY: remove the managed Vouch plugin block from $DRY_ORDER/sudo.conf" "$DRY_ORDER/dry.log" | head -n1 | cut -d: -f1)"
 [ -n "$dry_dropin_line" ] || fail "dry plan omitted sudoers removal"
 [ -n "$dry_plugin_line" ] || fail "dry plan omitted plugin removal"
 [ "$dry_dropin_line" -lt "$dry_plugin_line" ] || fail "dry plan listed plugin removal before sudoers removal"
@@ -556,8 +556,8 @@ printf '#includedir %s\n' "$PLUGIN_ROLLBACK_FAIL/sudoers.d" > "$PLUGIN_ROLLBACK_
 run_installer --sudo-user testuser "$PLUGIN_ROLLBACK_FAIL" --prelaunch >"$PLUGIN_ROLLBACK_FAIL/first.log" 2>&1
 if FAIL_SUDO=1 FAIL_PLUGIN_RESTORE=1 run_installer "$PLUGIN_ROLLBACK_FAIL" --prelaunch >"$PLUGIN_ROLLBACK_FAIL/fail.log" 2>&1; then fail "accepted a failed plugin rollback"; fi
 grep -Fq 'rollback could not restore sudo.conf' "$PLUGIN_ROLLBACK_FAIL/fail.log" || fail "plugin rollback failure was not reported"
-if grep -Fq '# BEGIN oshioki' "$PLUGIN_ROLLBACK_FAIL/sudo.conf"; then fail "plugin rollback failure left the legacy plugin active"; fi
-[ ! -e "$PLUGIN_ROLLBACK_FAIL/sudoers.d/oshioki" ] || fail "plugin rollback failure restored the blanket rule"
+if grep -Fq '# BEGIN vouch' "$PLUGIN_ROLLBACK_FAIL/sudo.conf"; then fail "plugin rollback failure left the legacy plugin active"; fi
+[ ! -e "$PLUGIN_ROLLBACK_FAIL/sudoers.d/vouch" ] || fail "plugin rollback failure restored the blanket rule"
 
 # If copying the plugin is interrupted after the hook copy, the disabled
 # state is retained: neither half of the old/new pair is re-enabled.
@@ -566,15 +566,15 @@ printf '{"version":1,"devices":[{"fingerprint":"x","active":true}]}\n' > "$UPGRA
 printf '#includedir %s\n' "$UPGRADE_INTERRUPT/sudoers.d" > "$UPGRADE_INTERRUPT/sudoers"
 run_installer --sudo-user testuser "$UPGRADE_INTERRUPT" --prelaunch >"$UPGRADE_INTERRUPT/first.log" 2>&1
 if FAIL_INSTALL_TARGET="$PLUGIN_NAME" run_installer "$UPGRADE_INTERRUPT" --prelaunch >"$UPGRADE_INTERRUPT/fail.log" 2>&1; then fail "accepted an interrupted plugin upgrade"; fi
-if grep -Fq '# BEGIN oshioki' "$UPGRADE_INTERRUPT/sudo.conf"; then fail "interrupted upgrade re-enabled the plugin"; fi
-[ ! -e "$UPGRADE_INTERRUPT/sudoers.d/oshioki" ] || fail "interrupted upgrade left passwordless sudo"
+if grep -Fq '# BEGIN vouch' "$UPGRADE_INTERRUPT/sudo.conf"; then fail "interrupted upgrade re-enabled the plugin"; fi
+[ ! -e "$UPGRADE_INTERRUPT/sudoers.d/vouch" ] || fail "interrupted upgrade left passwordless sudo"
 
 UNMANAGED_PLUGIN_BLOCK="$TEST_ROOT/unmanaged-plugin-block"; mkdir -p "$UNMANAGED_PLUGIN_BLOCK"
 printf '%s\n' \
   'outside-before' \
-  '# BEGIN oshioki' \
+  '# BEGIN vouch' \
   'Plugin approval_exec /old/a.so' \
-  '# END oshioki' \
+  '# END vouch' \
   'Plugin approval_exec /old/b.so' > "$UNMANAGED_PLUGIN_BLOCK/sudo.conf"
 unmanaged_hash="$(sha256_file "$UNMANAGED_PLUGIN_BLOCK/sudo.conf")"
 if run_installer "$UNMANAGED_PLUGIN_BLOCK" --disable-prelaunch >"$UNMANAGED_PLUGIN_BLOCK/log" 2>&1; then fail "accepted unmanaged approval_exec plugin line"; fi
@@ -593,7 +593,7 @@ esac
 
 outside_hash="$(printf 'outside-before\n' | sha256_stream)"
 run_installer "$PRELAUNCH" --disable-prelaunch
-if grep -Fq '# BEGIN oshioki' "$PRELAUNCH/sudo.conf"; then fail "disable left managed block"; fi
+if grep -Fq '# BEGIN vouch' "$PRELAUNCH/sudo.conf"; then fail "disable left managed block"; fi
 [ "$(sha256_file "$PRELAUNCH/sudo.conf")" = "$outside_hash" ] || fail "disable changed bytes outside block"
 if run_installer "$PRELAUNCH" --prelaunch-status >/dev/null 2>&1; then fail "disabled status returned success"; fi
 
@@ -606,25 +606,25 @@ EMPTY_REGISTRY="$TEST_ROOT/empty-registry"; mkdir -p "$EMPTY_REGISTRY"
 run_installer "$EMPTY_REGISTRY" --prelaunch >"$EMPTY_REGISTRY/log" 2>&1
 grep -Fq 'no active approval devices' "$EMPTY_REGISTRY/log" || fail "empty registry enabled silently"
 [ ! -e "$EMPTY_REGISTRY/sudo.conf" ] || fail "empty registry enabled the plugin"
-[ -x "$EMPTY_REGISTRY/sbin/oshioki" ] || fail "empty registry skipped the binary install"
+[ -x "$EMPTY_REGISTRY/sbin/vouch" ] || fail "empty registry skipped the binary install"
 run_installer "$EMPTY_REGISTRY" --prelaunch --dry-run >"$EMPTY_REGISTRY/dry.log" 2>&1
 grep -Fq 'skip enabling' "$EMPTY_REGISTRY/dry.log" || fail "dry run did not predict the skip"
 
 ACTIVE_REGISTRY="$TEST_ROOT/active-registry"; mkdir -p "$ACTIVE_REGISTRY/state"
 printf '{"version":1,"devices":[{"fingerprint":"x","active":true}]}\n' > "$ACTIVE_REGISTRY/state/devices.json"
 run_installer "$ACTIVE_REGISTRY" --prelaunch >"$ACTIVE_REGISTRY/log" 2>&1
-grep -Fq '# BEGIN oshioki' "$ACTIVE_REGISTRY/sudo.conf" || fail "active registry did not enable the plugin"
+grep -Fq '# BEGIN vouch' "$ACTIVE_REGISTRY/sudo.conf" || fail "active registry did not enable the plugin"
 
 # A software native identity may still use the approval plugin, but its
 # readable key cannot authorize passwordless sudo. The installer must leave
 # normal sudo authentication in place and remove any stale drop-in.
 SOFTWARE_REGISTRY="$TEST_ROOT/software-registry"; mkdir -p "$SOFTWARE_REGISTRY/state" "$SOFTWARE_REGISTRY/sudoers.d"
 printf '{"version":1,"devices":[{"version":1,"kind":"software","fingerprint":"23d5DG4zOMRbr6Q3dpIDZA","credential_id":"K60P1hDZnq5EPpMqJhQryh5fqZW0UYRSgn547x8xf_A","credential_public_key":"BAIX5hfwtkQ5KCePlpmeaaI6TywVK99tbN9m5bgCgtTtGUp968uXcS0t2jyoWqh2Wlb0X8dYWZZS8ol8ZTBuV5Q","box_public_key":"D6poTtKIZ7l_Smot7l34zpdOdrcBjj8iocTPJnhXDyA","label":"linux","api_token_hash":"MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM","sign_count":0,"active":true}]}\n' > "$SOFTWARE_REGISTRY/state/devices.json"
-printf 'old-user ALL=(ALL) NOPASSWD: ALL\n' > "$SOFTWARE_REGISTRY/sudoers.d/oshioki"
+printf 'old-user ALL=(ALL) NOPASSWD: ALL\n' > "$SOFTWARE_REGISTRY/sudoers.d/vouch"
 printf '@includedir %s\n' "$SOFTWARE_REGISTRY/sudoers.d" > "$SOFTWARE_REGISTRY/sudoers"
 run_installer --sudo-user testuser "$SOFTWARE_REGISTRY" --prelaunch >"$SOFTWARE_REGISTRY/log" 2>&1
-grep -Fq '# BEGIN oshioki' "$SOFTWARE_REGISTRY/sudo.conf" || fail "software-only registry disabled approval plugin"
-[ ! -e "$SOFTWARE_REGISTRY/sudoers.d/oshioki" ] || fail "software-only registry left a passwordless drop-in"
+grep -Fq '# BEGIN vouch' "$SOFTWARE_REGISTRY/sudo.conf" || fail "software-only registry disabled approval plugin"
+[ ! -e "$SOFTWARE_REGISTRY/sudoers.d/vouch" ] || fail "software-only registry left a passwordless drop-in"
 grep -Fq 'hardware-backed approval' "$SOFTWARE_REGISTRY/log" || fail "software-only warning missing"
 run_installer --sudo-user testuser "$SOFTWARE_REGISTRY" --prelaunch-status \
   | grep -Fq 'sudo password required for software-only approvals' \
@@ -636,21 +636,21 @@ SUDOERS="$TEST_ROOT/with-dropin"; mkdir -p "$SUDOERS/state"
 printf '{"version":1,"devices":[{"fingerprint":"x","active":true}]}\n' > "$SUDOERS/state/devices.json"
 printf '# sudoers test file\n@includedir %s\n' "$SUDOERS/sudoers.d" > "$SUDOERS/sudoers"
 run_installer --sudo-user testuser "$SUDOERS" --prelaunch >"$SUDOERS/log" 2>&1
-grep -Fxq 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL' "$SUDOERS/sudoers.d/oshioki" || fail "drop-in has the wrong content"
-[ "$(stat -c '%a' "$SUDOERS/sudoers.d/oshioki" 2>/dev/null || stat -f '%Lp' "$SUDOERS/sudoers.d/oshioki")" = 440 ] || fail "drop-in is not 0440"
+grep -Fxq 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL' "$SUDOERS/sudoers.d/vouch" || fail "drop-in has the wrong content"
+[ "$(stat -c '%a' "$SUDOERS/sudoers.d/vouch" 2>/dev/null || stat -f '%Lp' "$SUDOERS/sudoers.d/vouch")" = 440 ] || fail "drop-in is not 0440"
 grep -Fq -- '-c -f' "$SUDOERS/visudo.calls" || fail "visudo gate never ran"
-grep -Fq 'sudoers.d/oshioki' "$SUDOERS/visudo.calls" || fail "visudo checked the wrong file"
+grep -Fq 'sudoers.d/vouch' "$SUDOERS/visudo.calls" || fail "visudo checked the wrong file"
 run_installer --sudo-user testuser "$SUDOERS" --prelaunch --dry-run >"$SUDOERS/dry.log" 2>&1
-grep -Fq "DRY: write $SUDOERS/sudoers.d/oshioki for passwordless sudo by testuser" "$SUDOERS/dry.log" || fail "dry run omitted the drop-in plan"
+grep -Fq "DRY: write $SUDOERS/sudoers.d/vouch for passwordless sudo by testuser" "$SUDOERS/dry.log" || fail "dry run omitted the drop-in plan"
 run_installer --sudo-user testuser "$SUDOERS" --prelaunch-status | grep -Fq enabled || fail "status rejected a good drop-in"
-rm "$SUDOERS/sudoers.d/oshioki"
+rm "$SUDOERS/sudoers.d/vouch"
 if run_installer --sudo-user testuser "$SUDOERS" --prelaunch-status >/dev/null 2>&1; then fail "status accepted a missing drop-in"; fi
 run_installer "$SUDOERS" --disable-prelaunch
-if grep -Fq '# BEGIN oshioki' "$SUDOERS/sudo.conf"; then fail "disable left managed block"; fi
-[ ! -e "$SUDOERS/sudoers.d/oshioki" ] || fail "disable left the drop-in"
+if grep -Fq '# BEGIN vouch' "$SUDOERS/sudo.conf"; then fail "disable left managed block"; fi
+[ ! -e "$SUDOERS/sudoers.d/vouch" ] || fail "disable left the drop-in"
 
 # The passwordless rule needs positive proof that the sudo on this host
-# loads the approval plugin. A classic sudo whose `sudo -V` lists no Oshioki
+# loads the approval plugin. A classic sudo whose `sudo -V` lists no Vouch
 # plugin gets no drop-in, and an existing one is removed: sudo keeps its
 # password path instead of becoming a silent allow.
 hardware_registry() {
@@ -660,24 +660,24 @@ hardware_registry() {
 }
 status_ok() { run_installer --sudo-user testuser "$1" --prelaunch-status >"$1/status.log" 2>&1; }
 NOPROOF="$TEST_ROOT/plugin-unloaded"; hardware_registry "$NOPROOF"
-printf 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL\n' > "$NOPROOF/sudoers.d/oshioki"
+printf 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL\n' > "$NOPROOF/sudoers.d/vouch"
 noproof_rc=0
 FAKE_SUDO_PLUGIN_UNLOADED=1 run_installer --sudo-user testuser "$NOPROOF" --prelaunch >"$NOPROOF/log" 2>&1 || noproof_rc=$?
 [ "$noproof_rc" = 3 ] || { cat "$NOPROOF/log" >&2; fail "unproven plugin: expected exit 3, got $noproof_rc"; }
-[ ! -e "$NOPROOF/sudoers.d/oshioki" ] || fail "unproven plugin: the passwordless drop-in survived"
-grep -Fq 'does not list the Oshioki approval plugin' "$NOPROOF/log" || fail "unproven plugin: refusal not explained"
-[ -x "$NOPROOF/sbin/oshioki" ] || fail "unproven plugin: the hook was not installed"
+[ ! -e "$NOPROOF/sudoers.d/vouch" ] || fail "unproven plugin: the passwordless drop-in survived"
+grep -Fq 'does not list the Vouch approval plugin' "$NOPROOF/log" || fail "unproven plugin: refusal not explained"
+[ -x "$NOPROOF/sbin/vouch" ] || fail "unproven plugin: the hook was not installed"
 if FAKE_SUDO_PLUGIN_UNLOADED=1 status_ok "$NOPROOF"; then fail "status accepted an unloaded plugin"; fi
 grep -Fxq 'plugin loaded: no' "$NOPROOF/status.log" || fail "status did not report plugin loaded: no"
 # The same host on a sudo that does load it gets the rule, and says so.
 run_installer --sudo-user testuser "$NOPROOF" --prelaunch >"$NOPROOF/proved.log" 2>&1 ||
   { cat "$NOPROOF/proved.log" >&2; fail "proven plugin: install failed"; }
-grep -Fxq 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL' "$NOPROOF/sudoers.d/oshioki" || fail "proven plugin: no drop-in"
+grep -Fxq 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL' "$NOPROOF/sudoers.d/vouch" || fail "proven plugin: no drop-in"
 status_ok "$NOPROOF" || { cat "$NOPROOF/status.log" >&2; fail "status rejected a proven plugin"; }
 grep -Fxq 'plugin loaded: yes' "$NOPROOF/status.log" || fail "status did not report plugin loaded: yes"
 # The plugin line lost from sudo.conf (conffile prompt, sudo reinstall) while
 # the drop-in remains is the silent allow; status must call it out.
-sed -i.bak '/oshioki/d' "$NOPROOF/sudo.conf"; rm -f "$NOPROOF/sudo.conf.bak"
+sed -i.bak '/vouch/d' "$NOPROOF/sudo.conf"; rm -f "$NOPROOF/sudo.conf.bak"
 if status_ok "$NOPROOF"; then fail "status accepted a drop-in without the plugin"; fi
 grep -Fq 'passwordless sudoers rule without the approval plugin' "$NOPROOF/status.log" ||
   fail "status did not name the orphaned drop-in: $(cat "$NOPROOF/status.log")"
@@ -690,24 +690,24 @@ status_ok "$NOPROOF" || fail "rerun after a lost plugin line did not restore the
 # The dry plan names the proof it will require.
 NOPROOF_DRY="$TEST_ROOT/plugin-proof-dry"; hardware_registry "$NOPROOF_DRY"
 run_installer --sudo-user testuser "$NOPROOF_DRY" --prelaunch --dry-run >"$NOPROOF_DRY/log" 2>&1
-grep -Fq 'require root'"'"'s sudo -V to list the Oshioki approval plugin' "$NOPROOF_DRY/log" || fail "dry run omitted the plugin proof"
+grep -Fq 'require root'"'"'s sudo -V to list the Vouch approval plugin' "$NOPROOF_DRY/log" || fail "dry run omitted the plugin proof"
 
 # sudo-rs has no approval-plugin API and ignores sudo.conf, while still
 # honouring sudoers.d NOPASSWD. The plugin lane is refused outright: no
 # managed block, no drop-in, and an existing pair is taken out. The hook and
 # config are still installed so the contextual PAM lane can use them.
 SUDORS="$TEST_ROOT/sudo-rs"; hardware_registry "$SUDORS"
-printf '%s\n' 'outside-before' '# BEGIN oshioki' "Plugin approval_exec $SUDORS/plugin/$PLUGIN_NAME" '# END oshioki' > "$SUDORS/sudo.conf"
-printf 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL\n' > "$SUDORS/sudoers.d/oshioki"
+printf '%s\n' 'outside-before' '# BEGIN vouch' "Plugin approval_exec $SUDORS/plugin/$PLUGIN_NAME" '# END vouch' > "$SUDORS/sudo.conf"
+printf 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL\n' > "$SUDORS/sudoers.d/vouch"
 sudors_rc=0
 FAKE_SUDO_FLAVOR=sudo-rs run_installer --sudo-user testuser "$SUDORS" --prelaunch >"$SUDORS/log" 2>&1 || sudors_rc=$?
 [ "$sudors_rc" = 3 ] || { cat "$SUDORS/log" >&2; fail "sudo-rs: expected exit 3, got $sudors_rc"; }
-[ ! -e "$SUDORS/sudoers.d/oshioki" ] || fail "sudo-rs: the passwordless drop-in survived"
-if grep -Fq 'oshioki' "$SUDORS/sudo.conf"; then fail "sudo-rs: the managed block survived"; fi
+[ ! -e "$SUDORS/sudoers.d/vouch" ] || fail "sudo-rs: the passwordless drop-in survived"
+if grep -Fq 'vouch' "$SUDORS/sudo.conf"; then fail "sudo-rs: the managed block survived"; fi
 grep -Fxq 'outside-before' "$SUDORS/sudo.conf" || fail "sudo-rs: unrelated sudo.conf text changed"
 grep -Fq 'sudo-rs' "$SUDORS/log" || fail "sudo-rs: refusal does not name sudo-rs"
 grep -Fq -- '--contextual-pam' "$SUDORS/log" || fail "sudo-rs: refusal does not point at the PAM lane"
-[ -x "$SUDORS/sbin/oshioki" ] || fail "sudo-rs: the hook was not installed for the PAM lane"
+[ -x "$SUDORS/sbin/vouch" ] || fail "sudo-rs: the hook was not installed for the PAM lane"
 if FAKE_SUDO_FLAVOR=sudo-rs status_ok "$SUDORS"; then fail "status accepted the plugin lane on sudo-rs"; fi
 grep -Fq 'sudo-rs' "$SUDORS/status.log" || fail "sudo-rs status does not name sudo-rs"
 # A fresh sudo-rs host never gets either artifact, and the dry plan says so.
@@ -720,8 +720,8 @@ grep -Fq 'sudo-rs' "$SUDORS_FRESH/dry.log" || fail "sudo-rs dry run does not nam
 if FAKE_SUDO_FLAVOR=sudo-rs run_installer --sudo-user testuser "$SUDORS_FRESH" --prelaunch >"$SUDORS_FRESH/log" 2>&1; then
   fail "sudo-rs fresh install did not refuse"
 fi
-[ ! -e "$SUDORS_FRESH/sudoers.d/oshioki" ] || fail "sudo-rs fresh install wrote the drop-in"
-if [ -f "$SUDORS_FRESH/sudo.conf" ] && grep -Fq oshioki "$SUDORS_FRESH/sudo.conf"; then
+[ ! -e "$SUDORS_FRESH/sudoers.d/vouch" ] || fail "sudo-rs fresh install wrote the drop-in"
+if [ -f "$SUDORS_FRESH/sudo.conf" ] && grep -Fq vouch "$SUDORS_FRESH/sudo.conf"; then
   fail "sudo-rs fresh install wrote the managed block"
 fi
 
@@ -735,34 +735,34 @@ sudo_rs_case() {
   local root="$TEST_ROOT/sudo-rs-beside-$name" rc=0
   hardware_registry "$root"
   mkdir -p "$root/bin"
-  printf 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL\n' > "$root/sudoers.d/oshioki"
+  printf 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL\n' > "$root/sudoers.d/vouch"
   case "$name" in
-    path) : > "$root/bin/sudo-rs"; export OSHIOKI_SUDO_RS_PATHS="$root/bin/sudo-rs" ;;
+    path) : > "$root/bin/sudo-rs"; export VOUCH_SUDO_RS_PATHS="$root/bin/sudo-rs" ;;
     package) export FAKE_SUDO_RS_PACKAGE=1 ;;
     setuid)
       printf '#!/usr/bin/env bash\necho "sudo-rs 0.2.8" >&2\n' > "$root/bin/sudo-renamed"
       printf '#!/usr/bin/env bash\necho "Sudo version 1.9.15p5"\n' > "$root/bin/sudo.ws"
       chmod 4755 "$root/bin/sudo-renamed" "$root/bin/sudo.ws"
       [ -u "$root/bin/sudo-renamed" ] || fail "this filesystem cannot model a setuid fixture"
-      export OSHIOKI_SETUID_SCAN_DIRS="$root/bin"
+      export VOUCH_SETUID_SCAN_DIRS="$root/bin"
       ;;
   esac
   run_installer --sudo-user testuser "$root" --prelaunch >"$root/log" 2>&1 || rc=$?
   [ "$rc" = 3 ] || { cat "$root/log" >&2; fail "sudo-rs beside classic ($name): expected exit 3, got $rc"; }
-  [ ! -e "$root/sudoers.d/oshioki" ] || fail "sudo-rs beside classic ($name): the drop-in survived"
+  [ ! -e "$root/sudoers.d/vouch" ] || fail "sudo-rs beside classic ($name): the drop-in survived"
   grep -Fq 'sudo-rs is installed' "$root/log" || fail "sudo-rs beside classic ($name): refusal not explained"
   grep -Fq 'Remove the sudo-rs package' "$root/log" || fail "sudo-rs beside classic ($name): no removal advice"
-  grep -Fq '# BEGIN oshioki' "$root/sudo.conf" || fail "sudo-rs beside classic ($name): the plugin lane was dropped"
+  grep -Fq '# BEGIN vouch' "$root/sudo.conf" || fail "sudo-rs beside classic ($name): the plugin lane was dropped"
   # Status flags a rule put back by hand while sudo-rs is still there.
-  printf 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL\n' > "$root/sudoers.d/oshioki"
+  printf 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL\n' > "$root/sudoers.d/vouch"
   if status_ok "$root"; then fail "sudo-rs beside classic ($name): status accepted the rule"; fi
   grep -Fq 'while sudo-rs is installed' "$root/status.log" ||
     fail "sudo-rs beside classic ($name): status did not name sudo-rs: $(cat "$root/status.log")"
   # And the drift check takes it back out.
   run_installer "$root" --reconcile-plugin-rule >"$root/reconcile.log" 2>&1 ||
     fail "sudo-rs beside classic ($name): reconcile failed"
-  [ ! -e "$root/sudoers.d/oshioki" ] || fail "sudo-rs beside classic ($name): reconcile kept the rule"
-  unset OSHIOKI_SUDO_RS_PATHS OSHIOKI_SETUID_SCAN_DIRS FAKE_SUDO_RS_PACKAGE
+  [ ! -e "$root/sudoers.d/vouch" ] || fail "sudo-rs beside classic ($name): reconcile kept the rule"
+  unset VOUCH_SUDO_RS_PATHS VOUCH_SETUID_SCAN_DIRS FAKE_SUDO_RS_PACKAGE
 }
 sudo_rs_case path
 sudo_rs_case package
@@ -771,9 +771,9 @@ sudo_rs_case setuid
 CLASSIC_SETUID="$TEST_ROOT/classic-setuid"; hardware_registry "$CLASSIC_SETUID"; mkdir -p "$CLASSIC_SETUID/bin"
 printf '#!/usr/bin/env bash\necho "Sudo version 1.9.15p5"\n' > "$CLASSIC_SETUID/bin/sudo"
 chmod 4755 "$CLASSIC_SETUID/bin/sudo"
-OSHIOKI_SETUID_SCAN_DIRS="$CLASSIC_SETUID/bin" run_installer --sudo-user testuser "$CLASSIC_SETUID" --prelaunch >"$CLASSIC_SETUID/log" 2>&1 ||
+VOUCH_SETUID_SCAN_DIRS="$CLASSIC_SETUID/bin" run_installer --sudo-user testuser "$CLASSIC_SETUID" --prelaunch >"$CLASSIC_SETUID/log" 2>&1 ||
   { cat "$CLASSIC_SETUID/log" >&2; fail "a classic setuid sudo was treated as sudo-rs"; }
-[ -e "$CLASSIC_SETUID/sudoers.d/oshioki" ] || fail "a classic setuid sudo blocked the drop-in"
+[ -e "$CLASSIC_SETUID/sudoers.d/vouch" ] || fail "a classic setuid sudo blocked the drop-in"
 
 # The scan never runs a setuid file that root does not own (it would run as
 # root), and a probe that hangs is cut off rather than hanging the caller.
@@ -783,12 +783,12 @@ printf '#!/usr/bin/env bash\ncat >/dev/null\nsleep 30\n' > "$SCAN_SAFETY/bin/sud
 chmod 4755 "$SCAN_SAFETY/bin/sudo-foreign" "$SCAN_SAFETY/bin/sudo-hang"
 scan_started=$SECONDS
 FAKE_STAT_SPECIAL_PATH="$SCAN_SAFETY/bin/sudo-foreign" FAKE_STAT_SPECIAL_OWNER=1000 \
-  OSHIOKI_SETUID_SCAN_DIRS="$SCAN_SAFETY/bin" \
+  VOUCH_SETUID_SCAN_DIRS="$SCAN_SAFETY/bin" \
   run_installer --sudo-user testuser "$SCAN_SAFETY" --prelaunch >"$SCAN_SAFETY/log" 2>&1 ||
   { cat "$SCAN_SAFETY/log" >&2; fail "setuid scan safety: install failed"; }
 [ ! -e "$SCAN_SAFETY/foreign-ran" ] || fail "the setuid scan executed a file root does not own"
 [ $((SECONDS - scan_started)) -lt 25 ] || fail "a hanging setuid probe was not cut off"
-[ -e "$SCAN_SAFETY/sudoers.d/oshioki" ] || fail "setuid scan safety: an unprobed or hung file blocked the drop-in"
+[ -e "$SCAN_SAFETY/sudoers.d/vouch" ] || fail "setuid scan safety: an unprobed or hung file blocked the drop-in"
 
 # --reconcile-plugin-rule is the drift check the package's path unit runs.
 # It only ever removes the rule: kept while the proof holds, removed when
@@ -796,81 +796,81 @@ FAKE_STAT_SPECIAL_PATH="$SCAN_SAFETY/bin/sudo-foreign" FAKE_STAT_SPECIAL_OWNER=1
 # sudo-rs; never written when absent; a foreign file is left alone.
 RECONCILE="$TEST_ROOT/reconcile"; hardware_registry "$RECONCILE"
 run_installer --sudo-user testuser "$RECONCILE" --prelaunch >"$RECONCILE/log" 2>&1 || fail "reconcile fixture: install failed"
-[ -e "$RECONCILE/sudoers.d/oshioki" ] || fail "reconcile fixture: no drop-in"
+[ -e "$RECONCILE/sudoers.d/vouch" ] || fail "reconcile fixture: no drop-in"
 run_installer "$RECONCILE" --reconcile-plugin-rule >"$RECONCILE/keep.log" 2>&1 || fail "reconcile failed while the proof held"
-[ -e "$RECONCILE/sudoers.d/oshioki" ] || fail "reconcile removed a proven rule"
+[ -e "$RECONCILE/sudoers.d/vouch" ] || fail "reconcile removed a proven rule"
 FAKE_SUDO_PLUGIN_UNLOADED=1 run_installer "$RECONCILE" --reconcile-plugin-rule >"$RECONCILE/unloaded.log" 2>&1 ||
   fail "reconcile failed on an unloaded plugin"
-[ ! -e "$RECONCILE/sudoers.d/oshioki" ] || fail "reconcile kept a rule whose plugin is not loaded"
-grep -Fq 'does not list the Oshioki approval plugin' "$RECONCILE/unloaded.log" || fail "reconcile did not explain the removal"
+[ ! -e "$RECONCILE/sudoers.d/vouch" ] || fail "reconcile kept a rule whose plugin is not loaded"
+grep -Fq 'does not list the Vouch approval plugin' "$RECONCILE/unloaded.log" || fail "reconcile did not explain the removal"
 # Never writes: with the proof holding and no rule, it stays absent.
 run_installer "$RECONCILE" --reconcile-plugin-rule >"$RECONCILE/absent.log" 2>&1 || fail "reconcile failed with no rule"
-[ ! -e "$RECONCILE/sudoers.d/oshioki" ] || fail "reconcile wrote the rule"
+[ ! -e "$RECONCILE/sudoers.d/vouch" ] || fail "reconcile wrote the rule"
 grep -Fq 'nothing to reconcile' "$RECONCILE/absent.log" || fail "reconcile did not report the no-op"
 # Plugin line lost from sudo.conf.
 run_installer --sudo-user testuser "$RECONCILE" --prelaunch >/dev/null 2>&1 || fail "reconcile fixture: reinstall failed"
-sed -i.bak '/oshioki/d' "$RECONCILE/sudo.conf"; rm -f "$RECONCILE/sudo.conf.bak"
+sed -i.bak '/vouch/d' "$RECONCILE/sudo.conf"; rm -f "$RECONCILE/sudo.conf.bak"
 cp "$RECONCILE/sudo.conf" "$RECONCILE/sudo.conf.expected"
 run_installer "$RECONCILE" --reconcile-plugin-rule >"$RECONCILE/lost.log" 2>&1 || fail "reconcile failed on a lost plugin line"
-[ ! -e "$RECONCILE/sudoers.d/oshioki" ] || fail "reconcile kept a rule after the plugin line was lost"
+[ ! -e "$RECONCILE/sudoers.d/vouch" ] || fail "reconcile kept a rule after the plugin line was lost"
 cmp -s "$RECONCILE/sudo.conf" "$RECONCILE/sudo.conf.expected" || fail "reconcile edited sudo.conf"
 # The PATH sudo switched (back) to sudo-rs.
 run_installer --sudo-user testuser "$RECONCILE" --prelaunch >/dev/null 2>&1 || fail "reconcile fixture: reinstall failed"
 FAKE_SUDO_FLAVOR=sudo-rs run_installer "$RECONCILE" --reconcile-plugin-rule >"$RECONCILE/rs.log" 2>&1 ||
   fail "reconcile failed on a sudo-rs PATH sudo"
-[ ! -e "$RECONCILE/sudoers.d/oshioki" ] || fail "reconcile kept a rule under sudo-rs"
+[ ! -e "$RECONCILE/sudoers.d/vouch" ] || fail "reconcile kept a rule under sudo-rs"
 # A sudo -V that does not run at all is not evidence: the rule is kept (it
 # may be the only sudo path for its account), after one retry.
 run_installer --sudo-user testuser "$RECONCILE" --prelaunch >/dev/null 2>&1 || fail "reconcile fixture: reinstall failed"
-FAIL_SUDO=1 OSHIOKI_RECONCILE_RETRY_DELAY=0 run_installer "$RECONCILE" --reconcile-plugin-rule >"$RECONCILE/novers.log" 2>&1 ||
+FAIL_SUDO=1 VOUCH_RECONCILE_RETRY_DELAY=0 run_installer "$RECONCILE" --reconcile-plugin-rule >"$RECONCILE/novers.log" 2>&1 ||
   fail "reconcile failed when sudo -V did not run"
-[ -e "$RECONCILE/sudoers.d/oshioki" ] || fail "reconcile removed the rule on an unanswered sudo -V"
+[ -e "$RECONCILE/sudoers.d/vouch" ] || fail "reconcile removed the rule on an unanswered sudo -V"
 grep -Fq 'sudo -V did not run; keeping' "$RECONCILE/novers.log" || fail "reconcile did not log the kept rule"
 # The retry: the first probe fails, the second answers. Call 1 is the
 # sudo-rs PATH check, call 2 the first probe, call 3 the retry.
 rm -f "$RECONCILE/sudo.calls"
-FAIL_SUDO_ON_CALL=2 OSHIOKI_RECONCILE_RETRY_DELAY=0 run_installer "$RECONCILE" --reconcile-plugin-rule >"$RECONCILE/retry-ok.log" 2>&1 ||
+FAIL_SUDO_ON_CALL=2 VOUCH_RECONCILE_RETRY_DELAY=0 run_installer "$RECONCILE" --reconcile-plugin-rule >"$RECONCILE/retry-ok.log" 2>&1 ||
   fail "reconcile retry failed"
-[ -e "$RECONCILE/sudoers.d/oshioki" ] || fail "reconcile retry removed a proven rule"
+[ -e "$RECONCILE/sudoers.d/vouch" ] || fail "reconcile retry removed a proven rule"
 rm -f "$RECONCILE/sudo.calls"
-FAKE_SUDO_PLUGIN_UNLOADED=1 FAIL_SUDO_ON_CALL=2 OSHIOKI_RECONCILE_RETRY_DELAY=0 \
+FAKE_SUDO_PLUGIN_UNLOADED=1 FAIL_SUDO_ON_CALL=2 VOUCH_RECONCILE_RETRY_DELAY=0 \
   run_installer "$RECONCILE" --reconcile-plugin-rule >"$RECONCILE/retry-unloaded.log" 2>&1 || fail "reconcile retry failed"
-[ ! -e "$RECONCILE/sudoers.d/oshioki" ] || fail "reconcile retry kept a rule whose plugin the retry showed unloaded"
+[ ! -e "$RECONCILE/sudoers.d/vouch" ] || fail "reconcile retry kept a rule whose plugin the retry showed unloaded"
 rm -f "$RECONCILE/sudo.calls"
 # A foreign rule at the reserved path is not ours to remove.
-printf 'administrator ALL=(ALL) NOPASSWD: /usr/bin/id\n' > "$RECONCILE/sudoers.d/oshioki"
+printf 'administrator ALL=(ALL) NOPASSWD: /usr/bin/id\n' > "$RECONCILE/sudoers.d/vouch"
 FAKE_SUDO_PLUGIN_UNLOADED=1 run_installer "$RECONCILE" --reconcile-plugin-rule >"$RECONCILE/foreign.log" 2>&1 ||
   fail "reconcile failed on a foreign file"
-grep -Fxq 'administrator ALL=(ALL) NOPASSWD: /usr/bin/id' "$RECONCILE/sudoers.d/oshioki" || fail "reconcile touched a foreign file"
-rm -f "$RECONCILE/sudoers.d/oshioki"
+grep -Fxq 'administrator ALL=(ALL) NOPASSWD: /usr/bin/id' "$RECONCILE/sudoers.d/vouch" || fail "reconcile touched a foreign file"
+rm -f "$RECONCILE/sudoers.d/vouch"
 
 # Package removal must clean the drop-in even when sudo.conf was removed or
 # its managed markers were damaged. The drop-in mode checks ownership, mode,
-# and the complete Oshioki rule without consulting sudo.conf.
+# and the complete Vouch rule without consulting sudo.conf.
 MISSING_CONF="$TEST_ROOT/missing-sudo-conf"; mkdir -p "$MISSING_CONF/state" "$MISSING_CONF/sudoers.d"
-printf 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL\n' > "$MISSING_CONF/sudoers.d/oshioki"
+printf 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL\n' > "$MISSING_CONF/sudoers.d/vouch"
 run_installer "$MISSING_CONF" --disable-prelaunch
-[ ! -e "$MISSING_CONF/sudoers.d/oshioki" ] || fail "missing sudo.conf left the Oshioki drop-in"
+[ ! -e "$MISSING_CONF/sudoers.d/vouch" ] || fail "missing sudo.conf left the Vouch drop-in"
 
 MALFORMED_CONF="$TEST_ROOT/malformed-sudo-conf"; mkdir -p "$MALFORMED_CONF/state" "$MALFORMED_CONF/sudoers.d"
-printf '%s\n' '# BEGIN oshioki' "Plugin approval_exec $MALFORMED_CONF/plugin/$PLUGIN_NAME" > "$MALFORMED_CONF/sudo.conf"
-printf 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL\n' > "$MALFORMED_CONF/sudoers.d/oshioki"
+printf '%s\n' '# BEGIN vouch' "Plugin approval_exec $MALFORMED_CONF/plugin/$PLUGIN_NAME" > "$MALFORMED_CONF/sudo.conf"
+printf 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL\n' > "$MALFORMED_CONF/sudoers.d/vouch"
 run_installer "$MALFORMED_CONF" --disable-prelaunch
-if grep -Fq "Plugin approval_exec $MALFORMED_CONF/plugin/$PLUGIN_NAME" "$MALFORMED_CONF/sudo.conf"; then fail "malformed sudo.conf left the Oshioki plugin"; fi
-[ ! -e "$MALFORMED_CONF/sudoers.d/oshioki" ] || fail "malformed sudo.conf left the Oshioki drop-in"
+if grep -Fq "Plugin approval_exec $MALFORMED_CONF/plugin/$PLUGIN_NAME" "$MALFORMED_CONF/sudo.conf"; then fail "malformed sudo.conf left the Vouch plugin"; fi
+[ ! -e "$MALFORMED_CONF/sudoers.d/vouch" ] || fail "malformed sudo.conf left the Vouch drop-in"
 
 PARTIAL_CONF="$TEST_ROOT/partial-sudo-conf"; mkdir -p "$PARTIAL_CONF/state" "$PARTIAL_CONF/sudoers.d"
-printf '%s\n' '# END oshioki' 'outside' > "$PARTIAL_CONF/sudo.conf"
-printf 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL\n' > "$PARTIAL_CONF/sudoers.d/oshioki"
+printf '%s\n' '# END vouch' 'outside' > "$PARTIAL_CONF/sudo.conf"
+printf 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL\n' > "$PARTIAL_CONF/sudoers.d/vouch"
 run_installer "$PARTIAL_CONF" --disable-prelaunch
-if grep -Fq '# END oshioki' "$PARTIAL_CONF/sudo.conf"; then fail "partial sudo.conf left the Oshioki marker"; fi
-[ ! -e "$PARTIAL_CONF/sudoers.d/oshioki" ] || fail "partial sudo.conf left the Oshioki drop-in"
+if grep -Fq '# END vouch' "$PARTIAL_CONF/sudo.conf"; then fail "partial sudo.conf left the Vouch marker"; fi
+[ ! -e "$PARTIAL_CONF/sudoers.d/vouch" ] || fail "partial sudo.conf left the Vouch drop-in"
 
 UNRELATED_DROPIN="$TEST_ROOT/unrelated-dropin"; mkdir -p "$UNRELATED_DROPIN/state" "$UNRELATED_DROPIN/sudoers.d"
-printf 'administrator ALL=(ALL) NOPASSWD: /usr/bin/id\n' > "$UNRELATED_DROPIN/sudoers.d/oshioki"
+printf 'administrator ALL=(ALL) NOPASSWD: /usr/bin/id\n' > "$UNRELATED_DROPIN/sudoers.d/vouch"
 if run_installer "$UNRELATED_DROPIN" --remove-sudoers-dropin >"$UNRELATED_DROPIN/log" 2>&1; then fail "drop-in cleanup accepted unrelated sudoers content"; fi
 grep -Fq 'unverified sudoers drop-in' "$UNRELATED_DROPIN/log" || fail "unrelated drop-in rejection was not explained"
-[ -e "$UNRELATED_DROPIN/sudoers.d/oshioki" ] || fail "unrelated sudoers content was deleted"
+[ -e "$UNRELATED_DROPIN/sudoers.d/vouch" ] || fail "unrelated sudoers content was deleted"
 
 # sudo accepts "# includedir" with space but requires @includedir contiguous,
 # so "@ includedir" includes nothing. Writing the drop-in on the strength of
@@ -879,7 +879,7 @@ BADINC="$TEST_ROOT/bad-include"; mkdir -p "$BADINC/state"
 printf '{"version":1,"devices":[{"fingerprint":"x","active":true}]}\n' > "$BADINC/state/devices.json"
 printf '# sudoers test file\n@ includedir %s\n' "$BADINC/sudoers.d" > "$BADINC/sudoers"
 run_installer --sudo-user testuser "$BADINC" --prelaunch >"$BADINC/log" 2>&1
-[ ! -e "$BADINC/sudoers.d/oshioki" ] || fail "drop-in written despite a non-contiguous @ includedir"
+[ ! -e "$BADINC/sudoers.d/vouch" ] || fail "drop-in written despite a non-contiguous @ includedir"
 grep -Fq 'includes no sudoers.d directory' "$BADINC/log" || fail "no warning for a non-contiguous @ includedir"
 
 # The spaced # form is legal and must still be honoured.
@@ -887,29 +887,29 @@ SPACEINC="$TEST_ROOT/space-include"; mkdir -p "$SPACEINC/state"
 printf '{"version":1,"devices":[{"fingerprint":"x","active":true}]}\n' > "$SPACEINC/state/devices.json"
 printf '# sudoers test file\n#  includedir %s\n' "$SPACEINC/sudoers.d" > "$SPACEINC/sudoers"
 run_installer --sudo-user testuser "$SPACEINC" --prelaunch >"$SPACEINC/log" 2>&1
-grep -Fxq 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL' "$SPACEINC/sudoers.d/oshioki" || fail "spaced # includedir was not honoured"
+grep -Fxq 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL' "$SPACEINC/sudoers.d/vouch" || fail "spaced # includedir was not honoured"
 
 # Dry runs plan without writing.
 DRYUSER="$TEST_ROOT/dry-user"; mkdir -p "$DRYUSER/state"
 printf '{"version":1,"devices":[{"fingerprint":"x","active":true}]}\n' > "$DRYUSER/state/devices.json"
 printf '#includedir %s\n' "$DRYUSER/sudoers.d" > "$DRYUSER/sudoers"
 run_installer --sudo-user testuser "$DRYUSER" --prelaunch --dry-run >"$DRYUSER/dry.log" 2>&1
-grep -Fq "DRY: write $DRYUSER/sudoers.d/oshioki" "$DRYUSER/dry.log" || fail "dry run omitted the drop-in plan"
+grep -Fq "DRY: write $DRYUSER/sudoers.d/vouch" "$DRYUSER/dry.log" || fail "dry run omitted the drop-in plan"
 [ ! -e "$DRYUSER/sudoers.d" ] || fail "dry run wrote sudoers state"
 printf 'outside\n' > "$DRYUSER/sudo.conf"
 mkdir -p "$DRYUSER/sudoers.d"
-printf 'x ALL=(ALL) NOPASSWD: ALL\n' > "$DRYUSER/sudoers.d/oshioki"
+printf 'x ALL=(ALL) NOPASSWD: ALL\n' > "$DRYUSER/sudoers.d/vouch"
 run_installer "$DRYUSER" --disable-prelaunch --dry-run >"$DRYUSER/ddry.log" 2>&1
-grep -Fq "DRY: remove $DRYUSER/sudoers.d/oshioki" "$DRYUSER/ddry.log" || fail "disable dry run omitted the drop-in removal"
-[ -f "$DRYUSER/sudoers.d/oshioki" ] || fail "disable dry run removed the drop-in"
+grep -Fq "DRY: remove $DRYUSER/sudoers.d/vouch" "$DRYUSER/ddry.log" || fail "disable dry run omitted the drop-in removal"
+[ -f "$DRYUSER/sudoers.d/vouch" ] || fail "disable dry run removed the drop-in"
 
 # No named user: the plugin still installs, passwords stay.
 NOUSER="$TEST_ROOT/no-sudo-user"; mkdir -p "$NOUSER/state"
 printf '{"version":1,"devices":[{"fingerprint":"x","active":true}]}\n' > "$NOUSER/state/devices.json"
 run_installer "$NOUSER" --prelaunch >"$NOUSER/log" 2>&1
 grep -Fq 'no laptop user' "$NOUSER/log" || fail "missing user skipped silently"
-grep -Fq '# BEGIN oshioki' "$NOUSER/sudo.conf" || fail "missing user blocked the plugin"
-[ ! -e "$NOUSER/sudoers.d/oshioki" ] || fail "missing user wrote a drop-in"
+grep -Fq '# BEGIN vouch' "$NOUSER/sudo.conf" || fail "missing user blocked the plugin"
+[ ! -e "$NOUSER/sudoers.d/vouch" ] || fail "missing user wrote a drop-in"
 
 # No includedir: the drop-in would be ignored, so it is not written.
 NOINCLUDE="$TEST_ROOT/no-includedir"; mkdir -p "$NOINCLUDE/state"
@@ -917,22 +917,22 @@ printf '{"version":1,"devices":[{"fingerprint":"x","active":true}]}\n' > "$NOINC
 printf '# sudoers without any include\n' > "$NOINCLUDE/sudoers"
 run_installer --sudo-user testuser "$NOINCLUDE" --prelaunch >"$NOINCLUDE/log" 2>&1 || fail "missing includedir blocked the plugin"
 grep -Fq 'includes no sudoers.d directory' "$NOINCLUDE/log" || fail "missing includedir skipped silently"
-grep -Fq '# BEGIN oshioki' "$NOINCLUDE/sudo.conf" || fail "missing includedir blocked the plugin"
-[ ! -e "$NOINCLUDE/sudoers.d/oshioki" ] || fail "missing includedir wrote a drop-in"
+grep -Fq '# BEGIN vouch' "$NOINCLUDE/sudo.conf" || fail "missing includedir blocked the plugin"
+[ ! -e "$NOINCLUDE/sudoers.d/vouch" ] || fail "missing includedir wrote a drop-in"
 
 # Explicit garbage fails closed.
 BADUSER="$TEST_ROOT/bad-sudo-user"; mkdir -p "$BADUSER/state"
 printf '{"version":1,"devices":[{"fingerprint":"x","active":true}]}\n' > "$BADUSER/state/devices.json"
 if run_installer --sudo-user 'bad user' "$BADUSER" --prelaunch >"$BADUSER/log" 2>&1; then fail "accepted invalid sudoers user"; fi
 grep -Fq 'invalid sudoers user' "$BADUSER/log" || fail "missing invalid user error"
-if grep -Fq '# BEGIN oshioki' "$BADUSER/sudo.conf"; then fail "invalid user left the plugin enabled"; fi
+if grep -Fq '# BEGIN vouch' "$BADUSER/sudo.conf"; then fail "invalid user left the plugin enabled"; fi
 
 # An empty registry removes a stale drop-in next to the skipped plugin.
 STALE="$TEST_ROOT/stale-dropin"; mkdir -p "$STALE/state" "$STALE/sudoers.d"
-printf 'staleuser ALL=(ALL) NOPASSWD: ALL\n' > "$STALE/sudoers.d/oshioki"
+printf 'staleuser ALL=(ALL) NOPASSWD: ALL\n' > "$STALE/sudoers.d/vouch"
 run_installer "$STALE" --prelaunch >"$STALE/log" 2>&1
 grep -Fq 'no active approval devices' "$STALE/log" || fail "stale drop-in enabled silently"
-[ ! -e "$STALE/sudoers.d/oshioki" ] || fail "empty registry left a stale drop-in"
+[ ! -e "$STALE/sudoers.d/vouch" ] || fail "empty registry left a stale drop-in"
 
 # A visudo rejection writes nothing and leaves the plugin as it was.
 VISUDOFAIL="$TEST_ROOT/visudo-fail"; mkdir -p "$VISUDOFAIL/state"
@@ -940,18 +940,18 @@ printf '{"version":1,"devices":[{"fingerprint":"x","active":true}]}\n' > "$VISUD
 printf '#includedir %s\n' "$VISUDOFAIL/sudoers.d" > "$VISUDOFAIL/sudoers"
 if FAIL_VISUDO=1 run_installer --sudo-user testuser "$VISUDOFAIL" --prelaunch >"$VISUDOFAIL/log" 2>&1; then fail "accepted visudo failure"; fi
 grep -Fq 'visudo rejected' "$VISUDOFAIL/log" || fail "missing visudo error"
-[ ! -e "$VISUDOFAIL/sudoers.d/oshioki" ] || fail "visudo failure left a drop-in"
-if grep -Fq '# BEGIN oshioki' "$VISUDOFAIL/sudo.conf"; then fail "visudo failure left the plugin enabled"; fi
+[ ! -e "$VISUDOFAIL/sudoers.d/vouch" ] || fail "visudo failure left a drop-in"
+if grep -Fq '# BEGIN vouch' "$VISUDOFAIL/sudo.conf"; then fail "visudo failure left the plugin enabled"; fi
 
 # A validation failure after install restores the prior drop-in too.
 RBDROPIN="$TEST_ROOT/rollback-dropin"; mkdir -p "$RBDROPIN/state" "$RBDROPIN/sudoers.d"
 printf '{"version":1,"devices":[{"fingerprint":"x","active":true}]}\n' > "$RBDROPIN/state/devices.json"
 printf '#includedir %s\n' "$RBDROPIN/sudoers.d" > "$RBDROPIN/sudoers"
-printf 'olduser ALL=(ALL) NOPASSWD: ALL\n' > "$RBDROPIN/sudoers.d/oshioki"
+printf 'olduser ALL=(ALL) NOPASSWD: ALL\n' > "$RBDROPIN/sudoers.d/vouch"
 printf 'original\n' > "$RBDROPIN/sudo.conf"
 if FAIL_SUDO=1 run_installer --sudo-user testuser "$RBDROPIN" --prelaunch >"$RBDROPIN/log" 2>&1; then fail "accepted sudo validation failure with drop-in"; fi
-grep -Fxq 'olduser ALL=(ALL) NOPASSWD: ALL' "$RBDROPIN/sudoers.d/oshioki" || fail "rollback did not restore the drop-in"
-if grep -Fq '# BEGIN oshioki' "$RBDROPIN/sudo.conf"; then fail "rollback did not restore sudo.conf"; fi
+grep -Fxq 'olduser ALL=(ALL) NOPASSWD: ALL' "$RBDROPIN/sudoers.d/vouch" || fail "rollback did not restore the drop-in"
+if grep -Fq '# BEGIN vouch' "$RBDROPIN/sudo.conf"; then fail "rollback did not restore sudo.conf"; fi
 
 # Re-running with an emptied registry removes the block as well as the
 # drop-in: an enabled plugin with no devices fails every sudo closed.
@@ -959,15 +959,15 @@ STALEBLOCK="$TEST_ROOT/stale-block"; mkdir -p "$STALEBLOCK/state"
 printf '{"version":1,"devices":[{"fingerprint":"x","active":true}]}\n' > "$STALEBLOCK/state/devices.json"
 printf '#includedir %s\n' "$STALEBLOCK/sudoers.d" > "$STALEBLOCK/sudoers"
 run_installer --sudo-user testuser "$STALEBLOCK" --prelaunch >"$STALEBLOCK/first.log" 2>&1
-grep -Fq '# BEGIN oshioki' "$STALEBLOCK/sudo.conf" || fail "setup did not enable the plugin"
-grep -Fxq 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL' "$STALEBLOCK/sudoers.d/oshioki" || fail "setup did not write the drop-in"
+grep -Fq '# BEGIN vouch' "$STALEBLOCK/sudo.conf" || fail "setup did not enable the plugin"
+grep -Fxq 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL' "$STALEBLOCK/sudoers.d/vouch" || fail "setup did not write the drop-in"
 printf '{"version":1,"devices":[]}\n' > "$STALEBLOCK/state/devices.json"
 run_installer --sudo-user testuser "$STALEBLOCK" --prelaunch --dry-run >"$STALEBLOCK/dry.log" 2>&1
 grep -Fq "DRY: remove exact managed block from $STALEBLOCK/sudo.conf" "$STALEBLOCK/dry.log" || fail "dry run did not predict the block removal"
 run_installer "$STALEBLOCK" --prelaunch >"$STALEBLOCK/second.log" 2>&1
 grep -Fq 'no active approval devices' "$STALEBLOCK/second.log" || fail "emptied registry re-enabled silently"
-if grep -Fq '# BEGIN oshioki' "$STALEBLOCK/sudo.conf"; then fail "emptied registry left the plugin enabled"; fi
-[ ! -e "$STALEBLOCK/sudoers.d/oshioki" ] || fail "emptied registry left the drop-in"
+if grep -Fq '# BEGIN vouch' "$STALEBLOCK/sudo.conf"; then fail "emptied registry left the plugin enabled"; fi
+[ ! -e "$STALEBLOCK/sudoers.d/vouch" ] || fail "emptied registry left the drop-in"
 if run_installer --sudo-user testuser "$STALEBLOCK" --prelaunch-status >/dev/null 2>&1; then fail "status accepted a removed plugin"; fi
 
 # A validation failure while removing the stale block restores the block
@@ -978,8 +978,8 @@ printf '#includedir %s\n' "$STALEBLOCKRB/sudoers.d" > "$STALEBLOCKRB/sudoers"
 run_installer --sudo-user testuser "$STALEBLOCKRB" --prelaunch >"$STALEBLOCKRB/first.log" 2>&1
 printf '{"version":1,"devices":[]}\n' > "$STALEBLOCKRB/state/devices.json"
 if FAIL_SUDO=1 run_installer "$STALEBLOCKRB" --prelaunch >"$STALEBLOCKRB/log" 2>&1; then fail "accepted sudo validation failure on stale removal"; fi
-grep -Fq '# BEGIN oshioki' "$STALEBLOCKRB/sudo.conf" || fail "rollback did not restore the stale block"
-grep -Fxq 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL' "$STALEBLOCKRB/sudoers.d/oshioki" || fail "rollback did not restore the stale drop-in"
+grep -Fq '# BEGIN vouch' "$STALEBLOCKRB/sudo.conf" || fail "rollback did not restore the stale block"
+grep -Fxq 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL' "$STALEBLOCKRB/sudoers.d/vouch" || fail "rollback did not restore the stale drop-in"
 
 UNSAFE="$TEST_ROOT/unsafe"; mkdir -p "$UNSAFE"; ln -s "$TEST_ROOT/elsewhere" "$UNSAFE/sudo.conf"
 if run_installer "$UNSAFE" --prelaunch >"$UNSAFE/log" 2>&1; then fail "accepted symlink sudo.conf"; fi
@@ -987,13 +987,13 @@ if run_installer "$UNSAFE" --prelaunch >"$UNSAFE/log" 2>&1; then fail "accepted 
 UNSAFE_STATE="$TEST_ROOT/unsafe-state"; mkdir -p "$UNSAFE_STATE/state"; ln -s "$TEST_ROOT/elsewhere" "$UNSAFE_STATE/state/devices.json"
 if run_installer "$UNSAFE_STATE" --prelaunch >"$UNSAFE_STATE/log" 2>&1; then fail "accepted symlink devices.json"; fi
 
-BAD_BLOCK="$TEST_ROOT/bad-block"; mkdir -p "$BAD_BLOCK"; printf '# END oshioki\n# BEGIN oshioki\n' > "$BAD_BLOCK/sudo.conf"
+BAD_BLOCK="$TEST_ROOT/bad-block"; mkdir -p "$BAD_BLOCK"; printf '# END vouch\n# BEGIN vouch\n' > "$BAD_BLOCK/sudo.conf"
 if run_installer "$BAD_BLOCK" --prelaunch >"$BAD_BLOCK/log" 2>&1; then fail "accepted reversed managed block"; fi
-[ ! -e "$BAD_BLOCK/sbin/oshioki" ] || fail "installed binaries before rejecting malformed block"
+[ ! -e "$BAD_BLOCK/sbin/vouch" ] || fail "installed binaries before rejecting malformed block"
 
 cp "$TEST_ROOT/service/target/release/SHA256SUMS" "$TEST_ROOT/service/target/release/SHA256SUMS.good"
 printf '0%.0s' {1..64} > "$TEST_ROOT/service/target/release/SHA256SUMS"
-printf '  oshioki\n' >> "$TEST_ROOT/service/target/release/SHA256SUMS"
+printf '  vouch\n' >> "$TEST_ROOT/service/target/release/SHA256SUMS"
 if run_installer "$TEST_ROOT/bad-checksum" --prelaunch >"$TEST_ROOT/bad-checksum.log" 2>&1; then fail "accepted checksum mismatch"; fi
 mv "$TEST_ROOT/service/target/release/SHA256SUMS.good" "$TEST_ROOT/service/target/release/SHA256SUMS"
 
@@ -1010,12 +1010,12 @@ if run_installer "$LOOP_STATE" --prelaunch >"$LOOP_STATE/log" 2>&1; then fail "a
 grep -Fq 'refusing unresolved symlink' "$LOOP_STATE/log" || fail "missing symlink loop error"
 
 LINKED_ARTIFACTS="$TEST_ROOT/linked-artifacts"; mkdir -p "$LINKED_ARTIFACTS"
-ln -s "$TEST_ROOT/service/target/release/oshioki" "$LINKED_ARTIFACTS/oshioki"
+ln -s "$TEST_ROOT/service/target/release/vouch" "$LINKED_ARTIFACTS/vouch"
 ln -s "$TEST_ROOT/service/target/release/$BUILD_PLUGIN" "$LINKED_ARTIFACTS/$BUILD_PLUGIN"
-HOOK_BIN="$LINKED_ARTIFACTS/oshioki" PLUGIN_BIN="$LINKED_ARTIFACTS/$BUILD_PLUGIN" \
+HOOK_BIN="$LINKED_ARTIFACTS/vouch" PLUGIN_BIN="$LINKED_ARTIFACTS/$BUILD_PLUGIN" \
   run_installer "$TEST_ROOT/linked-artifact-install" --prelaunch || fail "rejected symlinked build artifacts"
-[ -f "$TEST_ROOT/linked-artifact-install/sbin/oshioki" ] || fail "symlinked artifact install wrote no hook binary"
-[ ! -L "$TEST_ROOT/linked-artifact-install/sbin/oshioki" ] || fail "installed hook binary is a symlink"
+[ -f "$TEST_ROOT/linked-artifact-install/sbin/vouch" ] || fail "symlinked artifact install wrote no hook binary"
+[ ! -L "$TEST_ROOT/linked-artifact-install/sbin/vouch" ] || fail "installed hook binary is a symlink"
 
 STANDALONE="$TEST_ROOT/standalone"; run_installer "$STANDALONE" --standalone-e2e
 [ ! -e "$STANDALONE/sudoers.d" ] || fail "standalone created sudoers state"
@@ -1031,7 +1031,7 @@ STANDALONE="$TEST_ROOT/standalone"; run_installer "$STANDALONE" --standalone-e2e
 # =========================================================================
 PAM_LAYOUTS="$SCRIPT_DIR/../tests/pam-layouts"
 [ -d "$PAM_LAYOUTS" ] || fail "missing PAM layout fixtures at $PAM_LAYOUTS"
-PAM_AUTH_LINE='auth [success=done authinfo_unavail=ignore module_unknown=ignore ignore=ignore default=die] liboshioki_pam.so'
+PAM_AUTH_LINE='auth [success=done authinfo_unavail=ignore module_unknown=ignore ignore=ignore default=die] libvouch_pam.so'
 
 # Legacy host: plugin block, blanket rule, installed helper, an active
 # hardware device, and a stock PAM stack from the named fixture.
@@ -1043,8 +1043,8 @@ setup_legacy_host() {
   printf '#includedir %s\n' "$root/sudoers.d" > "$root/sudoers"
   run_installer --sudo-user testuser "$root" --prelaunch >"$root/legacy.log" 2>&1 ||
     fail "could not build the legacy state for $layout"
-  grep -Fq '# BEGIN oshioki' "$root/sudo.conf" || fail "legacy setup wrote no plugin block"
-  grep -Fxq 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL' "$root/sudoers.d/oshioki" ||
+  grep -Fq '# BEGIN vouch' "$root/sudo.conf" || fail "legacy setup wrote no plugin block"
+  grep -Fxq 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL' "$root/sudoers.d/vouch" ||
     fail "legacy setup wrote no blanket rule"
   cp "$PAM_LAYOUTS/$layout/pam.d/"* "$root/pam.d/"
   : > "$root/security/pam_unix.so"
@@ -1113,7 +1113,7 @@ for unsafe in foreign-owner group-writable world-writable symlink; do
     fail "contextual setup accepted $unsafe state"
   fi
   pam_unchanged "$UNSAFE_PAM" || fail "$unsafe state refusal changed PAM"
-  [ ! -e "$UNSAFE_PAM/security/liboshioki_pam.so" ] || fail "$unsafe state refusal installed module"
+  [ ! -e "$UNSAFE_PAM/security/libvouch_pam.so" ] || fail "$unsafe state refusal installed module"
   [ "$(sha256_file "$UNSAFE_PAM/state/devices.json")" = "$unsafe_hash" ] || fail "$unsafe state refusal changed registry"
   python3 -c 'import os,stat,sys; assert stat.S_IMODE(os.stat(sys.argv[1]).st_mode) == int(sys.argv[2], 8)' "$UNSAFE_PAM/state" "$mode"
 done
@@ -1129,21 +1129,21 @@ for layout in ubuntu-24.04 debian-12 debian-13; do
     { sed -n '1,40p' "$LAYOUT_ROOT/log" >&2; fail "$layout refused a stock stack"; }
   for service in sudo sudo-i; do
     edited="$LAYOUT_ROOT/pam.d/$service"
-    [ "$(grep -c '^# BEGIN oshioki pam$' "$edited")" -eq 1 ] || fail "$layout/$service block count"
-    [ "$(grep -c '^# END oshioki pam$' "$edited")" -eq 1 ] || fail "$layout/$service end marker count"
+    [ "$(grep -c '^# BEGIN vouch pam$' "$edited")" -eq 1 ] || fail "$layout/$service block count"
+    [ "$(grep -c '^# END vouch pam$' "$edited")" -eq 1 ] || fail "$layout/$service end marker count"
     grep -Fxq "$PAM_AUTH_LINE" "$edited" || fail "$layout/$service has no exact auth line"
-    [ "$(grep -A1 '^# END oshioki pam$' "$edited" | tail -1)" = '@include common-auth' ] ||
+    [ "$(grep -A1 '^# END vouch pam$' "$edited" | tail -1)" = '@include common-auth' ] ||
       fail "$layout/$service block is not immediately above @include common-auth"
-    sed '/^# BEGIN oshioki pam$/,/^# END oshioki pam$/d' "$edited" > "$LAYOUT_ROOT/stripped.$service"
+    sed '/^# BEGIN vouch pam$/,/^# END vouch pam$/d' "$edited" > "$LAYOUT_ROOT/stripped.$service"
     cmp -s "$LAYOUT_ROOT/stripped.$service" "$LAYOUT_ROOT/pristine/$service" ||
       fail "$layout/$service changed something other than the owned block"
   done
-  [ -f "$LAYOUT_ROOT/security/liboshioki_pam.so" ] || fail "$layout installed no module"
+  [ -f "$LAYOUT_ROOT/security/libvouch_pam.so" ] || fail "$layout installed no module"
   # The legacy lane is retired in the same run: no double-authentication
   # window, and no blanket NOPASSWD rule left behind either.
-  if grep -Fq '# BEGIN oshioki' "$LAYOUT_ROOT/sudo.conf"; then fail "$layout left the legacy plugin"; fi
-  [ ! -e "$LAYOUT_ROOT/sudoers.d/oshioki" ] || fail "$layout left the blanket rule"
-  if grep -Fq liboshioki_pam "$LAYOUT_ROOT/pam.d/common-auth"; then fail "$layout leaked into common-auth"; fi
+  if grep -Fq '# BEGIN vouch' "$LAYOUT_ROOT/sudo.conf"; then fail "$layout left the legacy plugin"; fi
+  [ ! -e "$LAYOUT_ROOT/sudoers.d/vouch" ] || fail "$layout left the blanket rule"
+  if grep -Fq libvouch_pam "$LAYOUT_ROOT/pam.d/common-auth"; then fail "$layout leaked into common-auth"; fi
 done
 
 # Idempotency: a second run converges on the same bytes rather than stacking
@@ -1156,7 +1156,7 @@ cp "$IDEMPOTENT/pam.d/sudo" "$IDEMPOTENT/after-first"
 run_installer --sudo-user testuser "$IDEMPOTENT" --contextual-pam >"$IDEMPOTENT/second.log" 2>&1 ||
   fail "a re-run of --contextual-pam failed"
 cmp -s "$IDEMPOTENT/after-first" "$IDEMPOTENT/pam.d/sudo" || fail "a re-run changed /etc/pam.d/sudo"
-[ "$(grep -c '^# BEGIN oshioki pam$' "$IDEMPOTENT/pam.d/sudo")" -eq 1 ] || fail "a re-run duplicated the block"
+[ "$(grep -c '^# BEGIN vouch pam$' "$IDEMPOTENT/pam.d/sudo")" -eq 1 ] || fail "a re-run duplicated the block"
 
 # `sudo-i` as `@include sudo` inherits the edit: skipped, never edited twice.
 INHERIT="$TEST_ROOT/pam-inherit"
@@ -1182,10 +1182,10 @@ for layout in refuse-extra-auth refuse-faillock refuse-two-common-auth refuse-fo
   fi
   grep -Fq 'refusing a customised PAM stack' "$REFUSE_ROOT/log" || fail "$layout refusal was not explained"
   pam_unchanged "$REFUSE_ROOT" || fail "$layout refusal modified a PAM file"
-  [ ! -e "$REFUSE_ROOT/security/liboshioki_pam.so" ] || fail "$layout refusal installed the module"
+  [ ! -e "$REFUSE_ROOT/security/libvouch_pam.so" ] || fail "$layout refusal installed the module"
   # A refusal is total: the legacy lane it would have replaced is still there.
-  grep -Fq '# BEGIN oshioki' "$REFUSE_ROOT/sudo.conf" || fail "$layout refusal removed the legacy plugin"
-  grep -Fxq 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL' "$REFUSE_ROOT/sudoers.d/oshioki" ||
+  grep -Fq '# BEGIN vouch' "$REFUSE_ROOT/sudo.conf" || fail "$layout refusal removed the legacy plugin"
+  grep -Fxq 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL' "$REFUSE_ROOT/sudoers.d/vouch" ||
     fail "$layout refusal removed the blanket rule"
 done
 
@@ -1205,7 +1205,7 @@ pam_unchanged "$NOUNIX" || fail "the pam_unix.so refusal modified a PAM file"
 MULTIARCH="$TEST_ROOT/pam-multiarch"
 setup_legacy_host "$MULTIARCH" ubuntu-24.04
 printf 'sparc64-linux-gnu\n' > "$MULTIARCH/pam-multiarch"
-if OSHIOKI_PAM_MULTIARCH="$MULTIARCH/pam-multiarch" \
+if VOUCH_PAM_MULTIARCH="$MULTIARCH/pam-multiarch" \
    run_installer --sudo-user testuser "$MULTIARCH" --contextual-pam >"$MULTIARCH/log" 2>&1; then
   fail "accepted a multiarch mismatch"
 fi
@@ -1226,9 +1226,9 @@ python3 -c 'import os,stat,sys; assert stat.S_IMODE(os.stat(sys.argv[1]).st_mode
 grep -Fq 'no active hardware-backed approval device yet' "$NODEVICE/log" || fail "missing device skip message"
 grep -Fq -- '--contextual-pam' "$NODEVICE/log" || fail "the skip does not name the command to re-run"
 pam_unchanged "$NODEVICE" || fail "the device skip modified a PAM file"
-[ ! -e "$NODEVICE/security/liboshioki_pam.so" ] || fail "the device skip installed the module"
-grep -Fq '# BEGIN oshioki' "$NODEVICE/sudo.conf" || fail "the device skip removed the legacy plugin"
-[ -e "$NODEVICE/sudoers.d/oshioki" ] || fail "the device skip removed the blanket rule"
+[ ! -e "$NODEVICE/security/libvouch_pam.so" ] || fail "the device skip installed the module"
+grep -Fq '# BEGIN vouch' "$NODEVICE/sudo.conf" || fail "the device skip removed the legacy plugin"
+[ -e "$NODEVICE/sudoers.d/vouch" ] || fail "the device skip removed the blanket rule"
 
 # A checksum that does not match the manifest never reaches the host.
 BADSUM="$TEST_ROOT/pam-bad-checksum"
@@ -1251,7 +1251,7 @@ assert_rollback_chain() {
     fail "$label: no PAM restore in the trace"
   local pam_line module_line plugin_line dropin_line
   pam_line="$(grep -n '^pam:rollback:restored:.*/pam.d/sudo$' "$trace" | head -1 | cut -d: -f1)"
-  module_line="$(grep -n '^pam:rollback:restored:.*/liboshioki_pam\.' "$trace" | head -1 | cut -d: -f1)"
+  module_line="$(grep -n '^pam:rollback:restored:.*/libvouch_pam\.' "$trace" | head -1 | cut -d: -f1)"
   plugin_line="$(grep -n '^pam:rollback:plugin-restored:' "$trace" | head -1 | cut -d: -f1)"
   dropin_line="$(grep -n '^pam:rollback:dropin-restored:' "$trace" | head -1 | cut -d: -f1)"
   [ -n "$module_line" ] || fail "$label: the module was not rolled back"
@@ -1264,9 +1264,9 @@ assert_rollback_chain() {
 assert_legacy_restored() {
   local root="$1" label="$2"
   pam_unchanged "$root" || fail "$label: a PAM file was left edited"
-  [ ! -e "$root/security/liboshioki_pam.so" ] || fail "$label: the module was left installed"
-  grep -Fq '# BEGIN oshioki' "$root/sudo.conf" || fail "$label: the legacy plugin was not restored"
-  grep -Fxq 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL' "$root/sudoers.d/oshioki" ||
+  [ ! -e "$root/security/libvouch_pam.so" ] || fail "$label: the module was left installed"
+  grep -Fq '# BEGIN vouch' "$root/sudo.conf" || fail "$label: the legacy plugin was not restored"
+  grep -Fxq 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL' "$root/sudoers.d/vouch" ||
     fail "$label: the blanket rule was not restored"
 }
 
@@ -1283,12 +1283,12 @@ for service in sudo sudo-i; do
   grep -Fxq "$PAM_AUTH_LINE" "$COMMIT_INTERRUPT/pam.d/$service" ||
     fail "commit-window signal removed the contextual PAM block from $service"
 done
-[ -f "$COMMIT_INTERRUPT/security/liboshioki_pam.so" ] ||
+[ -f "$COMMIT_INTERRUPT/security/libvouch_pam.so" ] ||
   fail "commit-window signal removed the contextual PAM module"
-if grep -Fq '# BEGIN oshioki' "$COMMIT_INTERRUPT/sudo.conf"; then
+if grep -Fq '# BEGIN vouch' "$COMMIT_INTERRUPT/sudo.conf"; then
   fail "commit-window signal restored the legacy approval plugin"
 fi
-[ ! -e "$COMMIT_INTERRUPT/sudoers.d/oshioki" ] ||
+[ ! -e "$COMMIT_INTERRUPT/sudoers.d/vouch" ] ||
   fail "commit-window signal restored the legacy blanket rule"
 
 # Step 4: the module copy fails. Nothing referenced it, so only the two
@@ -1353,8 +1353,8 @@ if FAKE_SUDO_PLUGIN_UNLOADED=1 FAIL_SUDO_ON_CALL=2 \
   fail "unloaded plugin: a failed post-edit sudo -V reported success"
 fi
 pam_unchanged "$FAULT_NOPROOF" || fail "unloaded plugin: a PAM file was left edited"
-grep -Fq '# BEGIN oshioki' "$FAULT_NOPROOF/sudo.conf" || fail "unloaded plugin: sudo.conf was not restored"
-[ ! -e "$FAULT_NOPROOF/sudoers.d/oshioki" ] || fail "unloaded plugin: rollback restored the passwordless rule"
+grep -Fq '# BEGIN vouch' "$FAULT_NOPROOF/sudo.conf" || fail "unloaded plugin: sudo.conf was not restored"
+[ ! -e "$FAULT_NOPROOF/sudoers.d/vouch" ] || fail "unloaded plugin: rollback restored the passwordless rule"
 grep -Fq 'rollback is not restoring' "$FAULT_NOPROOF/log" || fail "unloaded plugin: rollback did not explain the missing rule"
 
 # A signal between the two PAM edits runs the same chain through the EXIT
@@ -1373,7 +1373,7 @@ assert_legacy_restored "$FAULT_SIGNAL" 'TERM between edits'
 # installer cannot abort or signal the migration.
 NO_FAULT_OPTIN="$TEST_ROOT/pam-fault-optin-absent"
 setup_legacy_host "$NO_FAULT_OPTIN" ubuntu-24.04
-OSHIOKI_INSTALL_FAULT_INJECTION=0 INSTALL_TRACE="$NO_FAULT_OPTIN/trace" \
+VOUCH_INSTALL_FAULT_INJECTION=0 INSTALL_TRACE="$NO_FAULT_OPTIN/trace" \
   FAIL_PAM_MODULE_INSTALL=1 FAIL_PAM_SELFTEST=1 FAIL_PAM_EDIT=sudo SIGNAL_AFTER_PAM_EDIT=1 \
   run_installer --sudo-user testuser "$NO_FAULT_OPTIN" --contextual-pam \
   >"$NO_FAULT_OPTIN/log" 2>&1 ||
@@ -1393,7 +1393,7 @@ unlink_line="$(grep -n '^pam:disable:module-removed:' "$DISABLE/trace" | head -1
 [ -n "$edit_line" ] || fail "disable trace has no PAM edit step"
 [ -n "$unlink_line" ] || fail "disable trace has no module removal step"
 [ "$edit_line" -lt "$unlink_line" ] || fail "the module was unlinked before the PAM entries were removed"
-[ ! -e "$DISABLE/security/liboshioki_pam.so" ] || fail "disable left the module installed"
+[ ! -e "$DISABLE/security/libvouch_pam.so" ] || fail "disable left the module installed"
 for service in sudo sudo-i; do
   cmp -s "$DISABLE/pristine/$service" "$DISABLE/pam.d/$service" ||
     fail "disable did not restore a stock-identical $service"
@@ -1412,7 +1412,7 @@ if INSTALL_TRACE="$DISABLE_FAIL/trace" run_installer "$DISABLE_FAIL" --disable-c
   fail "a failed PAM edit during disable reported success"
 fi
 chmod 0755 "$DISABLE_FAIL/pam.d"
-[ -f "$DISABLE_FAIL/security/liboshioki_pam.so" ] ||
+[ -f "$DISABLE_FAIL/security/libvouch_pam.so" ] ||
   fail "a failed PAM edit during disable removed the module anyway"
 if grep -q '^pam:disable:module-removed:' "$DISABLE_FAIL/trace" 2>/dev/null; then
   fail "the module was unlinked despite a failed PAM edit"
@@ -1427,7 +1427,7 @@ run_installer --sudo-user testuser "$DISABLE_NOCONF" --contextual-pam >"$DISABLE
 rm -f "$DISABLE_NOCONF/sudo.conf"
 run_installer "$DISABLE_NOCONF" --disable-contextual-pam >"$DISABLE_NOCONF/log" 2>&1 ||
   fail "--disable-contextual-pam failed without sudo.conf"
-[ ! -e "$DISABLE_NOCONF/security/liboshioki_pam.so" ] || fail "sudo.conf-less disable left the module"
+[ ! -e "$DISABLE_NOCONF/security/libvouch_pam.so" ] || fail "sudo.conf-less disable left the module"
 
 # --- status ---------------------------------------------------------------
 STATUS="$TEST_ROOT/pam-status"
@@ -1453,7 +1453,7 @@ grep -q '^OK    legacy artifacts: none' "$STATUS/after.log" || fail "status lega
 
 # The degraded state `module_unknown=ignore` exists for: the entry is there,
 # the module is not. Status must say so rather than report enabled.
-rm -f "$STATUS/security/liboshioki_pam.so"
+rm -f "$STATUS/security/libvouch_pam.so"
 if run_installer --sudo-user testuser "$STATUS" --contextual-pam-status >"$STATUS/gone.log" 2>&1; then
   fail "status reported OK with the module file removed"
 fi
@@ -1485,16 +1485,16 @@ grep -q 'sudo-i=inherited-via-include' "$STATUS_INHERIT/log" || fail "status did
 # migration must never start and status must say the helper is bad.
 NOEXEC_HELPER="$TEST_ROOT/pam-helper-noexec"
 setup_legacy_host "$NOEXEC_HELPER" ubuntu-24.04
-if FAKE_STAT_SPECIAL_PATH="$NOEXEC_HELPER/sbin/oshioki" FAKE_STAT_SPECIAL_MODE=644 \
+if FAKE_STAT_SPECIAL_PATH="$NOEXEC_HELPER/sbin/vouch" FAKE_STAT_SPECIAL_MODE=644 \
    run_installer --sudo-user testuser "$NOEXEC_HELPER" --contextual-pam >"$NOEXEC_HELPER/log" 2>&1; then
   fail "accepted a non-executable helper"
 fi
 grep -Fq 'is missing, not executable, or on an unsafe path' "$NOEXEC_HELPER/log" ||
   fail "non-executable helper refusal was not explained"
-[ ! -e "$NOEXEC_HELPER/security/liboshioki_pam.so" ] ||
+[ ! -e "$NOEXEC_HELPER/security/libvouch_pam.so" ] ||
   fail "non-executable helper refusal installed a module"
 pam_unchanged "$NOEXEC_HELPER" || fail "non-executable helper refusal changed a PAM file"
-if FAKE_STAT_SPECIAL_PATH="$NOEXEC_HELPER/sbin/oshioki" FAKE_STAT_SPECIAL_MODE=644 \
+if FAKE_STAT_SPECIAL_PATH="$NOEXEC_HELPER/sbin/vouch" FAKE_STAT_SPECIAL_MODE=644 \
    run_installer --sudo-user testuser "$NOEXEC_HELPER" --contextual-pam-status >"$NOEXEC_HELPER/status.log" 2>&1; then
   fail "status reported OK with a non-executable helper"
 fi
@@ -1506,18 +1506,18 @@ DRY="$TEST_ROOT/pam-dry"
 setup_legacy_host "$DRY" ubuntu-24.04
 run_installer --sudo-user testuser "$DRY" --contextual-pam --dry-run >"$DRY/log" 2>&1 ||
   fail "the contextual dry run failed"
-grep -Fq "DRY: remove $DRY/sudoers.d/oshioki" "$DRY/log" || fail "dry run did not plan the blanket rule removal"
-grep -Fq "DRY: remove the managed Oshioki plugin block from $DRY/sudo.conf" "$DRY/log" ||
+grep -Fq "DRY: remove $DRY/sudoers.d/vouch" "$DRY/log" || fail "dry run did not plan the blanket rule removal"
+grep -Fq "DRY: remove the managed Vouch plugin block from $DRY/sudo.conf" "$DRY/log" ||
   fail "dry run did not plan the plugin removal"
 grep -Fq "DRY: install " "$DRY/log" || fail "dry run did not plan the module install"
-grep -Fq "DRY: insert the exact oshioki pam block into $DRY/pam.d/sudo" "$DRY/log" ||
+grep -Fq "DRY: insert the exact vouch pam block into $DRY/pam.d/sudo" "$DRY/log" ||
   fail "dry run did not plan the sudo edit"
-grep -Fq "DRY: insert the exact oshioki pam block into $DRY/pam.d/sudo-i" "$DRY/log" ||
+grep -Fq "DRY: insert the exact vouch pam block into $DRY/pam.d/sudo-i" "$DRY/log" ||
   fail "dry run did not plan the sudo-i edit"
 pam_unchanged "$DRY" || fail "the dry run edited a PAM file"
-[ ! -e "$DRY/security/liboshioki_pam.so" ] || fail "the dry run installed the module"
-grep -Fq '# BEGIN oshioki' "$DRY/sudo.conf" || fail "the dry run removed the legacy plugin"
-[ -e "$DRY/sudoers.d/oshioki" ] || fail "the dry run removed the blanket rule"
+[ ! -e "$DRY/security/libvouch_pam.so" ] || fail "the dry run installed the module"
+grep -Fq '# BEGIN vouch' "$DRY/sudo.conf" || fail "the dry run removed the legacy plugin"
+[ -e "$DRY/sudoers.d/vouch" ] || fail "the dry run removed the blanket rule"
 
 DRY_DISABLE="$TEST_ROOT/pam-dry-disable"
 setup_legacy_host "$DRY_DISABLE" ubuntu-24.04
@@ -1525,12 +1525,12 @@ run_installer --sudo-user testuser "$DRY_DISABLE" --contextual-pam >"$DRY_DISABL
   fail "dry-disable setup could not install"
 run_installer "$DRY_DISABLE" --disable-contextual-pam --dry-run >"$DRY_DISABLE/log" 2>&1 ||
   fail "the disable dry run failed"
-grep -Fq "DRY: remove the exact oshioki pam block from $DRY_DISABLE/pam.d/sudo" "$DRY_DISABLE/log" ||
+grep -Fq "DRY: remove the exact vouch pam block from $DRY_DISABLE/pam.d/sudo" "$DRY_DISABLE/log" ||
   fail "disable dry run did not plan the sudo edit"
-grep -Fq "DRY: remove $DRY_DISABLE/security/liboshioki_pam.so" "$DRY_DISABLE/log" ||
+grep -Fq "DRY: remove $DRY_DISABLE/security/libvouch_pam.so" "$DRY_DISABLE/log" ||
   fail "disable dry run did not plan the module removal"
 grep -Fxq "$PAM_AUTH_LINE" "$DRY_DISABLE/pam.d/sudo" || fail "the disable dry run edited a PAM file"
-[ -f "$DRY_DISABLE/security/liboshioki_pam.so" ] || fail "the disable dry run removed the module"
+[ -f "$DRY_DISABLE/security/libvouch_pam.so" ] || fail "the disable dry run removed the module"
 
 # --- upgrade paths on an already-migrated host ---------------------------
 # `apt upgrade` re-runs postinst, which re-runs --prelaunch. On a migrated
@@ -1544,43 +1544,43 @@ run_installer --sudo-user testuser "$REPRELAUNCH" --contextual-pam >"$REPRELAUNC
 mkdir -p "$REPRELAUNCH/migrated"
 cp "$REPRELAUNCH/pam.d/"* "$REPRELAUNCH/migrated/"
 # Proof that the artifacts really are reinstalled rather than skipped.
-rm -f "$REPRELAUNCH/sbin/oshioki" "$REPRELAUNCH/state/config.env"
+rm -f "$REPRELAUNCH/sbin/vouch" "$REPRELAUNCH/state/config.env"
 run_installer --sudo-user testuser "$REPRELAUNCH" --prelaunch >"$REPRELAUNCH/log" 2>&1 ||
   { sed -n '1,40p' "$REPRELAUNCH/log" >&2; fail "prelaunch failed on a migrated host"; }
 grep -Fq 'this host is on the contextual PAM lane' "$REPRELAUNCH/log" ||
   fail "prelaunch on a migrated host did not say why it withheld the plugin lane"
-[ -x "$REPRELAUNCH/sbin/oshioki" ] || fail "prelaunch on a migrated host did not reinstall the hook"
+[ -x "$REPRELAUNCH/sbin/vouch" ] || fail "prelaunch on a migrated host did not reinstall the hook"
 [ -f "$REPRELAUNCH/state/config.env" ] || fail "prelaunch on a migrated host did not rewrite config.env"
-if grep -Fq '# BEGIN oshioki' "$REPRELAUNCH/sudo.conf"; then
+if grep -Fq '# BEGIN vouch' "$REPRELAUNCH/sudo.conf"; then
   fail "prelaunch on a migrated host re-enabled the approval plugin"
 fi
-[ ! -e "$REPRELAUNCH/sudoers.d/oshioki" ] ||
+[ ! -e "$REPRELAUNCH/sudoers.d/vouch" ] ||
   fail "prelaunch on a migrated host re-installed the blanket NOPASSWD rule"
 for service in sudo sudo-i; do
   cmp -s "$REPRELAUNCH/migrated/$service" "$REPRELAUNCH/pam.d/$service" ||
     fail "prelaunch on a migrated host changed $service"
 done
-[ -f "$REPRELAUNCH/security/liboshioki_pam.so" ] || fail "prelaunch on a migrated host removed the module"
+[ -f "$REPRELAUNCH/security/libvouch_pam.so" ] || fail "prelaunch on a migrated host removed the module"
 # The dry run says the same thing and writes nothing.
 run_installer --sudo-user testuser "$REPRELAUNCH" --prelaunch --dry-run >"$REPRELAUNCH/dry.log" 2>&1 ||
   fail "the prelaunch dry run failed on a migrated host"
 grep -Fq 'DRY: skip enabling' "$REPRELAUNCH/dry.log" ||
   fail "the prelaunch dry run did not plan to skip the plugin lane"
-[ ! -e "$REPRELAUNCH/sudoers.d/oshioki" ] || fail "the prelaunch dry run wrote the blanket rule"
+[ ! -e "$REPRELAUNCH/sudoers.d/vouch" ] || fail "the prelaunch dry run wrote the blanket rule"
 
 # Crash litter is not a lane. A `sudo.XXXXXX` left behind by an interrupted
 # edit carries the whole block, and counting it would withhold the plugin
 # lane from that host forever.
 LITTER="$TEST_ROOT/pam-litter-not-a-lane"
 setup_legacy_host "$LITTER" ubuntu-24.04
-printf '%s\n' '# BEGIN oshioki pam' "$PAM_AUTH_LINE" '# END oshioki pam' > "$LITTER/pam.d/sudo.AbCdEf"
+printf '%s\n' '# BEGIN vouch pam' "$PAM_AUTH_LINE" '# END vouch pam' > "$LITTER/pam.d/sudo.AbCdEf"
 run_installer --sudo-user testuser "$LITTER" --prelaunch >"$LITTER/log" 2>&1 ||
   { sed -n '1,40p' "$LITTER/log" >&2; fail "prelaunch failed on a host with PAM edit litter"; }
 if grep -Fq 'this host is on the contextual PAM lane' "$LITTER/log"; then
   fail "a leftover sudo.XXXXXX file was counted as a live PAM lane"
 fi
-grep -Fq '# BEGIN oshioki' "$LITTER/sudo.conf" || fail "litter host: the plugin block was not enabled"
-grep -Fxq 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL' "$LITTER/sudoers.d/oshioki" ||
+grep -Fq '# BEGIN vouch' "$LITTER/sudo.conf" || fail "litter host: the plugin block was not enabled"
+grep -Fxq 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL' "$LITTER/sudoers.d/vouch" ||
   fail "litter host: the blanket rule was not installed"
 
 # The registry's three "not yet" shapes are distinguished, and a corrupt one
@@ -1641,7 +1641,7 @@ printf 'fake pam module v3\n' > "$REFRESH/v3/$PAM_MODULE_ARTIFACT"
 printf '%s  %s\n' "$(sha256_file "$REFRESH/v3/$PAM_MODULE_ARTIFACT")" "$PAM_MODULE_ARTIFACT" > "$REFRESH/v3/SHA256SUMS"
 refresh_module="$REFRESH/security/$PAM_MODULE_ARTIFACT"
 
-OSHIOKI_CHECKSUMS="$REFRESH/v2/SHA256SUMS" PAM_MODULE_BIN="$REFRESH/v2/$PAM_MODULE_ARTIFACT" \
+VOUCH_CHECKSUMS="$REFRESH/v2/SHA256SUMS" PAM_MODULE_BIN="$REFRESH/v2/$PAM_MODULE_ARTIFACT" \
   run_installer --sudo-user testuser "$REFRESH" --contextual-pam >"$REFRESH/refresh.log" 2>&1 ||
   { sed -n '1,40p' "$REFRESH/refresh.log" >&2; fail "the module refresh failed"; }
 grep -Fq 'contextual PAM module refreshed' "$REFRESH/refresh.log" || fail "the refresh did not report itself"
@@ -1649,37 +1649,37 @@ cmp -s "$REFRESH/v2/$PAM_MODULE_ARTIFACT" "$refresh_module" || fail "the refresh
 for service in sudo sudo-i; do
   cmp -s "$REFRESH/migrated/$service" "$REFRESH/pam.d/$service" || fail "the refresh changed $service"
 done
-[ ! -e "$refresh_module.oshioki-new" ] || fail "the refresh left its staged module behind"
-[ ! -e "$refresh_module.oshioki-previous" ] || fail "the refresh left its backup behind"
+[ ! -e "$refresh_module.vouch-new" ] || fail "the refresh left its staged module behind"
+[ ! -e "$refresh_module.vouch-previous" ] || fail "the refresh left its backup behind"
 
 # Re-running with the same module is a no-op that still exits 0.
-OSHIOKI_CHECKSUMS="$REFRESH/v2/SHA256SUMS" PAM_MODULE_BIN="$REFRESH/v2/$PAM_MODULE_ARTIFACT" \
+VOUCH_CHECKSUMS="$REFRESH/v2/SHA256SUMS" PAM_MODULE_BIN="$REFRESH/v2/$PAM_MODULE_ARTIFACT" \
   run_installer --sudo-user testuser "$REFRESH" --contextual-pam >"$REFRESH/again.log" 2>&1 ||
   fail "a second refresh with an unchanged module failed"
 grep -Fq 'already current' "$REFRESH/again.log" || fail "an unchanged module was not reported as current"
 
 # A staged module that does not load never reaches the live path.
-if OSHIOKI_CHECKSUMS="$REFRESH/v3/SHA256SUMS" PAM_MODULE_BIN="$REFRESH/v3/$PAM_MODULE_ARTIFACT" \
+if VOUCH_CHECKSUMS="$REFRESH/v3/SHA256SUMS" PAM_MODULE_BIN="$REFRESH/v3/$PAM_MODULE_ARTIFACT" \
    FAIL_PAM_SELFTEST=1 \
    run_installer --sudo-user testuser "$REFRESH" --contextual-pam >"$REFRESH/selftest.log" 2>&1; then
   fail "a refresh whose self-test failed reported success"
 fi
 grep -Fq 'is unchanged' "$REFRESH/selftest.log" || fail "the failed refresh did not say the module is unchanged"
 cmp -s "$REFRESH/v2/$PAM_MODULE_ARTIFACT" "$refresh_module" || fail "the failed refresh replaced the module"
-[ ! -e "$refresh_module.oshioki-new" ] || fail "the failed refresh left its staged module behind"
+[ ! -e "$refresh_module.vouch-new" ] || fail "the failed refresh left its staged module behind"
 for service in sudo sudo-i; do
   cmp -s "$REFRESH/migrated/$service" "$REFRESH/pam.d/$service" || fail "the failed refresh changed $service"
 done
 
 # Disable sweeps the refresh staging names too: nothing ever references
 # them, and one left by an interrupted refresh is a stray copy of the module.
-printf 'stray\n' > "$refresh_module.oshioki-new"
-printf 'stray\n' > "$refresh_module.oshioki-previous"
+printf 'stray\n' > "$refresh_module.vouch-new"
+printf 'stray\n' > "$refresh_module.vouch-previous"
 run_installer "$REFRESH" --disable-contextual-pam >"$REFRESH/disable.log" 2>&1 ||
   { sed -n '1,40p' "$REFRESH/disable.log" >&2; fail "disable failed on the refresh host"; }
 [ ! -e "$refresh_module" ] || fail "disable left the module"
-[ ! -e "$refresh_module.oshioki-new" ] || fail "disable left a staged module"
-[ ! -e "$refresh_module.oshioki-previous" ] || fail "disable left a module backup"
+[ ! -e "$refresh_module.vouch-new" ] || fail "disable left a staged module"
+[ ! -e "$refresh_module.vouch-previous" ] || fail "disable left a module backup"
 
 # Two modes at once is still rejected.
 if run_installer "$TEST_ROOT/pam-two-modes" --contextual-pam --prelaunch >"$TEST_ROOT/pam-two-modes.log" 2>&1; then
@@ -1695,9 +1695,9 @@ setup_legacy_host "$INDENTED" indented-include
 run_installer --sudo-user testuser "$INDENTED" --contextual-pam >"$INDENTED/log" 2>&1 ||
   { sed -n '1,40p' "$INDENTED/log" >&2; fail "an indented @include common-auth was refused"; }
 grep -Fxq "$PAM_AUTH_LINE" "$INDENTED/pam.d/sudo" || fail "indented include: no exact auth line"
-[ "$(grep -A1 '^# END oshioki pam$' "$INDENTED/pam.d/sudo" | tail -1)" = '  @include common-auth' ] ||
+[ "$(grep -A1 '^# END vouch pam$' "$INDENTED/pam.d/sudo" | tail -1)" = '  @include common-auth' ] ||
   fail "indented include: the block is not immediately above the include"
-sed '/^# BEGIN oshioki pam$/,/^# END oshioki pam$/d' "$INDENTED/pam.d/sudo" > "$INDENTED/stripped"
+sed '/^# BEGIN vouch pam$/,/^# END vouch pam$/d' "$INDENTED/pam.d/sudo" > "$INDENTED/stripped"
 cmp -s "$INDENTED/stripped" "$INDENTED/pristine/sudo" || fail "indented include: changed something else"
 
 # A file with no trailing newline must round-trip byte-identically; awk's
@@ -1752,7 +1752,7 @@ fi
 grep -Fq 'not root-owned and not writable by others' "$LOOSEDIR/log" ||
   fail "the world-writable security directory refusal was not explained"
 pam_unchanged "$LOOSEDIR" || fail "the world-writable refusal modified a PAM file"
-[ ! -e "$LOOSEDIR/loose/security/liboshioki_pam.so" ] ||
+[ ! -e "$LOOSEDIR/loose/security/libvouch_pam.so" ] ||
   fail "the world-writable refusal installed the module anyway"
 # The same check must not reject the ordinary case.
 [ -f "$LOOSEDIR/security/pam_unix.so" ] || fail "loose-dir fixture lost its pam_unix.so"
@@ -1767,7 +1767,7 @@ run_installer --sudo-user testuser "$NOMANIFEST" --contextual-pam >"$NOMANIFEST/
 run_installer --sudo-user testuser "$NOMANIFEST" --contextual-pam-status >"$NOMANIFEST/with.log" 2>&1 ||
   fail "status failed with a manifest present"
 grep -q '^OK    module: .*sha256 matches' "$NOMANIFEST/with.log" || fail "status did not verify against the manifest"
-if OSHIOKI_CHECKSUMS="$NOMANIFEST/absent-manifest" \
+if VOUCH_CHECKSUMS="$NOMANIFEST/absent-manifest" \
    run_installer --sudo-user testuser "$NOMANIFEST" --contextual-pam-status >"$NOMANIFEST/without.log" 2>&1; then
   fail "status exited 0 without verifying the module"
 fi
@@ -1777,32 +1777,32 @@ grep -q '^FAIL  module: .*no SHA256SUMS manifest was found' "$NOMANIFEST/without
 # A Homebrew keg reached through its PATH symlink. `pwd -P` on the dirname
 # resolves symlinked directories only, so before the fix SCRIPT_DIR became
 # the fake /opt/homebrew/bin and neither the install nor the status lane
-# could find the keg's libexec/SHA256SUMS without an OSHIOKI_CHECKSUMS
+# could find the keg's libexec/SHA256SUMS without an VOUCH_CHECKSUMS
 # override (issue #91).
 KEG_HOST="$TEST_ROOT/pam-brew-keg"
-KEG="$TEST_ROOT/brew-keg/Cellar/oshioki/0.1.8"
+KEG="$TEST_ROOT/brew-keg/Cellar/vouch/0.1.8"
 mkdir -p "$KEG/bin" "$KEG/libexec" "$TEST_ROOT/brew-keg/bin"
-cp "$TEST_ROOT/service/scripts/install-oshioki-hook" "$KEG/bin/"
-chmod 0755 "$KEG/bin/install-oshioki-hook"
-cp "$TEST_ROOT/service/target/release/oshioki" \
+cp "$TEST_ROOT/service/scripts/install-vouch-hook" "$KEG/bin/"
+chmod 0755 "$KEG/bin/install-vouch-hook"
+cp "$TEST_ROOT/service/target/release/vouch" \
    "$TEST_ROOT/service/target/release/$BUILD_PLUGIN" \
    "$TEST_ROOT/service/target/release/$PAM_MODULE_ARTIFACT" "$KEG/libexec/"
 (
   cd "$KEG/libexec"
-  printf '%s  oshioki\n' "$(sha256_file oshioki)" > SHA256SUMS
+  printf '%s  vouch\n' "$(sha256_file vouch)" > SHA256SUMS
   printf '%s  %s\n' "$(sha256_file "$BUILD_PLUGIN")" "$BUILD_PLUGIN" >> SHA256SUMS
   printf '%s  %s\n' "$(sha256_file "$PAM_MODULE_ARTIFACT")" "$PAM_MODULE_ARTIFACT" >> SHA256SUMS
 )
 # Relative, like Homebrew's own bin links, so the walk has to join it to the
 # link's own directory instead of treating it as absolute.
-ln -s "../Cellar/oshioki/0.1.8/bin/install-oshioki-hook" \
-  "$TEST_ROOT/brew-keg/bin/install-oshioki-hook"
-KEG_INSTALLER="$TEST_ROOT/brew-keg/bin/install-oshioki-hook"
+ln -s "../Cellar/vouch/0.1.8/bin/install-vouch-hook" \
+  "$TEST_ROOT/brew-keg/bin/install-vouch-hook"
+KEG_INSTALLER="$TEST_ROOT/brew-keg/bin/install-vouch-hook"
 # The legacy fixture is built by the repo-layout installer; only the three
-# calls below go through the symlink, each with no OSHIOKI_CHECKSUMS set.
+# calls below go through the symlink, each with no VOUCH_CHECKSUMS set.
 setup_legacy_host "$KEG_HOST" ubuntu-24.04
 # Prelaunch verifies the hook and plugin against the same default manifest.
-INSTALLER_CMD="$KEG_INSTALLER" HOOK_BIN="$KEG/libexec/oshioki" \
+INSTALLER_CMD="$KEG_INSTALLER" HOOK_BIN="$KEG/libexec/vouch" \
   PLUGIN_BIN="$KEG/libexec/$BUILD_PLUGIN" \
   run_installer --sudo-user testuser "$KEG_HOST" --prelaunch >"$KEG_HOST/prelaunch.log" 2>&1 ||
   { sed -n '1,20p' "$KEG_HOST/prelaunch.log" >&2; fail "prelaunch through a keg bin symlink could not find the keg manifest"; }
@@ -1811,15 +1811,15 @@ INSTALLER_CMD="$KEG_INSTALLER" PAM_MODULE_BIN="$KEG/libexec/$PAM_MODULE_ARTIFACT
   { sed -n '1,20p' "$KEG_HOST/install.log" >&2; fail "contextual-pam install through a keg bin symlink could not find the keg manifest"; }
 INSTALLER_CMD="$KEG_INSTALLER" PAM_MODULE_BIN="$KEG/libexec/$PAM_MODULE_ARTIFACT" \
   run_installer --sudo-user testuser "$KEG_HOST" --contextual-pam-status >"$KEG_HOST/status.log" 2>&1 ||
-  { sed -n '1,20p' "$KEG_HOST/status.log" >&2; fail "status through a keg bin symlink failed without OSHIOKI_CHECKSUMS"; }
+  { sed -n '1,20p' "$KEG_HOST/status.log" >&2; fail "status through a keg bin symlink failed without VOUCH_CHECKSUMS"; }
 grep -q "^OK    module: .*(sha256 matches $KEG/libexec/SHA256SUMS)\$" "$KEG_HOST/status.log" ||
   fail "status did not verify against the keg's sibling manifest"
 # The override still wins, and a manifest that is not there is still a FAIL
 # rather than a waiver.
 if INSTALLER_CMD="$KEG_INSTALLER" PAM_MODULE_BIN="$KEG/libexec/$PAM_MODULE_ARTIFACT" \
-   OSHIOKI_CHECKSUMS="$KEG_HOST/absent-manifest" \
+   VOUCH_CHECKSUMS="$KEG_HOST/absent-manifest" \
    run_installer --sudo-user testuser "$KEG_HOST" --contextual-pam-status >"$KEG_HOST/override.log" 2>&1; then
-  fail "an explicit OSHIOKI_CHECKSUMS did not override the keg default"
+  fail "an explicit VOUCH_CHECKSUMS did not override the keg default"
 fi
 grep -q '^FAIL  module: .*no SHA256SUMS manifest was found' "$KEG_HOST/override.log" ||
   fail "the override did not report the missing manifest as a failure"
@@ -1843,7 +1843,7 @@ grep -Fq 'cannot resolve symlink' "$KEG_HOST/readlink.log" ||
 
 # A host on the contextual PAM lane answers --prelaunch-status by naming the
 # lane, not by calling the install disabled. The plugin block is absent
-# there on purpose, and reporting "disabled" made oshioki-laptop-setup
+# there on purpose, and reporting "disabled" made vouch-laptop-setup
 # --contextual-pam fail its own final verify before it reached the
 # migration.
 LANE_STATUS="$TEST_ROOT/pam-lane-prelaunch-status"
@@ -1863,7 +1863,7 @@ if run_installer --sudo-user testuser "$LANE_STATUS" --prelaunch-status >"$LANE_
 fi
 grep -Fq "FAIL  contextual PAM lane: entry present but module missing at $LANE_MODULE" "$LANE_STATUS/nomodule.log" ||
   fail "prelaunch-status did not name the missing module: $(head -1 "$LANE_STATUS/nomodule.log")"
-grep -Fq 'install-oshioki-hook --contextual-pam or --disable-contextual-pam' "$LANE_STATUS/nomodule.log" ||
+grep -Fq 'install-vouch-hook --contextual-pam or --disable-contextual-pam' "$LANE_STATUS/nomodule.log" ||
   fail "the missing-module error says nothing about what to do"
 mv "$LANE_MODULE.away" "$LANE_MODULE"
 run_installer --sudo-user testuser "$LANE_STATUS" --prelaunch-status >/dev/null 2>&1 ||
@@ -1877,7 +1877,7 @@ else
   : > "$LANE_STATUS/sudo.conf.before-halfblock"
   LANE_SUDO_CONF_WAS_ABSENT=1
 fi
-printf '# BEGIN oshioki\n' >> "$LANE_STATUS/sudo.conf"
+printf '# BEGIN vouch\n' >> "$LANE_STATUS/sudo.conf"
 if run_installer --sudo-user testuser "$LANE_STATUS" --prelaunch-status >"$LANE_STATUS/halfblock.log" 2>&1; then
   fail "prelaunch-status accepted a half-written block on a lane host"
 fi
@@ -1903,31 +1903,31 @@ grep -Fq disabled "$LANE_STATUS/after.log" ||
 # out -- hook and scripts in bin, plugin under its installed name and the
 # module and SHA256SUMS in libexec -- driven through a /opt/homebrew/bin
 # style symlink with no HOOK_BIN, PLUGIN_BIN, PAM_MODULE_BIN or
-# OSHIOKI_CHECKSUMS in the environment at all. Before the artifact lanes,
+# VOUCH_CHECKSUMS in the environment at all. Before the artifact lanes,
 # --contextual-pam died with "PAM_MODULE_BIN is required" and --prelaunch
-# with "missing or unsafe build artifact: <keg>/target/release/oshioki".
+# with "missing or unsafe build artifact: <keg>/target/release/vouch".
 BARE_HOST="$TEST_ROOT/pam-bare-keg"
-BARE_KEG="$TEST_ROOT/bare-keg/Cellar/oshioki/0.1.9"
+BARE_KEG="$TEST_ROOT/bare-keg/Cellar/vouch/0.1.9"
 mkdir -p "$BARE_KEG/bin" "$BARE_KEG/libexec" "$TEST_ROOT/bare-keg/bin"
-cp "$TEST_ROOT/service/scripts/install-oshioki-hook" "$BARE_KEG/bin/"
-chmod 0755 "$BARE_KEG/bin/install-oshioki-hook"
-cp "$TEST_ROOT/service/target/release/oshioki" "$BARE_KEG/bin/oshioki"
+cp "$TEST_ROOT/service/scripts/install-vouch-hook" "$BARE_KEG/bin/"
+chmod 0755 "$BARE_KEG/bin/install-vouch-hook"
+cp "$TEST_ROOT/service/target/release/vouch" "$BARE_KEG/bin/vouch"
 cp "$TEST_ROOT/service/target/release/$BUILD_PLUGIN" "$BARE_KEG/libexec/$PLUGIN_NAME"
 cp "$TEST_ROOT/service/target/release/$PAM_MODULE_ARTIFACT" "$BARE_KEG/libexec/"
 (
   cd "$BARE_KEG/libexec"
-  printf '%s  oshioki\n' "$(sha256_file "$BARE_KEG/bin/oshioki")" > SHA256SUMS
+  printf '%s  vouch\n' "$(sha256_file "$BARE_KEG/bin/vouch")" > SHA256SUMS
   printf '%s  %s\n' "$(sha256_file "$PLUGIN_NAME")" "$PLUGIN_NAME" >> SHA256SUMS
   printf '%s  %s\n' "$(sha256_file "$PAM_MODULE_ARTIFACT")" "$PAM_MODULE_ARTIFACT" >> SHA256SUMS
 )
-ln -s "../Cellar/oshioki/0.1.9/bin/install-oshioki-hook" \
-  "$TEST_ROOT/bare-keg/bin/install-oshioki-hook"
-BARE_INSTALLER="$TEST_ROOT/bare-keg/bin/install-oshioki-hook"
+ln -s "../Cellar/vouch/0.1.9/bin/install-vouch-hook" \
+  "$TEST_ROOT/bare-keg/bin/install-vouch-hook"
+BARE_INSTALLER="$TEST_ROOT/bare-keg/bin/install-vouch-hook"
 setup_legacy_host "$BARE_HOST" ubuntu-24.04
 INSTALLER_CMD="$BARE_INSTALLER" HOOK_BIN= PLUGIN_BIN= PAM_MODULE_BIN= \
   run_installer --sudo-user testuser "$BARE_HOST" --prelaunch >"$BARE_HOST/prelaunch.log" 2>&1 ||
   { sed -n '1,20p' "$BARE_HOST/prelaunch.log" >&2; fail "bare prelaunch from a keg could not find its own artifacts"; }
-[ "$(sha256_file "$BARE_HOST/sbin/oshioki")" = "$(sha256_file "$BARE_KEG/bin/oshioki")" ] ||
+[ "$(sha256_file "$BARE_HOST/sbin/vouch")" = "$(sha256_file "$BARE_KEG/bin/vouch")" ] ||
   fail "bare prelaunch installed a hook that is not the keg's"
 [ "$(sha256_file "$BARE_HOST/plugin/$PLUGIN_NAME")" = "$(sha256_file "$BARE_KEG/libexec/$PLUGIN_NAME")" ] ||
   fail "bare prelaunch installed a plugin that is not the keg's"
@@ -1943,43 +1943,43 @@ INSTALLER_CMD="$BARE_INSTALLER" HOOK_BIN= PLUGIN_BIN= PAM_MODULE_BIN= \
 grep -q "^OK    module: .*(sha256 matches $BARE_KEG/libexec/SHA256SUMS)\$" "$BARE_HOST/status.log" ||
   fail "bare status did not verify the module against the keg manifest"
 # An explicit override still wins over every lane.
-INSTALLER_CMD="$BARE_INSTALLER" HOOK_BIN="$TEST_ROOT/service/target/release/oshioki" \
+INSTALLER_CMD="$BARE_INSTALLER" HOOK_BIN="$TEST_ROOT/service/target/release/vouch" \
   PLUGIN_BIN="$TEST_ROOT/service/target/release/$BUILD_PLUGIN" PAM_MODULE_BIN= \
-  OSHIOKI_CHECKSUMS="$TEST_ROOT/service/target/release/SHA256SUMS" \
+  VOUCH_CHECKSUMS="$TEST_ROOT/service/target/release/SHA256SUMS" \
   run_installer --sudo-user testuser "$BARE_HOST" --prelaunch >"$BARE_HOST/override.log" 2>&1 ||
   { sed -n '1,20p' "$BARE_HOST/override.log" >&2; fail "an explicit HOOK_BIN did not override the keg lane"; }
 
-# The .deb lane: installer and every artifact together in /usr/share/oshioki,
+# The .deb lane: installer and every artifact together in /usr/share/vouch,
 # which is SCRIPT_DIR, with SERVICE_DIR the shared /usr/share that owns no
 # libexec of its own.
 DEB_HOST="$TEST_ROOT/pam-bare-deb"
-DEB_SHARE="$TEST_ROOT/bare-deb/usr/share/oshioki"
+DEB_SHARE="$TEST_ROOT/bare-deb/usr/share/vouch"
 mkdir -p "$DEB_SHARE"
-cp "$TEST_ROOT/service/scripts/install-oshioki-hook" "$DEB_SHARE/"
-chmod 0755 "$DEB_SHARE/install-oshioki-hook"
-cp "$TEST_ROOT/service/target/release/oshioki" \
+cp "$TEST_ROOT/service/scripts/install-vouch-hook" "$DEB_SHARE/"
+chmod 0755 "$DEB_SHARE/install-vouch-hook"
+cp "$TEST_ROOT/service/target/release/vouch" \
    "$TEST_ROOT/service/target/release/$BUILD_PLUGIN" \
    "$TEST_ROOT/service/target/release/$PAM_MODULE_ARTIFACT" "$DEB_SHARE/"
 cp "$TEST_ROOT/service/target/release/SHA256SUMS" "$DEB_SHARE/"
 setup_legacy_host "$DEB_HOST" ubuntu-24.04
-INSTALLER_CMD="$DEB_SHARE/install-oshioki-hook" HOOK_BIN= PLUGIN_BIN= PAM_MODULE_BIN= \
+INSTALLER_CMD="$DEB_SHARE/install-vouch-hook" HOOK_BIN= PLUGIN_BIN= PAM_MODULE_BIN= \
   run_installer --sudo-user testuser "$DEB_HOST" --contextual-pam >"$DEB_HOST/install.log" 2>&1 ||
   { sed -n '1,20p' "$DEB_HOST/install.log" >&2; fail "bare --contextual-pam from a .deb layout could not find its own artifacts"; }
 [ "$(sha256_file "$DEB_HOST/security/$PAM_MODULE_ARTIFACT")" = \
   "$(sha256_file "$DEB_SHARE/$PAM_MODULE_ARTIFACT")" ] ||
-  fail "the .deb layout installed a module from outside /usr/share/oshioki"
+  fail "the .deb layout installed a module from outside /usr/share/vouch"
 
 # A source checkout that was never built still names target/release, so the
 # lanes did not trade a clear error for a confusing one.
 UNBUILT="$TEST_ROOT/unbuilt/scripts"
 mkdir -p "$UNBUILT"
-cp "$TEST_ROOT/service/scripts/install-oshioki-hook" "$UNBUILT/"
-chmod 0755 "$UNBUILT/install-oshioki-hook"
-if INSTALLER_CMD="$UNBUILT/install-oshioki-hook" HOOK_BIN= PLUGIN_BIN= PAM_MODULE_BIN= \
+cp "$TEST_ROOT/service/scripts/install-vouch-hook" "$UNBUILT/"
+chmod 0755 "$UNBUILT/install-vouch-hook"
+if INSTALLER_CMD="$UNBUILT/install-vouch-hook" HOOK_BIN= PLUGIN_BIN= PAM_MODULE_BIN= \
    run_installer --sudo-user testuser "$TEST_ROOT/unbuilt-host" --prelaunch >"$TEST_ROOT/unbuilt.log" 2>&1; then
   fail "an unbuilt checkout installed something"
 fi
-grep -Fq "missing or unsafe build artifact: $TEST_ROOT/unbuilt/target/release/oshioki" "$TEST_ROOT/unbuilt.log" ||
+grep -Fq "missing or unsafe build artifact: $TEST_ROOT/unbuilt/target/release/vouch" "$TEST_ROOT/unbuilt.log" ||
   fail "an unbuilt checkout no longer names target/release: $(head -1 "$TEST_ROOT/unbuilt.log")"
 
 # Disable refuses to strand a module another service still references.
@@ -1987,13 +1987,13 @@ DISABLE_REF="$TEST_ROOT/pam-disable-referrer"
 setup_legacy_host "$DISABLE_REF" ubuntu-24.04
 run_installer --sudo-user testuser "$DISABLE_REF" --contextual-pam >"$DISABLE_REF/install.log" 2>&1 ||
   fail "referrer setup could not install"
-printf 'auth sufficient liboshioki_pam.so\n' > "$DISABLE_REF/pam.d/other-service"
+printf 'auth sufficient libvouch_pam.so\n' > "$DISABLE_REF/pam.d/other-service"
 if run_installer "$DISABLE_REF" --disable-contextual-pam >"$DISABLE_REF/log" 2>&1; then
   fail "disable unlinked a module another service still references"
 fi
 grep -Fq 'still references the module' "$DISABLE_REF/log" || fail "the stranded-reference refusal was not explained"
 grep -Fq 'other-service' "$DISABLE_REF/log" || fail "the refusal did not name the referring file"
-[ -f "$DISABLE_REF/security/liboshioki_pam.so" ] || fail "disable removed a still-referenced module"
+[ -f "$DISABLE_REF/security/libvouch_pam.so" ] || fail "disable removed a still-referenced module"
 
 # ... but our own leftovers are not referrers. A crashed earlier run can
 # leave a snapshot or a stage file next to the service it was editing, and
@@ -2002,12 +2002,12 @@ DISABLE_LITTER="$TEST_ROOT/pam-disable-litter"
 setup_legacy_host "$DISABLE_LITTER" ubuntu-24.04
 run_installer --sudo-user testuser "$DISABLE_LITTER" --contextual-pam >"$DISABLE_LITTER/install.log" 2>&1 ||
   fail "litter setup could not install"
-cp "$DISABLE_LITTER/pam.d/sudo" "$DISABLE_LITTER/pam.d/sudo.oshioki-backup.AbCdEf"
+cp "$DISABLE_LITTER/pam.d/sudo" "$DISABLE_LITTER/pam.d/sudo.vouch-backup.AbCdEf"
 cp "$DISABLE_LITTER/pam.d/sudo" "$DISABLE_LITTER/pam.d/sudo.QwErTy"
 cp "$DISABLE_LITTER/pam.d/sudo" "$DISABLE_LITTER/pam.d/sudo.QwErTy.notrail"
 run_installer "$DISABLE_LITTER" --disable-contextual-pam >"$DISABLE_LITTER/log" 2>&1 ||
   { sed -n '1,20p' "$DISABLE_LITTER/log" >&2; fail "our own leftovers blocked the module removal"; }
-[ ! -e "$DISABLE_LITTER/security/liboshioki_pam.so" ] || fail "disable left the module because of its own litter"
+[ ! -e "$DISABLE_LITTER/security/libvouch_pam.so" ] || fail "disable left the module because of its own litter"
 
 # --- macOS (faked uname -s) ----------------------------------------------
 # OpenPAM has no bracket controls, so the macOS lane is a `sufficient` line
@@ -2015,29 +2015,29 @@ run_installer "$DISABLE_LITTER" --disable-contextual-pam >"$DISABLE_LITTER/log" 
 # fingerprinted, never edited. The base macOS pair is verified against a live
 # 15.7.5 host; the missing-file and pam_tid variants remain synthetic (see
 # tests/pam-layouts/README.md).
-MAC_PLUGIN_DEST_NAME=oshioki.dylib
+MAC_PLUGIN_DEST_NAME=vouch.dylib
 setup_darwin_host() {
   local root="$1" layout="$2"
   mkdir -p "$root/state" "$root/pam.d" "$root/security" "$root/sbin" "$root/sudoers.d" "$root/pristine"
   printf '{"version":1,"devices":[{"version":1,"kind":"secure-enclave","fingerprint":"x","active":true}]}\n' \
     > "$root/state/devices.json"
   printf '#includedir %s\n' "$root/sudoers.d" > "$root/sudoers"
-  cp /usr/bin/true "$root/sbin/oshioki"
+  cp /usr/bin/true "$root/sbin/vouch"
   # The legacy lane, written directly: --prelaunch on this host would build a
   # Linux one, and what matters here is only that both artifacts exist for
   # the migration to retire.
-  printf '%s\n' '# BEGIN oshioki' \
-    "Plugin approval_exec $root/plugin/$MAC_PLUGIN_DEST_NAME" '# END oshioki' > "$root/sudo.conf"
-  printf 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL\n' > "$root/sudoers.d/oshioki"
-  chmod 0440 "$root/sudoers.d/oshioki"
+  printf '%s\n' '# BEGIN vouch' \
+    "Plugin approval_exec $root/plugin/$MAC_PLUGIN_DEST_NAME" '# END vouch' > "$root/sudo.conf"
+  printf 'testuser ALL=(ALL) NOSETENV: NOPASSWD: ALL\n' > "$root/sudoers.d/vouch"
+  chmod 0440 "$root/sudoers.d/vouch"
   cp "$PAM_LAYOUTS/$layout/pam.d/"* "$root/pam.d/"
   cp "$root/pam.d/"* "$root/pristine/"
 }
 run_darwin_installer() {
-  FAKE_UNAME_S=Darwin PAM_MODULE_BIN="$TEST_ROOT/service/target/release/liboshioki_pam.dylib" \
+  FAKE_UNAME_S=Darwin PAM_MODULE_BIN="$TEST_ROOT/service/target/release/libvouch_pam.dylib" \
     run_installer "$@"
 }
-MAC_AUTH_LINE_FOR() { printf 'auth       sufficient     %s/liboshioki_pam.dylib\n' "$1"; }
+MAC_AUTH_LINE_FOR() { printf 'auth       sufficient     %s/libvouch_pam.dylib\n' "$1"; }
 
 # A stock macOS machine may not have the private module directory yet. A dry
 # run reports that planned directory creation without creating it; the real
@@ -2056,14 +2056,14 @@ PAM_SECURITY_DIR="$MAC_FIRST_SECURITY" run_darwin_installer --sudo-user testuser
   --contextual-pam >"$MAC_FIRST/install.log" 2>&1 ||
   { sed -n '1,40p' "$MAC_FIRST/install.log" >&2; fail "macOS: missing security dir install failed"; }
 [ -d "$MAC_FIRST_SECURITY" ] || fail "macOS: first install did not create the security directory"
-[ -f "$MAC_FIRST_SECURITY/liboshioki_pam.dylib" ] || fail "macOS: first install did not place the PAM module"
+[ -f "$MAC_FIRST_SECURITY/libvouch_pam.dylib" ] || fail "macOS: first install did not place the PAM module"
 grep -Fxq "$(MAC_AUTH_LINE_FOR "$MAC_FIRST_SECURITY")" "$MAC_FIRST/pam.d/sudo_local" ||
   fail "macOS: first install wrote no auth line for the created directory"
 PAM_SECURITY_DIR="$MAC_FIRST_SECURITY" run_darwin_installer --sudo-user testuser "$MAC_FIRST" \
   --contextual-pam >"$MAC_FIRST/rerun.log" 2>&1 ||
   fail "macOS: first-install rerun failed"
 grep -Fq 'already current' "$MAC_FIRST/rerun.log" || fail "macOS: rerun did not converge on the existing module"
-[ "$(grep -c '^# BEGIN oshioki pam$' "$MAC_FIRST/pam.d/sudo_local")" -eq 1 ] ||
+[ "$(grep -c '^# BEGIN vouch pam$' "$MAC_FIRST/pam.d/sudo_local")" -eq 1 ] ||
   fail "macOS: first-install rerun duplicated the PAM block"
 
 # If the first install creates the directory but its module self-test fails,
@@ -2079,9 +2079,9 @@ fi
 [ ! -e "$MAC_FIRST_ROLLBACK_SECURITY" ] ||
   fail "macOS: failed first install left the newly-created security directory"
 pam_unchanged "$MAC_FIRST_ROLLBACK" || fail "macOS: first-install rollback changed a PAM file"
-grep -Fq '# BEGIN oshioki' "$MAC_FIRST_ROLLBACK/sudo.conf" ||
+grep -Fq '# BEGIN vouch' "$MAC_FIRST_ROLLBACK/sudo.conf" ||
   fail "macOS: first-install rollback did not restore the legacy plugin"
-[ -e "$MAC_FIRST_ROLLBACK/sudoers.d/oshioki" ] ||
+[ -e "$MAC_FIRST_ROLLBACK/sudoers.d/vouch" ] ||
   fail "macOS: first-install rollback did not restore the legacy rule"
 
 # Self-test failure happens after the module has landed, so rollback must
@@ -2097,9 +2097,9 @@ fi
 [ ! -e "$MAC_FIRST_SELFTEST_SECURITY" ] ||
   fail "macOS: self-test rollback left the newly-created security directory"
 pam_unchanged "$MAC_FIRST_SELFTEST" || fail "macOS: self-test rollback changed a PAM file"
-grep -Fq '# BEGIN oshioki' "$MAC_FIRST_SELFTEST/sudo.conf" ||
+grep -Fq '# BEGIN vouch' "$MAC_FIRST_SELFTEST/sudo.conf" ||
   fail "macOS: self-test rollback did not restore the legacy plugin"
-[ -e "$MAC_FIRST_SELFTEST/sudoers.d/oshioki" ] ||
+[ -e "$MAC_FIRST_SELFTEST/sudoers.d/vouch" ] ||
   fail "macOS: self-test rollback did not restore the legacy rule"
 
 # A target symlink, non-root leaf, or writable ancestor is never accepted,
@@ -2127,7 +2127,7 @@ PAM_SECURITY_DIR="$MAC_SYMLINK_ANCESTOR_SECURITY" \
   run_darwin_installer --sudo-user testuser "$MAC_SYMLINK_ANCESTOR" --contextual-pam >"$MAC_SYMLINK_ANCESTOR/log" 2>&1 ||
   { sed -n '1,40p' "$MAC_SYMLINK_ANCESTOR/log" >&2; fail "macOS: safe ancestor symlink was refused"; }
 MAC_SYMLINK_ANCESTOR_REAL="$MAC_SYMLINK_ANCESTOR/real-parent/nested/security"
-[ -f "$MAC_SYMLINK_ANCESTOR_REAL/liboshioki_pam.dylib" ] ||
+[ -f "$MAC_SYMLINK_ANCESTOR_REAL/libvouch_pam.dylib" ] ||
   fail "macOS: safe ancestor symlink did not create the canonical target"
 grep -Fxq "$(MAC_AUTH_LINE_FOR "$MAC_SYMLINK_ANCESTOR_REAL")" "$MAC_SYMLINK_ANCESTOR/pam.d/sudo_local" ||
   fail "macOS: safe ancestor symlink wrote the wrong auth path"
@@ -2144,7 +2144,7 @@ PAM_SECURITY_DIR="$MAC_SYMLINK_PARENT_SECURITY" \
   run_darwin_installer --sudo-user testuser "$MAC_SYMLINK_PARENT" --contextual-pam >"$MAC_SYMLINK_PARENT/log" 2>&1 ||
   { sed -n '1,40p' "$MAC_SYMLINK_PARENT/log" >&2; fail "macOS: immediate parent symlink was refused"; }
 MAC_SYMLINK_PARENT_REAL="$MAC_SYMLINK_PARENT/real-parent/security"
-[ -f "$MAC_SYMLINK_PARENT_REAL/liboshioki_pam.dylib" ] ||
+[ -f "$MAC_SYMLINK_PARENT_REAL/libvouch_pam.dylib" ] ||
   fail "macOS: immediate parent symlink did not create the canonical target"
 grep -Fxq "$(MAC_AUTH_LINE_FOR "$MAC_SYMLINK_PARENT_REAL")" "$MAC_SYMLINK_PARENT/pam.d/sudo_local" ||
   fail "macOS: immediate parent symlink wrote the wrong auth path"
@@ -2190,7 +2190,7 @@ if PAM_SECURITY_DIR="$MAC_UNSAFE_EXISTING_SECURITY" \
 fi
 grep -Fq 'not root-owned and not writable by others' "$MAC_UNSAFE_EXISTING/log" ||
   fail "macOS: existing-target unsafe ancestor refusal was not explained"
-[ ! -e "$MAC_UNSAFE_EXISTING_SECURITY/liboshioki_pam.dylib" ] ||
+[ ! -e "$MAC_UNSAFE_EXISTING_SECURITY/libvouch_pam.dylib" ] ||
   fail "macOS: existing-target unsafe ancestor left a module behind"
 pam_unchanged "$MAC_UNSAFE_EXISTING" ||
   fail "macOS: existing-target unsafe ancestor refusal changed a PAM file"
@@ -2204,12 +2204,12 @@ run_darwin_installer --sudo-user testuser "$MAC" --contextual-pam >"$MAC/log" 2>
 mac_line="$(MAC_AUTH_LINE_FOR "$MAC/security")"
 grep -Fxq "$mac_line" "$MAC/pam.d/sudo_local" || fail "macOS: sudo_local has no exact auth line"
 cmp -s "$MAC/pristine/sudo" "$MAC/pam.d/sudo" || fail "macOS: /etc/pam.d/sudo was edited"
-sed '/^# BEGIN oshioki pam$/,/^# END oshioki pam$/d' "$MAC/pam.d/sudo_local" > "$MAC/stripped"
+sed '/^# BEGIN vouch pam$/,/^# END vouch pam$/d' "$MAC/pam.d/sudo_local" > "$MAC/stripped"
 cmp -s "$MAC/stripped" "$MAC/pristine/sudo_local" || fail "macOS: sudo_local changed outside the owned block"
-[ -f "$MAC/security/liboshioki_pam.dylib" ] || fail "macOS: no module installed"
+[ -f "$MAC/security/libvouch_pam.dylib" ] || fail "macOS: no module installed"
 run_darwin_installer --sudo-user testuser "$MAC" --contextual-pam >"$MAC/second.log" 2>&1 ||
   fail "macOS: a re-run failed"
-[ "$(grep -c '^# BEGIN oshioki pam$' "$MAC/pam.d/sudo_local")" -eq 1 ] || fail "macOS: a re-run duplicated the block"
+[ "$(grep -c '^# BEGIN vouch pam$' "$MAC/pam.d/sudo_local")" -eq 1 ] || fail "macOS: a re-run duplicated the block"
 
 # No sudo_local at all: the installer creates it.
 MAC_NEW="$TEST_ROOT/pam-macos-new"
@@ -2229,7 +2229,7 @@ run_darwin_installer --sudo-user testuser "$MAC_TID" --contextual-pam >"$MAC_TID
 grep -Fxq 'auth       sufficient     pam_tid.so' "$MAC_TID/pam.d/sudo_local" ||
   fail "macOS: the administrator pam_tid line was rewritten"
 tid_line="$(grep -n 'pam_tid.so' "$MAC_TID/pam.d/sudo_local" | head -1 | cut -d: -f1)"
-begin_line="$(grep -n '^# BEGIN oshioki pam$' "$MAC_TID/pam.d/sudo_local" | head -1 | cut -d: -f1)"
+begin_line="$(grep -n '^# BEGIN vouch pam$' "$MAC_TID/pam.d/sudo_local" | head -1 | cut -d: -f1)"
 [ "$tid_line" -lt "$begin_line" ] || fail "macOS: the owned block was placed before pam_tid"
 [ "$begin_line" -eq $((tid_line + 1)) ] || fail "macOS: the owned block does not immediately follow pam_tid"
 
@@ -2241,7 +2241,7 @@ if run_darwin_installer --sudo-user testuser "$MAC_REFUSE" --contextual-pam >"$M
 fi
 grep -Fq 'refusing a customised PAM stack' "$MAC_REFUSE/log" || fail "macOS: the refusal was not explained"
 pam_unchanged "$MAC_REFUSE" || fail "macOS: the refusal modified a PAM file"
-[ ! -e "$MAC_REFUSE/security/liboshioki_pam.dylib" ] || fail "macOS: the refusal installed the module"
+[ ! -e "$MAC_REFUSE/security/libvouch_pam.dylib" ] || fail "macOS: the refusal installed the module"
 
 # Disable removes the block from sudo_local, leaving the administrator's
 # pam_tid line and every comment intact, and only then the module.
@@ -2253,7 +2253,7 @@ INSTALL_TRACE="$MAC_DISABLE/trace" run_darwin_installer "$MAC_DISABLE" --disable
   >"$MAC_DISABLE/log" 2>&1 || fail "macOS: --disable-contextual-pam failed"
 cmp -s "$MAC_DISABLE/pristine/sudo_local" "$MAC_DISABLE/pam.d/sudo_local" ||
   fail "macOS: disable did not restore sudo_local byte for byte"
-[ ! -e "$MAC_DISABLE/security/liboshioki_pam.dylib" ] || fail "macOS: disable left the module"
+[ ! -e "$MAC_DISABLE/security/libvouch_pam.dylib" ] || fail "macOS: disable left the module"
 mac_edit="$(grep -n '^pam:disable:edit:sudo_local$' "$MAC_DISABLE/trace" | head -1 | cut -d: -f1)"
 mac_unlink="$(grep -n '^pam:disable:module-removed:' "$MAC_DISABLE/trace" | head -1 | cut -d: -f1)"
 [ -n "$mac_edit" ] || fail "macOS: the disable trace records no PAM edit"
@@ -2272,7 +2272,7 @@ grep -Fxq "$(MAC_AUTH_LINE_FOR "$MAC_GONE/security")" "$MAC_GONE/pam.d/sudo_loca
 rm -rf "$MAC_GONE/security"
 PAM_SECURITY_DIR='' run_darwin_installer "$MAC_GONE" --disable-contextual-pam >"$MAC_GONE/log" 2>&1 ||
   { sed -n '1,20p' "$MAC_GONE/log" >&2; fail "macOS: disable failed with the security directory gone"; }
-if grep -Fq liboshioki_pam "$MAC_GONE/pam.d/sudo_local"; then
+if grep -Fq libvouch_pam "$MAC_GONE/pam.d/sudo_local"; then
   fail "macOS: disable left sudo_local pointing at a deleted dylib"
 fi
 cmp -s "$MAC_GONE/pristine/sudo_local" "$MAC_GONE/pam.d/sudo_local" ||
@@ -2313,8 +2313,8 @@ run_darwin_installer "$MAC_ADOPTED" --disable-contextual-pam >"$MAC_ADOPTED/log"
   fail "macOS: disable removed a sudo_local carrying administrator content"
 grep -Fxq 'auth       sufficient     pam_tid.so' "$MAC_ADOPTED/pam.d/sudo_local" ||
   fail "macOS: disable did not preserve the administrator pam_tid line"
-if grep -Fq liboshioki_pam "$MAC_ADOPTED/pam.d/sudo_local"; then
+if grep -Fq libvouch_pam "$MAC_ADOPTED/pam.d/sudo_local"; then
   fail "macOS: disable left our module referenced in an adopted sudo_local"
 fi
 
-echo "test-install-oshioki-hook: PASS"
+echo "test-install-vouch-hook: PASS"

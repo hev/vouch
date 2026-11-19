@@ -7,14 +7,14 @@ For a complete setup, start with [local sudo](local-sudo.md) or
 
 | Command | Purpose |
 | --- | --- |
-| `oshioki-agent init` | Create an identity if none exists. |
-| `oshioki-agent pair '<enrollment-url>' --label <label>` | Pair with a host waiting in `sudo oshioki enroll`. |
-| `oshioki-agent run` | Listen on the local socket and, when configured, NATS. |
-| `oshioki-agent show` | Show the fingerprint and signing backend. |
-| `oshioki-agent device-record --label <label>` | Export the public device record for offline pinning. |
+| `vouch-agent init` | Create an identity if none exists. |
+| `vouch-agent pair '<enrollment-url>' --label <label>` | Pair with a host waiting in `sudo vouch enroll`. |
+| `vouch-agent run` | Listen on the local socket and, when configured, NATS. |
+| `vouch-agent show` | Show the fingerprint and signing backend. |
+| `vouch-agent device-record --label <label>` | Export the public device record for offline pinning. |
 
-The default state directory is `~/.config/oshioki`; override it with
-`--state` or `OSHIOKI_AGENT_STATE`. Its `agent.json` is private (0600).
+The default state directory is `~/.config/vouch`; override it with
+`--state` or `VOUCH_AGENT_STATE`. Its `agent.json` is private (0600).
 
 ## Identity lifetime
 
@@ -36,18 +36,18 @@ fingerprint and retain `agent.json.prev` for [restore](update.md#restore).
 On the approval device:
 
 ```sh
-oshioki-agent init
-oshioki-agent device-record --label my-device > /tmp/oshioki-device.json
+vouch-agent init
+vouch-agent device-record --label my-device > /tmp/vouch-device.json
 ```
 
 Copy the public record to the host. On the approval device, read
-`oshioki-agent show` and send its fingerprint to the host over a trusted
+`vouch-agent show` and send its fingerprint to the host over a trusted
 channel independent of the record file. Compare it with the fingerprint
 printed by `pin-record` before typing the full value to confirm:
 
 ```sh
-sudo oshioki pin-record /tmp/oshioki-device.json
-sudo oshioki status
+sudo vouch pin-record /tmp/vouch-device.json
+sudo vouch status
 ```
 
 The record contains public material only. Offline pinning removes the server
@@ -61,13 +61,13 @@ Mac hardware approvals need a graphical login session but no terminal.
 Use [Mac autostart](mac-approvals.md#start-at-login) for persistent operation.
 
 A software agent needs a terminal for every decision. Linux setup writes
-`~/.config/oshioki/agent.env` and prints:
+`~/.config/vouch/agent.env` and prints:
 
 ```sh
 set -a
-. ~/.config/oshioki/agent.env
+. ~/.config/vouch/agent.env
 set +a
-oshioki-agent run
+vouch-agent run
 ```
 
 Keep that terminal open. No Linux user service is installed because it would

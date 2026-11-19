@@ -1,24 +1,24 @@
 # Approve sudo from a phone
 
 Run setup and enrollment on the host whose sudo the phone will approve.
-The phone opens a URL; it does not run the `oshioki` command.
+The phone opens a URL; it does not run the `vouch` command.
 
 ## 1. Make the server reachable
 
-[Install Oshioki](install.md). Choose one setup:
+[Install Vouch](install.md). Choose one setup:
 
 | Setup | Prerequisites |
 | --- | --- |
-| Tailscale (managed local server) | Python 3, `oshioki-server`, `nats-server`, Tailscale running on the host, and the phone on the same tailnet |
-| Existing HTTPS server | An Oshioki origin trusted and reachable by host and phone, plus this host's NATS credentials |
+| Tailscale (managed local server) | Python 3, `vouch-server`, `nats-server`, Tailscale running on the host, and the phone on the same tailnet |
+| Existing HTTPS server | An Vouch origin trusted and reachable by host and phone, plus this host's NATS credentials |
 
 For Tailscale, run as your normal user:
 
 ```sh
 # On macOS, if NATS is not installed:
 brew install nats-server
-oshioki-phone-setup --check
-oshioki-phone-setup
+vouch-phone-setup --check
+vouch-phone-setup
 ```
 
 Setup starts a local server and JetStream broker on loopback and publishes
@@ -37,11 +37,11 @@ For an existing server, put `NATS_URL`, `NATS_USER`, and `NATS_PASS` in a
 mode-600 file, then:
 
 ```sh
-oshioki-phone-setup --server-url https://sudo.example.com --nats-config /path/to/hook-nats.env
+vouch-phone-setup --server-url https://sudo.example.com --nats-config /path/to/hook-nats.env
 ```
 
 That option configures the host without starting services. The server's
-`OSHIOKI_ORIGIN` must match the HTTPS URL and `OSHIOKI_RP_ID` its hostname.
+`VOUCH_ORIGIN` must match the HTTPS URL and `VOUCH_RP_ID` its hostname.
 See [server requirements](requirements.md) if you operate that deployment.
 
 ## 2. Enroll
@@ -49,18 +49,18 @@ See [server requirements](requirements.md) if you operate that deployment.
 On the host:
 
 ```sh
-sudo oshioki enroll
+sudo vouch enroll
 ```
 
 On a fresh Debian install, the hook may still be at
-`/usr/share/oshioki/oshioki`; use
-`sudo /usr/share/oshioki/oshioki enroll` until host activation installs it on PATH.
+`/usr/share/vouch/vouch`; use
+`sudo /usr/share/vouch/vouch enroll` until host activation installs it on PATH.
 
 Keep that command running. The printed URL expires after five minutes.
 
 On iPhone or iPad:
 
-1. Open the Oshioki HTTPS origin and add it to the Home Screen.
+1. Open the Vouch HTTPS origin and add it to the Home Screen.
 2. Open the installed app, go to `/setup`, and paste the **complete** enrollment
    URL, including its `#secret` fragment.
 3. Tap Continue and complete the passkey prompt.
@@ -73,7 +73,7 @@ A denied notification permission does not undo enrollment, but prevents push
 delivery.
 
 To approve requests from several hosts in one installed app, configure those
-hosts to use the **same HTTPS origin and Oshioki backend** with the shared NATS
+hosts to use the **same HTTPS origin and Vouch backend** with the shared NATS
 lanes. Repeat enrollment from each host and open each complete enrollment URL
 inside that same installed app. Every enrollment keeps its own bearer, passkey,
 and decryption key; notifications use one browser subscription for all saved
@@ -95,8 +95,8 @@ first; the current app preserves existing notification settings until then.
 On the host, confirm the device and send a test:
 
 ```sh
-sudo oshioki status
-sudo oshioki test
+sudo vouch status
+sudo vouch test
 ```
 
 Use the full hook path above if it is not installed yet. Confirm that the phone
@@ -134,7 +134,7 @@ endpoint, creates a fresh one, and registers the enrollments still saved in the
 app. Re-enroll first if the enrollment credentials themselves were also lost.
 Clearing browser storage is not a way to transfer endpoint ownership.
 
-Managed state and logs live under `~/.local/share/oshioki/phone-server`.
+Managed state and logs live under `~/.local/share/vouch/phone-server`.
 The default ports are NATS 14222, HTTP 18443, and Tailscale HTTPS 18444,
 configurable with `--nats-port`, `--server-port`, and `--https-port`. Re-run
 setup after a package update. Existing phone setup state keeps its recorded
@@ -144,15 +144,15 @@ Linux, setup may leave a running service on the previous binary when its unit
 is unchanged. Restart and verify the server unit:
 
 ```sh
-systemctl --user restart oshioki-phone-server.service
-systemctl --user status oshioki-phone-server.service
+systemctl --user restart vouch-phone-server.service
+systemctl --user status vouch-phone-server.service
 ```
 
-On macOS the service labels are `com.oshioki.phone-server.nats` and
-`com.oshioki.phone-server.server`. On Linux:
+On macOS the service labels are `com.hev.vouch.phone-server.nats` and
+`com.hev.vouch.phone-server.server`. On Linux:
 
 ```sh
-systemctl --user status oshioki-phone-server-nats.service oshioki-phone-server.service
+systemctl --user status vouch-phone-server-nats.service vouch-phone-server.service
 ```
 
 The hosting user's service manager must remain running. Use an always-on server
@@ -169,5 +169,5 @@ if approvals must work while a laptop sleeps.
 | Server needs an update | Update the shared backend and refresh the app before enabling multi-enrollment notifications. |
 | Server confirmation timed out | The host may already have pinned the device. Inspect status and re-enroll once the server is healthy. |
 
-Local browser development can use `oshioki enroll --allow-localhost`; that
+Local browser development can use `vouch enroll --allow-localhost`; that
 does not make the URL reachable from a phone.

@@ -30,7 +30,7 @@ self.addEventListener("push", event => {
     : payload.lane === "auth"
       ? "Sudo authentication needs your attention."
       : "A tool permission request needs your attention.";
-  event.waitUntil(self.registration.showNotification("Oshioki", {
+  event.waitUntil(self.registration.showNotification("Vouch", {
     body,
     tag: notificationTag(payload),
     renotify: false,
@@ -64,4 +64,4 @@ self.addEventListener("notificationclick", event => {
   })());
 });
 
-if (typeof self !== "undefined") self.OshiokiPushWorker = { pushPayload, notificationTarget, notificationTag };
+if (typeof self !== "undefined") self.VouchPushWorker = { pushPayload, notificationTarget, notificationTag };

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC1090
-# End-to-end plumbing test for oshioki-laptop-setup with faked privilege and
+# End-to-end plumbing test for vouch-laptop-setup with faked privilege and
 # service boundaries. The real script runs; sudo, the installer, the hook,
 # the agent, and launchctl/systemctl are fakes.
 set -euo pipefail
@@ -8,7 +8,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # Under /tmp: macOS limits unix socket paths to 104 bytes and sandbox
 # TMPDIRs exceed that.
-TEST_ROOT="$(mktemp -d /tmp/oshioki-laptop-setup-test.XXXXXX)"
+TEST_ROOT="$(mktemp -d /tmp/vouch-laptop-setup-test.XXXXXX)"
 # Match the physical paths emitted by setup (macOS /tmp is /private/tmp).
 TEST_ROOT="$(cd "$TEST_ROOT" && pwd -P)"
 # Every bootstrap can spawn socket holders and delayed log writers. Stop
@@ -69,7 +69,7 @@ cleanup() {
   exit "$rc"
 }
 trap cleanup EXIT
-fail() { echo "test-oshioki-laptop-setup: $*" >&2; exit 1; }
+fail() { echo "test-vouch-laptop-setup: $*" >&2; exit 1; }
 
 # The verify step ends differently per platform: macOS boots the agent and
 # waits for its socket, Linux leaves the agent to a terminal and says the
@@ -83,8 +83,8 @@ verify_done() {
 }
 
 mkdir -p "$TEST_ROOT/fake-bin" "$TEST_ROOT/stage/libexec" "$TEST_ROOT/home" "$TEST_ROOT/etc" "$TEST_ROOT/tmp"
-cp "$SCRIPT_DIR/oshioki-laptop-setup" "$TEST_ROOT/stage/"
-chmod 0755 "$TEST_ROOT/stage/oshioki-laptop-setup" "$TEST_ROOT/fake-bin"/* 2>/dev/null || true
+cp "$SCRIPT_DIR/vouch-laptop-setup" "$TEST_ROOT/stage/"
+chmod 0755 "$TEST_ROOT/stage/vouch-laptop-setup" "$TEST_ROOT/fake-bin"/* 2>/dev/null || true
 
 # Fake privilege boundary: leading VAR= assignments become environment, -v/-V
 # succeed, everything else executes for real (mkdir, tee, cat, chmod).
@@ -175,10 +175,10 @@ exec "$@"
 SH
 # Fake installer: dry-run prints a plan, install records the config it saw,
 # status succeeds.
-cat > "$TEST_ROOT/fake-bin/install-oshioki-hook" <<'SH'
+cat > "$TEST_ROOT/fake-bin/install-vouch-hook" <<'SH'
 #!/usr/bin/env bash
-[ -n "${SEEN_SUDO_USER:-}" ] && printf '%s' "${OSHIOKI_SUDO_USER:-}" > "$SEEN_SUDO_USER"
-[ -n "${SEEN_CHECKSUMS:-}" ] && printf '%s' "${OSHIOKI_CHECKSUMS:-}" > "$SEEN_CHECKSUMS"
+[ -n "${SEEN_SUDO_USER:-}" ] && printf '%s' "${VOUCH_SUDO_USER:-}" > "$SEEN_SUDO_USER"
+[ -n "${SEEN_CHECKSUMS:-}" ] && printf '%s' "${VOUCH_CHECKSUMS:-}" > "$SEEN_CHECKSUMS"
 mode="$1"
 config=""
 dry=0
@@ -195,7 +195,7 @@ done
 # (sudo-rs): the real installer refuses the passwordless rule, leaves sudo on
 # its password path, and exits 3; status then reports it as not enabled.
 if [ "${PRELAUNCH_REFUSED:-0}" = 1 ] && [ "$mode" = --prelaunch ]; then
-  echo "install-oshioki-hook: refusing the approval plugin lane: this host's sudo is sudo-rs" >&2
+  echo "install-vouch-hook: refusing the approval plugin lane: this host's sudo is sudo-rs" >&2
   exit 3
 fi
 case "$mode --dry-run=$dry" in
@@ -232,7 +232,7 @@ SH
 # Fake hook: status reports an active device when told to, enroll prints a
 # URL and exits (the real one waits for pairing), pin-record marks the
 # device the setup just exported.
-cat > "$TEST_ROOT/fake-bin/oshioki" <<'SH'
+cat > "$TEST_ROOT/fake-bin/vouch" <<'SH'
 #!/usr/bin/env bash
 case "${1:-}" in
   status)
@@ -244,7 +244,7 @@ case "${1:-}" in
     # something that never answers and prints nothing at all.
     case "${ENROLL_MODE:-url}" in
       fail)
-        echo "oshioki: enrollment could not connect to nats://nats.test within 20s: start the NATS server, or fix NATS_URL in /etc/oshioki/config.env" >&2
+        echo "vouch: enrollment could not connect to nats://nats.test within 20s: start the NATS server, or fix NATS_URL in /etc/vouch/config.env" >&2
         exit 1
         ;;
       hang)
@@ -254,7 +254,7 @@ case "${1:-}" in
         echo "Enrollment URL (expires in five minutes):"
         echo "  https://enroll.test/e/id?value=secret"
         echo "Native agent:"
-        echo "  oshioki-agent pair 'https://enroll.test/e/id?value=secret'"
+        echo "  vouch-agent pair 'https://enroll.test/e/id?value=secret'"
         ;;
     esac
     ;;
@@ -274,13 +274,13 @@ SH
 # Fake agent: show reflects identity presence, pair records its environment
 # and creates the identity, init creates it without a server, device-record
 # exports a fixed record for pin-record to consume.
-cat > "$TEST_ROOT/fake-bin/oshioki-agent" <<'SH'
+cat > "$TEST_ROOT/fake-bin/vouch-agent" <<'SH'
 #!/usr/bin/env bash
 # AGENT_KEYCHAIN_LOCKED reproduces what every verb does in a session with no
 # unlocked login keychain: the Security framework's own wording, on stderr.
 if [ -n "${AGENT_KEYCHAIN_LOCKED:-}" ]; then
   cat >&2 <<'ERR'
-Error: read the box secret for /home/test/.config/oshioki/agent.json
+Error: read the box secret for /home/test/.config/vouch/agent.json
 
 Caused by:
     0: read secret AAAA from the login keychain
@@ -415,7 +415,7 @@ export APPLIED_CONFIG="$TEST_ROOT/applied-config.env"
 export PLUGIN_ENABLED_FILE="$TEST_ROOT/plugin-enabled"
 export CALL_LOG="$TEST_ROOT/calls.log"
 export HOLDER_PIDS="$TEST_ROOT/holder-pids"
-export AGENT_STATE="$TEST_ROOT/home/.config/oshioki"
+export AGENT_STATE="$TEST_ROOT/home/.config/vouch"
 export SOCKET_TO_MAKE="$AGENT_STATE/agent.sock"
 : > "$CALL_LOG"
 
@@ -472,11 +472,11 @@ chmod 0755 "$TEST_ROOT/fake-bin/nats-stub"
 STUB_PORT="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')"
 export STUB_PORT
 export STUB_CREDS_FILE="$TEST_ROOT/stub-creds"
-# Both roles accepted by default: the hook's (oshioki/test-secret) and the
-# agent's own (oshioki-agent/agent-secret), matching run_setup's defaults --
+# Both roles accepted by default: the hook's (vouch/test-secret) and the
+# agent's own (vouch-agent/agent-secret), matching run_setup's defaults --
 # so an ordinary scenario probes and connects both, and the plist/agent.env
 # assertions below can tell the two apart.
-printf '%s\n' 'oshioki' 'test-secret' 'oshioki-agent' 'agent-secret' > "$STUB_CREDS_FILE"
+printf '%s\n' 'vouch' 'test-secret' 'vouch-agent' 'agent-secret' > "$STUB_CREDS_FILE"
 export SETUP_NATS_URL="nats://127.0.0.1:$STUB_PORT"
 "$TEST_ROOT/fake-bin/nats-stub" "$STUB_PORT" &
 STUB_PID="$!"
@@ -594,12 +594,12 @@ raise SystemExit(os.waitstatus_to_exitcode(status))
     TMPDIR="$TEST_ROOT/tmp" \
     SUDO_CALL_LOG="${SUDO_CALL_LOG:-$TEST_ROOT/sudo-calls.log}" \
     FAKE_TTY="${SETUP_PTY:+harness-tty}" \
-    AGENT_STATE="$TEST_ROOT/home/.config/oshioki" \
-    SOCKET_TO_MAKE="$TEST_ROOT/home/.config/oshioki/agent.sock" \
+    AGENT_STATE="$TEST_ROOT/home/.config/vouch" \
+    SOCKET_TO_MAKE="$TEST_ROOT/home/.config/vouch/agent.sock" \
     APPLIED_CONFIG="$TEST_ROOT/applied-config.env" \
     PLUGIN_ENABLED_FILE="$TEST_ROOT/plugin-enabled" \
     PAM_LANE_FILE="$TEST_ROOT/pam-lane" \
-    PAM_MODULE_BIN="${PAM_MODULE_BIN:-$TEST_ROOT/stage/liboshioki_pam.so}" \
+    PAM_MODULE_BIN="${PAM_MODULE_BIN:-$TEST_ROOT/stage/libvouch_pam.so}" \
     CALL_LOG="$TEST_ROOT/calls.log" \
     HOLDER_PIDS="$TEST_ROOT/holder-pids" \
     SUDO="$TEST_ROOT/fake-bin/sudo" \
@@ -609,24 +609,24 @@ raise SystemExit(os.waitstatus_to_exitcode(status))
     AGENT_LOG_LINE="${AGENT_LOG_LINE:-}" \
     AGENT_LOG_DELAYED_LINE="${AGENT_LOG_DELAYED_LINE:-}" \
     AGENT_LOG_DELAY="${AGENT_LOG_DELAY:-1}" \
-    OSHIOKI_AGENT_NATS_VERIFY_TIMEOUT="${OSHIOKI_AGENT_NATS_VERIFY_TIMEOUT:-2}" \
-    INSTALLER="$TEST_ROOT/fake-bin/install-oshioki-hook" \
+    VOUCH_AGENT_NATS_VERIFY_TIMEOUT="${VOUCH_AGENT_NATS_VERIFY_TIMEOUT:-2}" \
+    INSTALLER="$TEST_ROOT/fake-bin/install-vouch-hook" \
     SEEN_SUDO_USER="$TEST_ROOT/seen-sudo-user" \
-    AGENT_BIN="${SETUP_AGENT_BIN-$TEST_ROOT/fake-bin/oshioki-agent}" \
-    INSTALLED_HOOK="$TEST_ROOT/fake-bin/oshioki" \
-    OSHIOKI_INSTALL_ENV="$TEST_ROOT/etc/install.env" \
+    AGENT_BIN="${SETUP_AGENT_BIN-$TEST_ROOT/fake-bin/vouch-agent}" \
+    INSTALLED_HOOK="$TEST_ROOT/fake-bin/vouch" \
+    VOUCH_INSTALL_ENV="$TEST_ROOT/etc/install.env" \
     OPAQUE_DIR="${OPAQUE_DIR:-}" \
-    OSHIOKI_ORIGIN="${OSHIOKI_ORIGIN-https://laptop.test}" OSHIOKI_RP_ID="laptop.test" \
-    NATS_URL="$SETUP_NATS_URL" NATS_USER="oshioki" NATS_PASS="${NATS_PASS:-test-secret}" \
-    OSHIOKI_AGENT_NATS_URL="${OSHIOKI_AGENT_NATS_URL-$SETUP_NATS_URL}" \
-    OSHIOKI_AGENT_NATS_USER="${OSHIOKI_AGENT_NATS_USER-oshioki-agent}" \
-    OSHIOKI_AGENT_NATS_PASS="${OSHIOKI_AGENT_NATS_PASS-agent-secret}" \
+    VOUCH_ORIGIN="${VOUCH_ORIGIN-https://laptop.test}" VOUCH_RP_ID="laptop.test" \
+    NATS_URL="$SETUP_NATS_URL" NATS_USER="vouch" NATS_PASS="${NATS_PASS:-test-secret}" \
+    VOUCH_AGENT_NATS_URL="${VOUCH_AGENT_NATS_URL-$SETUP_NATS_URL}" \
+    VOUCH_AGENT_NATS_USER="${VOUCH_AGENT_NATS_USER-vouch-agent}" \
+    VOUCH_AGENT_NATS_PASS="${VOUCH_AGENT_NATS_PASS-agent-secret}" \
     DEVICES_ACTIVE="${DEVICES_ACTIVE:-0}" PRELAUNCH_REFUSED="${PRELAUNCH_REFUSED:-0}" \
     SEEN_CHECKSUMS="${SEEN_CHECKSUMS:-}" \
     ENROLL_MODE="${ENROLL_MODE:-url}" \
-    OSHIOKI_ENROLL_URL_TIMEOUT="${OSHIOKI_ENROLL_URL_TIMEOUT:-60}" \
+    VOUCH_ENROLL_URL_TIMEOUT="${VOUCH_ENROLL_URL_TIMEOUT:-60}" \
     AGENT_KEYCHAIN_LOCKED="${AGENT_KEYCHAIN_LOCKED:-}" \
-    "${SETUP_CMD:-$TEST_ROOT/stage/oshioki-laptop-setup}" "$@" </dev/null
+    "${SETUP_CMD:-$TEST_ROOT/stage/vouch-laptop-setup}" "$@" </dev/null
 }
 
 # Like run_setup but stages no NATS values at all: the socket-only install
@@ -640,8 +640,8 @@ run_setup_local() {
     SUDO_DENY_MATCH="${SUDO_DENY_MATCH:-}" \
     TMPDIR="$TEST_ROOT/tmp" \
     SUDO_CALL_LOG="${SUDO_CALL_LOG:-$TEST_ROOT/sudo-calls.log}" \
-    AGENT_STATE="$TEST_ROOT/home/.config/oshioki" \
-    SOCKET_TO_MAKE="$TEST_ROOT/home/.config/oshioki/agent.sock" \
+    AGENT_STATE="$TEST_ROOT/home/.config/vouch" \
+    SOCKET_TO_MAKE="$TEST_ROOT/home/.config/vouch/agent.sock" \
     APPLIED_CONFIG="$TEST_ROOT/applied-config.env" \
     PLUGIN_ENABLED_FILE="$TEST_ROOT/plugin-enabled" \
     CALL_LOG="$TEST_ROOT/calls.log" \
@@ -649,21 +649,21 @@ run_setup_local() {
     SUDO="$TEST_ROOT/fake-bin/sudo" \
     LAUNCHCTL="$TEST_ROOT/fake-bin/launchctl" \
     SYSTEMCTL="$TEST_ROOT/fake-bin/systemctl" \
-    INSTALLER="$TEST_ROOT/fake-bin/install-oshioki-hook" \
+    INSTALLER="$TEST_ROOT/fake-bin/install-vouch-hook" \
     SEEN_SUDO_USER="$TEST_ROOT/seen-sudo-user" \
-    AGENT_BIN="$TEST_ROOT/fake-bin/oshioki-agent" \
-    INSTALLED_HOOK="$TEST_ROOT/fake-bin/oshioki" \
-    OSHIOKI_INSTALL_ENV="$TEST_ROOT/etc/install.env" \
-    OSHIOKI_ORIGIN="${OSHIOKI_ORIGIN:-https://laptop.test}" OSHIOKI_RP_ID="laptop.test" \
+    AGENT_BIN="$TEST_ROOT/fake-bin/vouch-agent" \
+    INSTALLED_HOOK="$TEST_ROOT/fake-bin/vouch" \
+    VOUCH_INSTALL_ENV="$TEST_ROOT/etc/install.env" \
+    VOUCH_ORIGIN="${VOUCH_ORIGIN:-https://laptop.test}" VOUCH_RP_ID="laptop.test" \
     DEVICES_ACTIVE="${DEVICES_ACTIVE:-0}" PRELAUNCH_REFUSED="${PRELAUNCH_REFUSED:-0}" \
-    "$TEST_ROOT/stage/oshioki-laptop-setup" "$@" </dev/null
+    "$TEST_ROOT/stage/vouch-laptop-setup" "$@" </dev/null
 }
 
 # Scenario A: fresh machine, identity missing, no devices. Full flow.
 DEVICES_ACTIVE=0 run_setup --yes >"$TEST_ROOT/fresh.log" 2>&1 || fail "fresh setup failed"
 grep -Fq "NATS verified at $SETUP_NATS_URL" "$TEST_ROOT/fresh.log" || fail "server setup never verified NATS"
-grep -Fq 'OSHIOKI_ORIGIN=https://laptop.test' "$TEST_ROOT/etc/install.env" || fail "origin missing from install.env"
-grep -Fq 'OSHIOKI_AGENT_SOCKET='"$AGENT_STATE/agent.sock" "$TEST_ROOT/etc/install.env" || fail "socket missing from install.env"
+grep -Fq 'VOUCH_ORIGIN=https://laptop.test' "$TEST_ROOT/etc/install.env" || fail "origin missing from install.env"
+grep -Fq 'VOUCH_AGENT_SOCKET='"$AGENT_STATE/agent.sock" "$TEST_ROOT/etc/install.env" || fail "socket missing from install.env"
 [ -s "$TEST_ROOT/seen-sudo-user" ] || fail "laptop user never reached the installer"
 # Probe once: GNU stat -f prints a filesystem dump to stdout even when it
 # fails, which would poison an || fallback, so pick the working form first.
@@ -673,11 +673,11 @@ else
   file_mode() { stat -f '%Lp' "$1"; }
 fi
 [ "$(file_mode "$TEST_ROOT/etc/install.env")" = 600 ] || fail "install.env is not 0600"
-grep -Fq 'OSHIOKI_AGENT_SOCKET=' "$APPLIED_CONFIG" || fail "installer never saw the socket key"
+grep -Fq 'VOUCH_AGENT_SOCKET=' "$APPLIED_CONFIG" || fail "installer never saw the socket key"
 [ -f "$AGENT_STATE/agent.json" ] || fail "pair never created the identity"
 grep -Fq 'https://enroll.test/e/id' "$AGENT_STATE/paired-url" || fail "pair got the wrong URL"
 if [ "$(uname -s)" = Darwin ]; then
-  plist="$TEST_ROOT/home/Library/LaunchAgents/com.oshioki.agent.plist"
+  plist="$TEST_ROOT/home/Library/LaunchAgents/com.hev.vouch.agent.plist"
   [ -f "$plist" ] || fail "LaunchAgent plist missing"
   # The agent's OWN role (agent-secret), never the hook's (test-secret): see
   # the dedicated agent-credential-separation scenarios below for the
@@ -685,15 +685,15 @@ if [ "$(uname -s)" = Darwin ]; then
   # already get this right.
   grep -Fq '<string>agent-secret</string>' "$plist" || fail "plist missing agent's own NATS password"
   if grep -Fq '<string>test-secret</string>' "$plist"; then fail "plist carries the hook's NATS password"; fi
-  grep -Fq '<key>OSHIOKI_AGENT_SOCKET</key>' "$plist" || fail "plist missing agent socket"
-  grep -Fq '<key>OSHIOKI_AGENT_STATE</key>' "$plist" || fail "plist missing agent state"
+  grep -Fq '<key>VOUCH_AGENT_SOCKET</key>' "$plist" || fail "plist missing agent socket"
+  grep -Fq '<key>VOUCH_AGENT_STATE</key>' "$plist" || fail "plist missing agent state"
   [ "$(file_mode "$plist")" = 600 ] || fail "plist is not 0600"
   grep -Fq 'bootstrap' "$CALL_LOG" || fail "launchctl bootstrap never ran"
   grep -Fq 'agent connected to its NATS bus' "$TEST_ROOT/fresh.log" || fail "verify step never confirmed the NATS connection"
 else
   # No autostart on Linux: the agent needs a terminal for its prompt, so
   # the setup writes only the environment and says how to run it.
-  unit="$TEST_ROOT/home/.config/systemd/user/com.oshioki.agent.service"
+  unit="$TEST_ROOT/home/.config/systemd/user/com.hev.vouch.agent.service"
   agent_env="$AGENT_STATE/agent.env"
   if [ -f "$unit" ]; then fail "systemd unit written on Linux"; fi
   if grep -Fq 'enable' "$CALL_LOG"; then fail "systemctl enable ran on Linux"; fi
@@ -702,12 +702,12 @@ else
   # the agent ends up with, not the bytes on disk.
   env_value() { (set -a; . "$1"; set +a; eval "printf '%s' \"\$$2\""); }
   [ "$(env_value "$agent_env" NATS_URL)" = "$SETUP_NATS_URL" ] || fail "agent.env NATS URL did not survive sourcing"
-  # The agent's OWN role (oshioki-agent/agent-secret), never the hook's
-  # (oshioki/test-secret).
-  [ "$(env_value "$agent_env" NATS_USER)" = oshioki-agent ] || fail "agent.env NATS user did not survive sourcing"
+  # The agent's OWN role (vouch-agent/agent-secret), never the hook's
+  # (vouch/test-secret).
+  [ "$(env_value "$agent_env" NATS_USER)" = vouch-agent ] || fail "agent.env NATS user did not survive sourcing"
   [ "$(env_value "$agent_env" NATS_PASS)" = agent-secret ] || fail "agent.env NATS password did not survive sourcing"
-  [ "$(env_value "$agent_env" OSHIOKI_AGENT_SOCKET)" = "$AGENT_STATE/agent.sock" ] || fail "agent.env socket did not survive sourcing"
-  [ "$(env_value "$agent_env" OSHIOKI_AGENT_STATE)" = "$AGENT_STATE" ] || fail "agent.env state dir did not survive sourcing"
+  [ "$(env_value "$agent_env" VOUCH_AGENT_SOCKET)" = "$AGENT_STATE/agent.sock" ] || fail "agent.env socket did not survive sourcing"
+  [ "$(env_value "$agent_env" VOUCH_AGENT_STATE)" = "$AGENT_STATE" ] || fail "agent.env state dir did not survive sourcing"
   [ "$(file_mode "$agent_env")" = 600 ] || fail "agent.env is not 0600"
   grep -Fq ". '$agent_env'" "$TEST_ROOT/fresh.log" || fail "setup never printed the run one-liner"
   grep -Fq 'install complete' "$TEST_ROOT/fresh.log" || fail "verify never completed"
@@ -722,7 +722,7 @@ fi
 # exited non-zero and the migration never ran.
 : > "$TEST_ROOT/pam-lane"
 : > "$AGENT_STATE/agent.json"
-: > "$TEST_ROOT/stage/liboshioki_pam.so"
+: > "$TEST_ROOT/stage/libvouch_pam.so"
 DEVICES_ACTIVE=1 run_setup --yes --contextual-pam >"$TEST_ROOT/ctxpam.log" 2>&1 ||
   { sed -n '1,40p' "$TEST_ROOT/ctxpam.log" >&2; fail "--contextual-pam on a lane host did not finish"; }
 grep -Fq 'contextual PAM lane active' "$TEST_ROOT/ctxpam.log" ||
@@ -787,8 +787,8 @@ assert_no_ticket_reset() {
 
 : > "$TEST_ROOT/pam-lane"
 : > "$AGENT_STATE/agent.json"
-: > "$TEST_ROOT/stage/liboshioki_pam.so"
-rm -f "${LAUNCHAGENTS_DIR:-$TEST_ROOT/home/Library/LaunchAgents}/com.oshioki.agent.plist"
+: > "$TEST_ROOT/stage/libvouch_pam.so"
+rm -f "${LAUNCHAGENTS_DIR:-$TEST_ROOT/home/Library/LaunchAgents}/com.hev.vouch.agent.plist"
 
 # No tty: the ssh / `launchctl asuser` shape, where sudo keys by parent pid.
 reset_sudo_ticket
@@ -826,7 +826,7 @@ os.execv(binary, [binary] + sys.argv[1:])
 PY
 chmod 0755 "$TEST_ROOT/fake-bin/nc"
 reset_sudo_ticket
-rm -f "${LAUNCHAGENTS_DIR:-$TEST_ROOT/home/Library/LaunchAgents}/com.oshioki.agent.plist"
+rm -f "${LAUNCHAGENTS_DIR:-$TEST_ROOT/home/Library/LaunchAgents}/com.hev.vouch.agent.plist"
 : > "$TEST_ROOT/pam-lane"
 SETUP_PTY=1 FAKE_UNAME=Darwin DEVICES_ACTIVE=1 run_setup --yes --contextual-pam \
   >"$TEST_ROOT/one-elevation-tty.log" 2>&1 ||
@@ -834,7 +834,7 @@ SETUP_PTY=1 FAKE_UNAME=Darwin DEVICES_ACTIVE=1 run_setup --yes --contextual-pam 
 [ "$(cat "$HOLDER_PIDS.fds")" = 'True True True' ] ||
   fail "fake listener retained a setup descriptor instead of /dev/null"
 rm -f "$TEST_ROOT/fake-bin/nc"
-grep -Fq 'oshioki-laptop-setup: ready:' "$TEST_ROOT/one-elevation-tty.log" || fail "tty setup never reached ready"
+grep -Fq 'vouch-laptop-setup: ready:' "$TEST_ROOT/one-elevation-tty.log" || fail "tty setup never reached ready"
 tty_auths="$(sudo_auth_count)"
 [ "$tty_auths" = 1 ] ||
   { cat "$TEST_ROOT/sudo-auth.log" >&2; fail "tty run authenticated $tty_auths times, want exactly 1"; }
@@ -860,7 +860,7 @@ fi
 # Asserted on this run's OWN log: reading the warm run's log back would pass
 # whatever the cold path printed.
 reset_sudo_ticket
-rm -f "${LAUNCHAGENTS_DIR:-$TEST_ROOT/home/Library/LaunchAgents}/com.oshioki.agent.plist"
+rm -f "${LAUNCHAGENTS_DIR:-$TEST_ROOT/home/Library/LaunchAgents}/com.hev.vouch.agent.plist"
 : > "$TEST_ROOT/pam-lane"
 # SUDO_TICKET_TIMEOUT=0 expires the install's ticket the instant it is taken,
 # so the closing sudo is a genuinely cold one on an otherwise identical run.
@@ -881,9 +881,9 @@ fi
 reset_sudo_ticket
 rm -f "$TEST_ROOT/etc/install.env"
 : > "$TEST_ROOT/plugin-enabled"
-rm -rf "$TEST_ROOT/tmp"/oshioki-*
-tmp_before="$(find "$TEST_ROOT/tmp" -name 'oshioki-*' 2>/dev/null | wc -l | tr -d '[:space:]')"
-[ "$tmp_before" = 0 ] || fail "the scenario started with oshioki-* temp files"
+rm -rf "$TEST_ROOT/tmp"/vouch-*
+tmp_before="$(find "$TEST_ROOT/tmp" -name 'vouch-*' 2>/dev/null | wc -l | tr -d '[:space:]')"
+[ "$tmp_before" = 0 ] || fail "the scenario started with vouch-* temp files"
 if SUDO_DENY_MATCH='install -m 0600' DEVICES_ACTIVE=1 \
   run_setup --yes --reconfigure >"$TEST_ROOT/denied-sudo.log" 2>&1; then
   fail "a denied sudo did not fail the run"
@@ -891,13 +891,13 @@ fi
 # Not a vacuous pass: the run must have died at the denied sudo, not earlier.
 grep -Fq 'sudo: request denied' "$TEST_ROOT/denied-sudo.log" ||
   { tail -5 "$TEST_ROOT/denied-sudo.log" >&2; fail "the run did not fail at the denied sudo"; }
-leftover="$(find "$TEST_ROOT/tmp" -name 'oshioki-*' 2>/dev/null)"
+leftover="$(find "$TEST_ROOT/tmp" -name 'vouch-*' 2>/dev/null)"
 [ -z "$leftover" ] ||
   fail "a denied sudo left secret-bearing temp files behind: $leftover"
 rm -f "$TEST_ROOT/etc/install.env"
 
-rm -f "$TEST_ROOT/pam-lane" "$TEST_ROOT/stage/liboshioki_pam.so"
-rm -f "${LAUNCHAGENTS_DIR:-$TEST_ROOT/home/Library/LaunchAgents}/com.oshioki.agent.plist"
+rm -f "$TEST_ROOT/pam-lane" "$TEST_ROOT/stage/libvouch_pam.so"
+rm -f "${LAUNCHAGENTS_DIR:-$TEST_ROOT/home/Library/LaunchAgents}/com.hev.vouch.agent.plist"
 : > "$TEST_ROOT/plugin-enabled"
 
 # A session with no unlocked login keychain is named as such, before the
@@ -927,7 +927,7 @@ grep -Fq 'could not connect to nats://nats.test' "$TEST_ROOT/enroll-fail.log" ||
 grep -Fq 'exited without printing one' "$TEST_ROOT/enroll-fail.log" ||
   fail "a hook that exited was not reported as having exited"
 rm -f "$AGENT_STATE/agent.json"
-if ENROLL_MODE=hang OSHIOKI_ENROLL_URL_TIMEOUT=2 DEVICES_ACTIVE=0 \
+if ENROLL_MODE=hang VOUCH_ENROLL_URL_TIMEOUT=2 DEVICES_ACTIVE=0 \
    run_setup --yes >"$TEST_ROOT/enroll-hang.log" 2>&1; then
   fail "setup continued after enrollment hung"
 fi
@@ -953,23 +953,23 @@ fi
 # script must still resolve its own keg rather than the directory the
 # symlink sits in. `pwd -P` on the dirname resolves symlinked directories
 # only, so before the fix SCRIPT_DIR became the fake /opt/homebrew/bin, the
-# keg probe missed ../libexec/SHA256SUMS, and HOOK_BIN/OSHIOKI_CHECKSUMS
+# keg probe missed ../libexec/SHA256SUMS, and HOOK_BIN/VOUCH_CHECKSUMS
 # reached the installer empty (issue #91).
 KEG="$TEST_ROOT/keg/0.1.8"
 mkdir -p "$KEG/bin" "$KEG/libexec" "$TEST_ROOT/keg/brew-bin"
-cp "$SCRIPT_DIR/oshioki-laptop-setup" "$KEG/bin/"
-cp "$TEST_ROOT/fake-bin/oshioki" "$KEG/bin/oshioki"
-chmod 0755 "$KEG/bin/oshioki-laptop-setup" "$KEG/bin/oshioki"
+cp "$SCRIPT_DIR/vouch-laptop-setup" "$KEG/bin/"
+cp "$TEST_ROOT/fake-bin/vouch" "$KEG/bin/vouch"
+chmod 0755 "$KEG/bin/vouch-laptop-setup" "$KEG/bin/vouch"
 : > "$KEG/libexec/SHA256SUMS"
-: > "$KEG/libexec/oshioki.dylib"
+: > "$KEG/libexec/vouch.dylib"
 # Relative, like Homebrew's own bin links, so the walk has to join it to the
 # link's own directory instead of treating it as absolute.
-ln -s "../0.1.8/bin/oshioki-laptop-setup" "$TEST_ROOT/keg/brew-bin/oshioki-laptop-setup"
+ln -s "../0.1.8/bin/vouch-laptop-setup" "$TEST_ROOT/keg/brew-bin/vouch-laptop-setup"
 : > "$CALL_LOG"
-SETUP_CMD="$TEST_ROOT/keg/brew-bin/oshioki-laptop-setup" \
+SETUP_CMD="$TEST_ROOT/keg/brew-bin/vouch-laptop-setup" \
   SEEN_CHECKSUMS="$TEST_ROOT/seen-checksums" \
   run_setup --yes >"$TEST_ROOT/keg.log" 2>&1 || { cat "$TEST_ROOT/keg.log" >&2; fail "keg symlink run failed"; }
-grep -Fq "installed $KEG/bin/oshioki" "$TEST_ROOT/keg.log" ||
+grep -Fq "installed $KEG/bin/vouch" "$TEST_ROOT/keg.log" ||
   fail "keg symlink run did not point HOOK_BIN at the keg"
 [ "$(cat "$TEST_ROOT/seen-checksums")" = "$KEG/libexec/SHA256SUMS" ] ||
   fail "keg symlink run did not pass the keg manifest: $(cat "$TEST_ROOT/seen-checksums")"
@@ -984,7 +984,7 @@ exit 1
 SH
 chmod 0755 "$TEST_ROOT/keg/broken-readlink/readlink"
 readlink_rc=0
-SETUP_CMD="$TEST_ROOT/keg/brew-bin/oshioki-laptop-setup" \
+SETUP_CMD="$TEST_ROOT/keg/brew-bin/vouch-laptop-setup" \
   SETUP_PATH="$TEST_ROOT/keg/broken-readlink:/usr/bin:/bin" \
   run_setup --yes >"$TEST_ROOT/broken-readlink.log" 2>&1 || readlink_rc=$?
 [ "$readlink_rc" -ne 0 ] || fail "a failing readlink did not stop the run"
@@ -992,28 +992,28 @@ grep -Fq 'cannot resolve symlink' "$TEST_ROOT/broken-readlink.log" ||
   fail "a failing readlink was not reported: $(head -1 "$TEST_ROOT/broken-readlink.log")"
 
 # Scenario C: --reconfigure rewrites install.env from current values.
-OSHIOKI_ORIGIN="https://reconfigured.test" run_setup --yes --reconfigure >"$TEST_ROOT/reconf.log" 2>&1 || fail "reconfigure failed"
-grep -Fq 'OSHIOKI_ORIGIN=https://reconfigured.test' "$TEST_ROOT/etc/install.env" || fail "reconfigure kept stale origin"
+VOUCH_ORIGIN="https://reconfigured.test" run_setup --yes --reconfigure >"$TEST_ROOT/reconf.log" 2>&1 || fail "reconfigure failed"
+grep -Fq 'VOUCH_ORIGIN=https://reconfigured.test' "$TEST_ROOT/etc/install.env" || fail "reconfigure kept stale origin"
 
 # Scenario D: a password with spaces and % reaches the autostart config
 # literally instead of being split or expanded. Staged as the AGENT's own
 # password -- that is what actually reaches the plist/agent.env now, never
 # the hook's.
 NASTY='p% a%s s'
-printf '%s\n' 'oshioki' 'test-secret' 'oshioki-agent' "$NASTY" > "$STUB_CREDS_FILE"
-OSHIOKI_AGENT_NATS_PASS="$NASTY" run_setup --yes --reconfigure >"$TEST_ROOT/nasty.log" 2>&1 || fail "nasty password setup failed"
-printf '%s\n' 'oshioki' 'test-secret' 'oshioki-agent' 'agent-secret' > "$STUB_CREDS_FILE"
+printf '%s\n' 'vouch' 'test-secret' 'vouch-agent' "$NASTY" > "$STUB_CREDS_FILE"
+VOUCH_AGENT_NATS_PASS="$NASTY" run_setup --yes --reconfigure >"$TEST_ROOT/nasty.log" 2>&1 || fail "nasty password setup failed"
+printf '%s\n' 'vouch' 'test-secret' 'vouch-agent' 'agent-secret' > "$STUB_CREDS_FILE"
 grep -Fq "agent NATS verified at $SETUP_NATS_URL" "$TEST_ROOT/nasty.log" || fail "probe rejected the nasty password"
 if [ "$(uname -s)" = Darwin ]; then
   grep -Fq "<string>$NASTY</string>" "$plist" || fail "plist mangled the password"
 else
-  agent_env="$TEST_ROOT/home/.config/oshioki/agent.env"
+  agent_env="$TEST_ROOT/home/.config/vouch/agent.env"
   # Sourcing is how the agent is started, so the password has to come back
   # byte-for-byte through it -- bare bytes on disk would not.
   got=$(set -a; . "$agent_env"; set +a; printf '%s' "$NATS_PASS")
   [ "$got" = "$NASTY" ] || fail "agent.env mangled the password: [$got]"
-  grep -Fq 'OSHIOKI_AGENT_SOCKET=' "$agent_env" || fail "agent.env missing agent socket"
-  grep -Fq 'OSHIOKI_AGENT_STATE=' "$agent_env" || fail "agent.env missing agent state"
+  grep -Fq 'VOUCH_AGENT_SOCKET=' "$agent_env" || fail "agent.env missing agent socket"
+  grep -Fq 'VOUCH_AGENT_STATE=' "$agent_env" || fail "agent.env missing agent state"
   [ "$(file_mode "$agent_env")" = 600 ] || fail "agent.env is not 0600"
 fi
 
@@ -1022,13 +1022,13 @@ fi
 if [ "$(uname -s)" != Darwin ]; then
   unit_dir="$TEST_ROOT/home/.config/systemd/user"
   mkdir -p "$unit_dir"
-  printf '%s\n' '[Service]' 'ExecStart=/stale/oshioki-agent run' > "$unit_dir/com.oshioki.agent.service"
+  printf '%s\n' '[Service]' 'ExecStart=/stale/vouch-agent run' > "$unit_dir/com.hev.vouch.agent.service"
   : > "$CALL_LOG"
   # --reconfigure: scenario D left the nasty password in install.env, and a
   # plain re-run would probe the stub with it.
   run_setup --yes --reconfigure >"$TEST_ROOT/stale-unit.log" 2>&1 || fail "setup with a stale unit failed"
   grep -Fq 'disable --now' "$CALL_LOG" || fail "stale unit was never disabled"
-  if [ -f "$unit_dir/com.oshioki.agent.service" ]; then fail "stale unit survived"; fi
+  if [ -f "$unit_dir/com.hev.vouch.agent.service" ]; then fail "stale unit survived"; fi
   grep -Fq 'removed the old systemd unit' "$TEST_ROOT/stale-unit.log" || fail "stale unit removal was silent"
 fi
 
@@ -1039,11 +1039,11 @@ if [ "$(uname -s)" != Darwin ]; then
   unit_dir="$TEST_ROOT/home/.config/systemd/user"
   wants="$unit_dir/default.target.wants"
   mkdir -p "$wants"
-  printf '%s\n' '[Service]' 'ExecStart=/stale/oshioki-agent run' > "$unit_dir/com.oshioki.agent.service"
-  ln -sf "$unit_dir/com.oshioki.agent.service" "$wants/com.oshioki.agent.service"
+  printf '%s\n' '[Service]' 'ExecStart=/stale/vouch-agent run' > "$unit_dir/com.hev.vouch.agent.service"
+  ln -sf "$unit_dir/com.hev.vouch.agent.service" "$wants/com.hev.vouch.agent.service"
   : > "$CALL_LOG"
   run_setup --yes --reconfigure >"$TEST_ROOT/stale-wants.log" 2>&1 || fail "setup with a stale wants link failed"
-  if [ -e "$wants/com.oshioki.agent.service" ] || [ -L "$wants/com.oshioki.agent.service" ]; then
+  if [ -e "$wants/com.hev.vouch.agent.service" ] || [ -L "$wants/com.hev.vouch.agent.service" ]; then
     fail "stale enable symlink survived the unit it pointed at"
   fi
 fi
@@ -1123,7 +1123,7 @@ fi
 # anywhere, never placeholders.
 rm -f "$TEST_ROOT/etc/install.env" "$AGENT_STATE/agent.json" "$AGENT_STATE/pinned" "$TEST_ROOT/plugin-enabled"
 # Earlier server-mode runs leave a NATS plist that an ordinary rerun preserves.
-rm -f "$TEST_ROOT/home/Library/LaunchAgents/com.oshioki.agent.plist"
+rm -f "$TEST_ROOT/home/Library/LaunchAgents/com.hev.vouch.agent.plist"
 reset_sudo_ticket
 DEVICES_ACTIVE=0 run_setup_local --local --yes >"$TEST_ROOT/local.log" 2>&1 || fail "local setup failed"
 # --local does all its privileged work inside one re-invocation of this script
@@ -1134,7 +1134,7 @@ local_auths="$(sudo_auth_count)"
   { cat "$TEST_ROOT/sudo-auth.log" >&2; fail "--local authenticated $local_auths times, want exactly 1"; }
 assert_one_sudo_parent "--local"
 assert_no_ticket_reset "--local"
-grep -Fq 'OSHIOKI_LOCAL=1' "$TEST_ROOT/etc/install.env" || fail "local flag missing from install.env"
+grep -Fq 'VOUCH_LOCAL=1' "$TEST_ROOT/etc/install.env" || fail "local flag missing from install.env"
 if grep -Eq '^NATS_' "$TEST_ROOT/etc/install.env"; then fail "socket-only install.env claims a NATS"; fi
 if grep -Eq '^NATS_' "$APPLIED_CONFIG"; then fail "socket-only installer input claims a NATS"; fi
 grep -Fq 'device paired locally' "$TEST_ROOT/local.log" || fail "local flow never paired"
@@ -1144,21 +1144,21 @@ if grep -Fq 'enrolling a new device' "$TEST_ROOT/local.log"; then fail "local fl
 [ "$(grep -c '^installed ' "$TEST_ROOT/local.log")" = 2 ] || fail "plugin was not enabled after pinning"
 verify_done "$TEST_ROOT/local.log" "local verify never completed"
 if [ "$(uname -s)" = Darwin ]; then
-  plist="$TEST_ROOT/home/Library/LaunchAgents/com.oshioki.agent.plist"
+  plist="$TEST_ROOT/home/Library/LaunchAgents/com.hev.vouch.agent.plist"
   if grep -Eq '<key>NATS_(URL|USER|PASS)</key>' "$plist"; then fail "socket-only plist claims a NATS"; fi
-  grep -Fq '<key>OSHIOKI_AGENT_SOCKET</key>' "$plist" || fail "socket-only plist missing agent socket"
+  grep -Fq '<key>VOUCH_AGENT_SOCKET</key>' "$plist" || fail "socket-only plist missing agent socket"
 fi
 
 # Scenario F: --local in a repo checkout without AGENT_BIN wraps the agent
-# in Oshioki.app, so the plist (and the Touch ID sheet) uses the bundle.
-mkdir -p "$TEST_ROOT/scripts/mac" "$TEST_ROOT/target/release" "$TEST_ROOT/bundle/Oshioki.app/Contents/MacOS"
+# in Vouch.app, so the plist (and the Touch ID sheet) uses the bundle.
+mkdir -p "$TEST_ROOT/scripts/mac" "$TEST_ROOT/target/release" "$TEST_ROOT/bundle/Vouch.app/Contents/MacOS"
 : > "$TEST_ROOT/Cargo.toml"
-: > "$TEST_ROOT/target/release/oshioki"
-: > "$TEST_ROOT/target/release/liboshioki_plugin.dylib"
-chmod 0755 "$TEST_ROOT/target/release/oshioki" "$TEST_ROOT/target/release/liboshioki_plugin.dylib"
-cp "$TEST_ROOT/fake-bin/oshioki-agent" "$TEST_ROOT/target/release/oshioki-agent"
-BUNDLE_BIN="$TEST_ROOT/bundle/Oshioki.app/Contents/MacOS/oshioki-agent"
-cp "$TEST_ROOT/fake-bin/oshioki-agent" "$BUNDLE_BIN"
+: > "$TEST_ROOT/target/release/vouch"
+: > "$TEST_ROOT/target/release/libvouch_plugin.dylib"
+chmod 0755 "$TEST_ROOT/target/release/vouch" "$TEST_ROOT/target/release/libvouch_plugin.dylib"
+cp "$TEST_ROOT/fake-bin/vouch-agent" "$TEST_ROOT/target/release/vouch-agent"
+BUNDLE_BIN="$TEST_ROOT/bundle/Vouch.app/Contents/MacOS/vouch-agent"
+cp "$TEST_ROOT/fake-bin/vouch-agent" "$BUNDLE_BIN"
 cat > "$TEST_ROOT/scripts/mac/bundle-agent" <<SH
 #!/usr/bin/env bash
 : > "$TEST_ROOT/bundle-agent-ran"
@@ -1167,8 +1167,8 @@ SH
 chmod 0755 "$TEST_ROOT/scripts/mac/bundle-agent"
 rm -f "$TEST_ROOT/etc/install.env" "$AGENT_STATE/agent.json" "$AGENT_STATE/pinned" "$TEST_ROOT/plugin-enabled"
 DEVICES_ACTIVE=0 env -i PATH="/usr/bin:/bin" HOME="$TEST_ROOT/home" \
-  AGENT_STATE="$TEST_ROOT/home/.config/oshioki" \
-  SOCKET_TO_MAKE="$TEST_ROOT/home/.config/oshioki/agent.sock" \
+  AGENT_STATE="$TEST_ROOT/home/.config/vouch" \
+  SOCKET_TO_MAKE="$TEST_ROOT/home/.config/vouch/agent.sock" \
   APPLIED_CONFIG="$TEST_ROOT/applied-config.env" \
   PLUGIN_ENABLED_FILE="$TEST_ROOT/plugin-enabled" \
   CALL_LOG="$TEST_ROOT/calls.log" \
@@ -1176,18 +1176,18 @@ DEVICES_ACTIVE=0 env -i PATH="/usr/bin:/bin" HOME="$TEST_ROOT/home" \
   SUDO="$TEST_ROOT/fake-bin/sudo" \
   LAUNCHCTL="$TEST_ROOT/fake-bin/launchctl" \
   SYSTEMCTL="$TEST_ROOT/fake-bin/systemctl" \
-  INSTALLER="$TEST_ROOT/fake-bin/install-oshioki-hook" \
-  INSTALLED_HOOK="$TEST_ROOT/fake-bin/oshioki" \
-  OSHIOKI_INSTALL_ENV="$TEST_ROOT/etc/install.env" \
-  OSHIOKI_ORIGIN="https://laptop.test" OSHIOKI_RP_ID="laptop.test" \
-  NATS_URL="$SETUP_NATS_URL" NATS_USER="oshioki" NATS_PASS="test-secret" \
+  INSTALLER="$TEST_ROOT/fake-bin/install-vouch-hook" \
+  INSTALLED_HOOK="$TEST_ROOT/fake-bin/vouch" \
+  VOUCH_INSTALL_ENV="$TEST_ROOT/etc/install.env" \
+  VOUCH_ORIGIN="https://laptop.test" VOUCH_RP_ID="laptop.test" \
+  NATS_URL="$SETUP_NATS_URL" NATS_USER="vouch" NATS_PASS="test-secret" \
   DEVICES_ACTIVE=0 \
-  "$TEST_ROOT/stage/oshioki-laptop-setup" --local --yes </dev/null >"$TEST_ROOT/bundle.log" 2>&1 || fail "local bundle setup failed"
+  "$TEST_ROOT/stage/vouch-laptop-setup" --local --yes </dev/null >"$TEST_ROOT/bundle.log" 2>&1 || fail "local bundle setup failed"
 grep -Fq "NATS verified at $SETUP_NATS_URL" "$TEST_ROOT/bundle.log" || fail "staged NATS was never verified"
 grep -Fq "NATS_URL=$SETUP_NATS_URL" "$TEST_ROOT/etc/install.env" || fail "verified NATS missing from install.env"
 if [ "$(uname -s)" = Darwin ]; then
   [ -f "$TEST_ROOT/bundle-agent-ran" ] || fail "local flow never built the app bundle"
-  grep -Fq "<string>$BUNDLE_BIN</string>" "$TEST_ROOT/home/Library/LaunchAgents/com.oshioki.agent.plist" \
+  grep -Fq "<string>$BUNDLE_BIN</string>" "$TEST_ROOT/home/Library/LaunchAgents/com.hev.vouch.agent.plist" \
     || fail "plist does not run the agent from the bundle"
 fi
 verify_done "$TEST_ROOT/bundle.log" "local bundle verify never completed"
@@ -1201,37 +1201,37 @@ grep -Fq 'NATS verification failed' "$TEST_ROOT/badprobe.log" || fail "dead NATS
 # URL with local/local credentials, written before installs probed) to
 # socket-only. Pinning the same fingerprint again is idempotent.
 printf '%s\n' \
-  'OSHIOKI_ORIGIN=https://laptop.test' \
-  'OSHIOKI_RP_ID=laptop.test' \
+  'VOUCH_ORIGIN=https://laptop.test' \
+  'VOUCH_RP_ID=laptop.test' \
   'NATS_URL=nats://127.0.0.1:4222' \
   'NATS_USER=local' \
   'NATS_PASS=local' \
-  "OSHIOKI_AGENT_SOCKET=$AGENT_STATE/agent.sock" \
-  'OSHIOKI_LOCAL=1' > "$TEST_ROOT/etc/install.env"
+  "VOUCH_AGENT_SOCKET=$AGENT_STATE/agent.sock" \
+  'VOUCH_LOCAL=1' > "$TEST_ROOT/etc/install.env"
 rm -f "$AGENT_STATE/agent.json" "$AGENT_STATE/pinned" "$TEST_ROOT/plugin-enabled"
 DEVICES_ACTIVE=0 run_setup_local --local --yes --reconfigure >"$TEST_ROOT/migrate.log" 2>&1 || fail "migration reconfigure failed"
 if grep -Eq '^NATS_' "$TEST_ROOT/etc/install.env"; then fail "migration kept placeholder NATS keys"; fi
-grep -Fq 'OSHIOKI_LOCAL=1' "$TEST_ROOT/etc/install.env" || fail "migration dropped the local flag"
-grep -Fq "OSHIOKI_AGENT_SOCKET=$AGENT_STATE/agent.sock" "$TEST_ROOT/etc/install.env" || fail "migration dropped the socket"
+grep -Fq 'VOUCH_LOCAL=1' "$TEST_ROOT/etc/install.env" || fail "migration dropped the local flag"
+grep -Fq "VOUCH_AGENT_SOCKET=$AGENT_STATE/agent.sock" "$TEST_ROOT/etc/install.env" || fail "migration dropped the socket"
 verify_done "$TEST_ROOT/migrate.log" "migration verify never completed"
 
 # Scenario I: a plain re-run against a stale placeholder install.env
 # refuses instead of reinstalling the placeholders. install.env must be
 # byte-identical afterwards: refusal happens before any write.
 printf '%s\n' \
-  'OSHIOKI_ORIGIN=https://laptop.test' \
-  'OSHIOKI_RP_ID=laptop.test' \
+  'VOUCH_ORIGIN=https://laptop.test' \
+  'VOUCH_RP_ID=laptop.test' \
   'NATS_URL=nats://127.0.0.1:4222' \
   'NATS_USER=local' \
   'NATS_PASS=local' \
-  "OSHIOKI_AGENT_SOCKET=$AGENT_STATE/agent.sock" \
-  'OSHIOKI_LOCAL=1' > "$TEST_ROOT/etc/install.env"
+  "VOUCH_AGENT_SOCKET=$AGENT_STATE/agent.sock" \
+  'VOUCH_LOCAL=1' > "$TEST_ROOT/etc/install.env"
 cp "$TEST_ROOT/etc/install.env" "$TEST_ROOT/install.env.before"
 if DEVICES_ACTIVE=0 run_setup_local --local --yes >"$TEST_ROOT/stale-reuse.log" 2>&1; then fail "reinstalled stale placeholders"; fi
 grep -Fq -- '--reconfigure' "$TEST_ROOT/stale-reuse.log" || fail "stale refusal never advised --reconfigure"
 cmp -s "$TEST_ROOT/etc/install.env" "$TEST_ROOT/install.env.before" || fail "refusal rewrote install.env"
 
-# Scenario J (issue #88): /etc/oshioki is root-owned 0700 on a real laptop, so
+# Scenario J (issue #88): /etc/vouch is root-owned 0700 on a real laptop, so
 # the unprivileged `[ -f ]` that used to guard step 1 answered "missing" for
 # an install.env that was there. The run then took the write branch: with an
 # origin staged it silently overwrote a good config, and with none it died
@@ -1240,12 +1240,12 @@ cmp -s "$TEST_ROOT/etc/install.env" "$TEST_ROOT/install.env.before" || fail "ref
 # else.
 : > "$CALL_LOG"
 printf '%s\n' \
-  'OSHIOKI_ORIGIN=https://preserved.test' \
-  'OSHIOKI_RP_ID=preserved.test' \
+  'VOUCH_ORIGIN=https://preserved.test' \
+  'VOUCH_RP_ID=preserved.test' \
   "NATS_URL=$SETUP_NATS_URL" \
-  'NATS_USER=oshioki' \
+  'NATS_USER=vouch' \
   'NATS_PASS=test-secret' \
-  "OSHIOKI_AGENT_SOCKET=$AGENT_STATE/agent.sock" > "$TEST_ROOT/etc/install.env"
+  "VOUCH_AGENT_SOCKET=$AGENT_STATE/agent.sock" > "$TEST_ROOT/etc/install.env"
 chmod 0600 "$TEST_ROOT/etc/install.env"
 chmod 0000 "$TEST_ROOT/etc"
 # No origin staged at all: a run that takes the write branch cannot invent one
@@ -1253,7 +1253,7 @@ chmod 0000 "$TEST_ROOT/etc"
 # rewritten file. The reuse assertions still catch a silent overwrite if some
 # default ever appears.
 opaque_rc=0
-OPAQUE_DIR="$TEST_ROOT/etc" OSHIOKI_ORIGIN="" DEVICES_ACTIVE=1 \
+OPAQUE_DIR="$TEST_ROOT/etc" VOUCH_ORIGIN="" DEVICES_ACTIVE=1 \
   run_setup --yes >"$TEST_ROOT/opaque.log" 2>&1 || opaque_rc=$?
 chmod 0700 "$TEST_ROOT/etc"
 if [ "$opaque_rc" -ne 0 ]; then
@@ -1262,7 +1262,7 @@ if [ "$opaque_rc" -ne 0 ]; then
 fi
 grep -Fq 'reusing existing' "$TEST_ROOT/opaque.log" \
   || fail "setup did not reuse the install.env it could not stat"
-grep -Fq 'OSHIOKI_ORIGIN=https://preserved.test' "$TEST_ROOT/etc/install.env" \
+grep -Fq 'VOUCH_ORIGIN=https://preserved.test' "$TEST_ROOT/etc/install.env" \
   || fail "setup overwrote an install.env it could not stat"
 
 # Scenario K (Darwin, forced): the agent's own NATS role never becomes the
@@ -1270,18 +1270,18 @@ grep -Fq 'OSHIOKI_ORIGIN=https://preserved.test' "$TEST_ROOT/etc/install.env" \
 # from every other scenario's defaults. FAKE_UNAME forces the Darwin branch
 # regardless of the host running this suite, since the LaunchAgent plist is
 # Darwin-only code and this sandbox may not be a Mac.
-plist_k="$TEST_ROOT/home/Library/LaunchAgents/com.oshioki.agent.plist"
+plist_k="$TEST_ROOT/home/Library/LaunchAgents/com.hev.vouch.agent.plist"
 rm -f "$plist_k" "$TEST_ROOT/etc/install.env" "$AGENT_STATE/agent.json" "$AGENT_STATE/pinned" "$TEST_ROOT/plugin-enabled" "$AGENT_STATE/agent.log"
-# run_setup's hook NATS_USER is fixed at "oshioki" (only NATS_PASS and the
+# run_setup's hook NATS_USER is fixed at "vouch" (only NATS_PASS and the
 # agent-role names are independently overridable), so the hook pair here
 # keeps that user with a scenario-specific password.
-printf '%s\n' 'oshioki' 'hook-secret-K' 'oshioki-agent-k' 'agent-secret-K' > "$STUB_CREDS_FILE"
+printf '%s\n' 'vouch' 'hook-secret-K' 'vouch-agent-k' 'agent-secret-K' > "$STUB_CREDS_FILE"
 FAKE_UNAME=Darwin DEVICES_ACTIVE=0 NATS_PASS="hook-secret-K" \
-  OSHIOKI_AGENT_NATS_USER="oshioki-agent-k" OSHIOKI_AGENT_NATS_PASS="agent-secret-K" \
+  VOUCH_AGENT_NATS_USER="vouch-agent-k" VOUCH_AGENT_NATS_PASS="agent-secret-K" \
   run_setup --yes >"$TEST_ROOT/separation.log" 2>&1 || fail "agent-credential-separation setup failed"
-printf '%s\n' 'oshioki' 'test-secret' 'oshioki-agent' 'agent-secret' > "$STUB_CREDS_FILE"
+printf '%s\n' 'vouch' 'test-secret' 'vouch-agent' 'agent-secret' > "$STUB_CREDS_FILE"
 [ -f "$plist_k" ] || fail "agent-credential-separation: plist missing"
-grep -Fq '<string>oshioki-agent-k</string>' "$plist_k" || fail "agent-credential-separation: plist missing agent's own NATS user"
+grep -Fq '<string>vouch-agent-k</string>' "$plist_k" || fail "agent-credential-separation: plist missing agent's own NATS user"
 grep -Fq '<string>agent-secret-K</string>' "$plist_k" || fail "agent-credential-separation: plist missing agent's own NATS password"
 if grep -Fq '<string>hook-secret-K</string>' "$plist_k"; then fail "agent-credential-separation: plist carries the hook's NATS password"; fi
 grep -Fq 'agent connected to its NATS bus' "$TEST_ROOT/separation.log" || fail "agent-credential-separation: verify never confirmed the NATS connection"
@@ -1294,21 +1294,21 @@ grep -Fq 'agent connected to its NATS bus' "$TEST_ROOT/separation.log" || fail "
 # whatever this run staged -- including this suite's own defaults.
 plist_l="$plist_k"
 mkdir -p "$(dirname "$plist_l")"
-old_bin="$TEST_ROOT/fake-bin/oshioki-agent-old"
-cp "$TEST_ROOT/fake-bin/oshioki-agent" "$old_bin"
+old_bin="$TEST_ROOT/fake-bin/vouch-agent-old"
+cp "$TEST_ROOT/fake-bin/vouch-agent" "$old_bin"
 chmod 0755 "$old_bin"
 cat > "$plist_l" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>Label</key><string>com.oshioki.agent</string>
+  <key>Label</key><string>com.hev.vouch.agent</string>
   <key>ProgramArguments</key><array><string>$old_bin</string><string>run</string></array>
   <key>EnvironmentVariables</key><dict>
     <key>NATS_URL</key><string>tls://real-bus.example:4231</string>
-    <key>NATS_USER</key><string>oshioki-agent-real</string>
+    <key>NATS_USER</key><string>vouch-agent-real</string>
     <key>NATS_PASS</key><string>real-secret-L</string>
-    <key>OSHIOKI_AGENT_SOCKET</key><string>$AGENT_STATE/agent.sock</string>
-    <key>OSHIOKI_AGENT_STATE</key><string>$AGENT_STATE</string>
+    <key>VOUCH_AGENT_SOCKET</key><string>$AGENT_STATE/agent.sock</string>
+    <key>VOUCH_AGENT_STATE</key><string>$AGENT_STATE</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
@@ -1326,10 +1326,10 @@ rm -f "$TEST_ROOT/etc/install.env"
 : > "$CALL_LOG"
 FAKE_UNAME=Darwin DEVICES_ACTIVE=1 run_setup --yes >"$TEST_ROOT/preserve.log" 2>&1 || fail "plist-preservation setup failed"
 grep -Fq 'preserving existing NATS/agent environment' "$TEST_ROOT/preserve.log" || fail "setup never announced preserving the existing plist"
-grep -Fq "<string>$TEST_ROOT/fake-bin/oshioki-agent</string>" "$plist_l" || fail "plist-preservation: ProgramArguments was not refreshed to the current agent binary"
+grep -Fq "<string>$TEST_ROOT/fake-bin/vouch-agent</string>" "$plist_l" || fail "plist-preservation: ProgramArguments was not refreshed to the current agent binary"
 if grep -Fq "<string>$old_bin</string>" "$plist_l"; then fail "plist-preservation: ProgramArguments still points at the old binary"; fi
 grep -Fq '<string>tls://real-bus.example:4231</string>' "$plist_l" || fail "plist-preservation: real NATS_URL was lost"
-grep -Fq '<string>oshioki-agent-real</string>' "$plist_l" || fail "plist-preservation: real NATS_USER was lost"
+grep -Fq '<string>vouch-agent-real</string>' "$plist_l" || fail "plist-preservation: real NATS_USER was lost"
 grep -Fq '<string>real-secret-L</string>' "$plist_l" || fail "plist-preservation: real NATS_PASS was lost"
 if grep -Fq '<string>agent-secret</string>' "$plist_l"; then fail "plist-preservation: this run's staged agent creds leaked into the preserved plist"; fi
 grep -Fq 'agent connected to its NATS bus' "$TEST_ROOT/preserve.log" || fail "plist-preservation: verify never confirmed the NATS connection"
@@ -1361,8 +1361,8 @@ grep -Fiq 'permissions violation' "$TEST_ROOT/violation.log" || fail "the violat
 # socket-only.
 plist_n="$plist_k"
 mkdir -p "$(dirname "$plist_n")"
-old_bin_n="$TEST_ROOT/fake-bin/oshioki-agent-old-n"
-cp "$TEST_ROOT/fake-bin/oshioki-agent" "$old_bin_n"
+old_bin_n="$TEST_ROOT/fake-bin/vouch-agent-old-n"
+cp "$TEST_ROOT/fake-bin/vouch-agent" "$old_bin_n"
 chmod 0755 "$old_bin_n"
 cat > "$plist_n" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -1376,16 +1376,16 @@ cat > "$plist_n" <<PLIST
 		<key>NATS_URL</key>
 		<string>tls://example.invalid:4231</string>
 		<key>NATS_USER</key>
-		<string>oshioki-agent</string>
-		<key>OSHIOKI_AGENT_SOCKET</key>
+		<string>vouch-agent</string>
+		<key>VOUCH_AGENT_SOCKET</key>
 		<string>$AGENT_STATE/agent.sock</string>
-		<key>OSHIOKI_AGENT_STATE</key>
+		<key>VOUCH_AGENT_STATE</key>
 		<string>$AGENT_STATE</string>
 	</dict>
 	<key>KeepAlive</key>
 	<true/>
 	<key>Label</key>
-	<string>com.oshioki.agent</string>
+	<string>com.hev.vouch.agent</string>
 	<key>ProgramArguments</key>
 	<array>
 		<string>$old_bin_n</string>
@@ -1407,14 +1407,14 @@ FAKE_UNAME=Darwin DEVICES_ACTIVE=1 run_setup --yes >"$TEST_ROOT/preserve-multili
   || fail "plist-preservation (multi-line format) setup failed"
 grep -Fq 'preserving existing NATS/agent environment' "$TEST_ROOT/preserve-multiline.log" \
   || fail "setup never announced preserving the multi-line-format plist"
-grep -Fq "<string>$TEST_ROOT/fake-bin/oshioki-agent</string>" "$plist_n" \
+grep -Fq "<string>$TEST_ROOT/fake-bin/vouch-agent</string>" "$plist_n" \
   || fail "plist-preservation (multi-line): ProgramArguments was not refreshed to the current agent binary"
 if grep -Fq "<string>$old_bin_n</string>" "$plist_n"; then
   fail "plist-preservation (multi-line): ProgramArguments still points at the old binary"
 fi
 grep -Fq '<string>tls://example.invalid:4231</string>' "$plist_n" \
   || fail "plist-preservation (multi-line): real NATS_URL was lost"
-grep -Fq '<string>oshioki-agent</string>' "$plist_n" \
+grep -Fq '<string>vouch-agent</string>' "$plist_n" \
   || fail "plist-preservation (multi-line): real NATS_USER was lost"
 grep -Fq '<string>real-secret-N</string>' "$plist_n" \
   || fail "plist-preservation (multi-line): real NATS_PASS was lost"
@@ -1439,7 +1439,7 @@ grep -Fq 'agent connected to its NATS bus' "$TEST_ROOT/preserve-multiline.log" \
 plist_o="$plist_k"
 rm -f "$plist_o" "$AGENT_STATE/agent.log"
 delayed_violation_rc=0
-FAKE_UNAME=Darwin DEVICES_ACTIVE=1 OSHIOKI_AGENT_NATS_VERIFY_TIMEOUT=4 \
+FAKE_UNAME=Darwin DEVICES_ACTIVE=1 VOUCH_AGENT_NATS_VERIFY_TIMEOUT=4 \
   AGENT_LOG_LINE='NATS connected; watching for requests' \
   AGENT_LOG_DELAYED_LINE='NATS server error error="Permissions Violation for Subscription to \"oshioki.request.>\""' \
   AGENT_LOG_DELAY=1 \
@@ -1453,7 +1453,7 @@ grep -Fiq 'permissions violation' "$TEST_ROOT/delayed-violation.log" ||
 # default (5) instead of reaching `seq` and aborting the whole step.
 plist_o2="$plist_k"
 rm -f "$plist_o2" "$AGENT_STATE/agent.log"
-FAKE_UNAME=Darwin DEVICES_ACTIVE=1 OSHIOKI_AGENT_NATS_VERIFY_TIMEOUT=notanumber \
+FAKE_UNAME=Darwin DEVICES_ACTIVE=1 VOUCH_AGENT_NATS_VERIFY_TIMEOUT=notanumber \
   AGENT_LOG_LINE='NATS connected; watching for requests' \
   run_setup --yes >"$TEST_ROOT/bad-timeout.log" 2>&1 ||
   fail "a non-numeric verify timeout aborted the run: $(tail -5 "$TEST_ROOT/bad-timeout.log")"
@@ -1468,15 +1468,15 @@ grep -Fq 'agent connected to its NATS bus' "$TEST_ROOT/bad-timeout.log" ||
 plist_p="$plist_k"
 rm -f "$plist_p" "$TEST_ROOT/etc/install.env" "$AGENT_STATE/agent.log" "$AGENT_STATE/agent.json" "$AGENT_STATE/pinned" "$TEST_ROOT/plugin-enabled"
 printf '%s\n' \
-  'OSHIOKI_ORIGIN=https://laptop.test' \
-  'OSHIOKI_RP_ID=laptop.test' \
+  'VOUCH_ORIGIN=https://laptop.test' \
+  'VOUCH_RP_ID=laptop.test' \
   "NATS_URL=$SETUP_NATS_URL" \
-  'NATS_USER=oshioki' \
+  'NATS_USER=vouch' \
   'NATS_PASS=test-secret' \
-  "OSHIOKI_AGENT_SOCKET=$AGENT_STATE/agent.sock" > "$TEST_ROOT/etc/install.env"
+  "VOUCH_AGENT_SOCKET=$AGENT_STATE/agent.sock" > "$TEST_ROOT/etc/install.env"
 chmod 0600 "$TEST_ROOT/etc/install.env"
 FAKE_UNAME=Darwin DEVICES_ACTIVE=1 \
-  OSHIOKI_AGENT_NATS_URL="" OSHIOKI_AGENT_NATS_USER="" OSHIOKI_AGENT_NATS_PASS="" \
+  VOUCH_AGENT_NATS_URL="" VOUCH_AGENT_NATS_USER="" VOUCH_AGENT_NATS_PASS="" \
   run_setup --yes >"$TEST_ROOT/downgrade.log" 2>&1 || fail "socket-only agent downgrade should not abort under --yes"
 grep -Fq 'socket-only' "$TEST_ROOT/downgrade.log" || fail "the silent socket-only downgrade was not reported"
 grep -Fq 'approvals from other hosts will not reach this Mac' "$TEST_ROOT/downgrade.log" ||
@@ -1498,14 +1498,14 @@ cat > "$plist_q" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>Label</key><string>com.oshioki.agent</string>
-  <key>ProgramArguments</key><array><string>$TEST_ROOT/fake-bin/oshioki-agent-old-q</string><string>run</string></array>
+  <key>Label</key><string>com.hev.vouch.agent</string>
+  <key>ProgramArguments</key><array><string>$TEST_ROOT/fake-bin/vouch-agent-old-q</string><string>run</string></array>
   <key>EnvironmentVariables</key><dict>
     <key>NATS_URL</key><string>$SETUP_NATS_URL</string>
-    <key>NATS_USER</key><string>oshioki</string>
+    <key>NATS_USER</key><string>vouch</string>
     <key>NATS_PASS</key><string>test-secret</string>
-    <key>OSHIOKI_AGENT_SOCKET</key><string>$AGENT_STATE/agent.sock</string>
-    <key>OSHIOKI_AGENT_STATE</key><string>$AGENT_STATE</string>
+    <key>VOUCH_AGENT_SOCKET</key><string>$AGENT_STATE/agent.sock</string>
+    <key>VOUCH_AGENT_STATE</key><string>$AGENT_STATE</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
@@ -1538,41 +1538,41 @@ FAKE_UNAME=Darwin DEVICES_ACTIVE=1 \
 [ "$violation2_rc" -ne 0 ] || fail "a permissions violation did not fail the autostart step (second check)"
 grep -Fq -- '--reconfigure' "$TEST_ROOT/violation2.log" ||
   fail "the violation die message did not name --reconfigure"
-grep -Fq 'OSHIOKI_AGENT_NATS' "$TEST_ROOT/violation2.log" ||
-  fail "the violation die message did not name the OSHIOKI_AGENT_NATS_* variables"
+grep -Fq 'VOUCH_AGENT_NATS' "$TEST_ROOT/violation2.log" ||
+  fail "the violation die message did not name the VOUCH_AGENT_NATS_* variables"
 
 # Scenario R (issue review item 4): agent NATS credentials are optional.
 # This is the actual regression case: writing a FRESH install.env (no prior
 # file, or --reconfigure) is the only path that prompts for the agent's own
-# NATS role at all, and under --yes an empty OSHIOKI_AGENT_NATS_PASS used to
+# NATS role at all, and under --yes an empty VOUCH_AGENT_NATS_PASS used to
 # reach prompt()'s "$label has no default" die instead of falling back to a
 # socket-only agent -- the interactive prompt had the same problem, since it
 # could not be answered with a blank line either. This must now succeed and
 # leave the agent socket-only.
 rm -f "$TEST_ROOT/etc/install.env" "$plist_k" "$AGENT_STATE/agent.log" "$AGENT_STATE/agent.json" "$AGENT_STATE/pinned" "$TEST_ROOT/plugin-enabled"
 FAKE_UNAME=Darwin DEVICES_ACTIVE=1 \
-  OSHIOKI_AGENT_NATS_URL="" OSHIOKI_AGENT_NATS_USER="" OSHIOKI_AGENT_NATS_PASS="" \
+  VOUCH_AGENT_NATS_URL="" VOUCH_AGENT_NATS_USER="" VOUCH_AGENT_NATS_PASS="" \
   run_setup --yes >"$TEST_ROOT/optional-creds.log" 2>&1 ||
   { tail -5 "$TEST_ROOT/optional-creds.log" >&2; fail "--yes with no agent NATS password should not abort"; }
-if grep -Eq '^OSHIOKI_AGENT_NATS_(URL|USER|PASS)=.' "$TEST_ROOT/etc/install.env"; then
+if grep -Eq '^VOUCH_AGENT_NATS_(URL|USER|PASS)=.' "$TEST_ROOT/etc/install.env"; then
   fail "declining the agent NATS password still wrote agent NATS keys"
 fi
 grep -Fq 'socket-only' "$TEST_ROOT/optional-creds.log" || fail "declining the agent password was not reported as socket-only"
 
 # The other half of the same fix: when a password IS supplied, the URL and
-# user get sensible defaults (the hook's own NATS_URL, and "oshioki-agent")
+# user get sensible defaults (the hook's own NATS_URL, and "vouch-agent")
 # without being separately supplied -- this is the --yes path through the
 # same prompt() calls the interactive terminal uses, so it exercises the
 # identical code.
 rm -f "$TEST_ROOT/etc/install.env" "$plist_k" "$AGENT_STATE/agent.log" "$AGENT_STATE/agent.json" "$AGENT_STATE/pinned" "$TEST_ROOT/plugin-enabled"
-printf '%s\n' 'oshioki' 'test-secret' 'oshioki-agent' 'agent-secret' > "$STUB_CREDS_FILE"
-FAKE_UNAME=Darwin DEVICES_ACTIVE=1 OSHIOKI_AGENT_NATS_URL="" OSHIOKI_AGENT_NATS_USER="" \
-  OSHIOKI_AGENT_NATS_PASS="agent-secret" \
+printf '%s\n' 'vouch' 'test-secret' 'vouch-agent' 'agent-secret' > "$STUB_CREDS_FILE"
+FAKE_UNAME=Darwin DEVICES_ACTIVE=1 VOUCH_AGENT_NATS_URL="" VOUCH_AGENT_NATS_USER="" \
+  VOUCH_AGENT_NATS_PASS="agent-secret" \
   run_setup --yes >"$TEST_ROOT/default-url.log" 2>&1 || fail "supplying only the agent password should default URL/user"
-grep -Fq "OSHIOKI_AGENT_NATS_URL=$SETUP_NATS_URL" "$TEST_ROOT/etc/install.env" ||
+grep -Fq "VOUCH_AGENT_NATS_URL=$SETUP_NATS_URL" "$TEST_ROOT/etc/install.env" ||
   fail "agent NATS URL did not default to the hook's NATS_URL"
-grep -Fq 'OSHIOKI_AGENT_NATS_USER=oshioki-agent' "$TEST_ROOT/etc/install.env" ||
-  fail "agent NATS user did not default to oshioki-agent"
+grep -Fq 'VOUCH_AGENT_NATS_USER=vouch-agent' "$TEST_ROOT/etc/install.env" ||
+  fail "agent NATS user did not default to vouch-agent"
 
 # Scenario S (issue review item 5): a plutil failure while updating a
 # preserved plist must name the plist path and --reconfigure, not surface a
@@ -1586,14 +1586,14 @@ cat > "$plist_s" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>Label</key><string>com.oshioki.agent</string>
+  <key>Label</key><string>com.hev.vouch.agent</string>
   <key>ProgramArguments</key><string>not-an-array</string>
   <key>EnvironmentVariables</key><dict>
     <key>NATS_URL</key><string>tls://real-bus.example:4231</string>
-    <key>NATS_USER</key><string>oshioki-agent-real</string>
+    <key>NATS_USER</key><string>vouch-agent-real</string>
     <key>NATS_PASS</key><string>real-secret-S</string>
-    <key>OSHIOKI_AGENT_SOCKET</key><string>$AGENT_STATE/agent.sock</string>
-    <key>OSHIOKI_AGENT_STATE</key><string>$AGENT_STATE</string>
+    <key>VOUCH_AGENT_SOCKET</key><string>$AGENT_STATE/agent.sock</string>
+    <key>VOUCH_AGENT_STATE</key><string>$AGENT_STATE</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
@@ -1614,9 +1614,9 @@ grep -F "could not update $plist_s" "$TEST_ROOT/plutil-fail.log" | grep -Fq -- '
   fail "the plutil failure message did not suggest --reconfigure"
 
 # Scenarios T-W (Darwin, forced): the Homebrew keg lane. A real keg lives at
-# <prefix>/Cellar/oshioki/<version> and is reached through the stable
-# <prefix>/opt/oshioki symlink; from 0.1.12 it also carries Oshioki.app in
-# its root, whose inner binary is the same bytes as bin/oshioki-agent and is
+# <prefix>/Cellar/vouch/<version> and is reached through the stable
+# <prefix>/opt/vouch symlink; from 0.1.12 it also carries Vouch.app in
+# its root, whose inner binary is the same bytes as bin/vouch-agent and is
 # hashed in libexec/SHA256SUMS under its bundle-relative name. These
 # scenarios drop AGENT_BIN entirely (SETUP_AGENT_BIN=) so the script picks
 # the agent binary the way a brew install does.
@@ -1624,25 +1624,25 @@ sha256_line() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasum -a 256 "$@"; fi
 }
 BREW="$TEST_ROOT/brew"
-CELLAR_KEG="$BREW/Cellar/oshioki/0.1.12"
-BUNDLE_REL="Oshioki.app/Contents/MacOS/oshioki-agent"
+CELLAR_KEG="$BREW/Cellar/vouch/0.1.12"
+BUNDLE_REL="Vouch.app/Contents/MacOS/vouch-agent"
 mkdir -p "$CELLAR_KEG/bin" "$CELLAR_KEG/libexec" "$CELLAR_KEG/$(dirname "$BUNDLE_REL")" \
   "$BREW/opt" "$BREW/bin"
-cp "$SCRIPT_DIR/oshioki-laptop-setup" "$CELLAR_KEG/bin/"
-cp "$TEST_ROOT/fake-bin/oshioki" "$CELLAR_KEG/bin/oshioki"
-cp "$TEST_ROOT/fake-bin/oshioki-agent" "$CELLAR_KEG/bin/oshioki-agent"
+cp "$SCRIPT_DIR/vouch-laptop-setup" "$CELLAR_KEG/bin/"
+cp "$TEST_ROOT/fake-bin/vouch" "$CELLAR_KEG/bin/vouch"
+cp "$TEST_ROOT/fake-bin/vouch-agent" "$CELLAR_KEG/bin/vouch-agent"
 # Same bytes in both places, exactly as the release artifact stages them.
-cp "$CELLAR_KEG/bin/oshioki-agent" "$CELLAR_KEG/$BUNDLE_REL"
-chmod 0755 "$CELLAR_KEG/bin/oshioki-laptop-setup" "$CELLAR_KEG/bin/oshioki" \
-  "$CELLAR_KEG/bin/oshioki-agent" "$CELLAR_KEG/$BUNDLE_REL"
-: > "$CELLAR_KEG/libexec/oshioki.dylib"
+cp "$CELLAR_KEG/bin/vouch-agent" "$CELLAR_KEG/$BUNDLE_REL"
+chmod 0755 "$CELLAR_KEG/bin/vouch-laptop-setup" "$CELLAR_KEG/bin/vouch" \
+  "$CELLAR_KEG/bin/vouch-agent" "$CELLAR_KEG/$BUNDLE_REL"
+: > "$CELLAR_KEG/libexec/vouch.dylib"
 # SHA256SUMS is the release manifest, so the flat binary is listed under the
 # staging-root name the artifact gives it, not under bin/.
 ( cd "$CELLAR_KEG" && sha256_line "$BUNDLE_REL" > libexec/SHA256SUMS )
-( cd "$CELLAR_KEG/bin" && sha256_line oshioki-agent >> ../libexec/SHA256SUMS )
-ln -sfn "../Cellar/oshioki/0.1.12" "$BREW/opt/oshioki"
+( cd "$CELLAR_KEG/bin" && sha256_line vouch-agent >> ../libexec/SHA256SUMS )
+ln -sfn "../Cellar/vouch/0.1.12" "$BREW/opt/vouch"
 # Homebrew's own bin link, relative and through opt.
-ln -sfn "../opt/oshioki/bin/oshioki-laptop-setup" "$BREW/bin/oshioki-laptop-setup"
+ln -sfn "../opt/vouch/bin/vouch-laptop-setup" "$BREW/bin/vouch-laptop-setup"
 plist_t="$plist_k"
 keg_reset() {
   rm -f "$plist_t" "$TEST_ROOT/etc/install.env" "$AGENT_STATE/agent.log" \
@@ -1660,19 +1660,19 @@ plist_program() {
 # bare file name and the generic executable badge.
 keg_reset
 FAKE_UNAME=Darwin DEVICES_ACTIVE=1 SETUP_AGENT_BIN='' \
-  SETUP_CMD="$BREW/bin/oshioki-laptop-setup" \
+  SETUP_CMD="$BREW/bin/vouch-laptop-setup" \
   run_setup --yes >"$TEST_ROOT/keg-bundle.log" 2>&1 ||
   { tail -5 "$TEST_ROOT/keg-bundle.log" >&2; fail "keg bundle setup failed"; }
 prog_t="$(plist_program "$plist_t")"
 case "$prog_t" in
-  */Oshioki.app/Contents/MacOS/oshioki-agent) ;;
+  */Vouch.app/Contents/MacOS/vouch-agent) ;;
   *) fail "keg-bundle: LaunchAgent does not run the app bundle binary: $prog_t" ;;
 esac
 
 # Scenario U: the path written is the upgrade-stable opt path, never the
 # versioned Cellar path `brew cleanup` deletes.
 case "$prog_t" in
-  "$BREW/opt/oshioki/$BUNDLE_REL") ;;
+  "$BREW/opt/vouch/$BUNDLE_REL") ;;
   *) fail "keg-bundle: LaunchAgent path is not the stable opt path: $prog_t" ;;
 esac
 if printf '%s' "$prog_t" | grep -Fq '/Cellar/'; then
@@ -1682,15 +1682,15 @@ fi
 # Scenario V: a keg from an older release has no bundle, so the flat binary
 # stays in use -- still at the stable opt path.
 keg_reset
-mv "$CELLAR_KEG/Oshioki.app" "$TEST_ROOT/Oshioki.app.stash"
+mv "$CELLAR_KEG/Vouch.app" "$TEST_ROOT/Vouch.app.stash"
 FAKE_UNAME=Darwin DEVICES_ACTIVE=1 SETUP_AGENT_BIN='' \
-  SETUP_CMD="$BREW/bin/oshioki-laptop-setup" \
+  SETUP_CMD="$BREW/bin/vouch-laptop-setup" \
   run_setup --yes >"$TEST_ROOT/keg-flat.log" 2>&1 ||
   { tail -5 "$TEST_ROOT/keg-flat.log" >&2; fail "keg flat-fallback setup failed"; }
 prog_v="$(plist_program "$plist_t")"
-[ "$prog_v" = "$BREW/opt/oshioki/bin/oshioki-agent" ] ||
+[ "$prog_v" = "$BREW/opt/vouch/bin/vouch-agent" ] ||
   fail "keg flat-fallback: expected the flat binary at the opt path, got: $prog_v"
-mv "$TEST_ROOT/Oshioki.app.stash" "$CELLAR_KEG/Oshioki.app"
+mv "$TEST_ROOT/Vouch.app.stash" "$CELLAR_KEG/Vouch.app"
 
 # Scenario W: preserving an existing plist's credentials must still move
 # ProgramArguments to the stable bundle path -- a preserved plist left on a
@@ -1701,14 +1701,14 @@ cat > "$plist_t" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>Label</key><string>com.oshioki.agent</string>
-  <key>ProgramArguments</key><array><string>$BREW/Cellar/oshioki/0.1.11/bin/oshioki-agent</string><string>run</string></array>
+  <key>Label</key><string>com.hev.vouch.agent</string>
+  <key>ProgramArguments</key><array><string>$BREW/Cellar/vouch/0.1.11/bin/vouch-agent</string><string>run</string></array>
   <key>EnvironmentVariables</key><dict>
     <key>NATS_URL</key><string>tls://real-bus.example:4231</string>
-    <key>NATS_USER</key><string>oshioki-agent-real</string>
+    <key>NATS_USER</key><string>vouch-agent-real</string>
     <key>NATS_PASS</key><string>real-secret-W</string>
-    <key>OSHIOKI_AGENT_SOCKET</key><string>$AGENT_STATE/agent.sock</string>
-    <key>OSHIOKI_AGENT_STATE</key><string>$AGENT_STATE</string>
+    <key>VOUCH_AGENT_SOCKET</key><string>$AGENT_STATE/agent.sock</string>
+    <key>VOUCH_AGENT_STATE</key><string>$AGENT_STATE</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
@@ -1718,7 +1718,7 @@ cat > "$plist_t" <<PLIST
 PLIST
 chmod 0600 "$plist_t"
 FAKE_UNAME=Darwin DEVICES_ACTIVE=1 SETUP_AGENT_BIN='' \
-  SETUP_CMD="$BREW/bin/oshioki-laptop-setup" \
+  SETUP_CMD="$BREW/bin/vouch-laptop-setup" \
   run_setup --yes >"$TEST_ROOT/keg-preserve.log" 2>&1 ||
   { tail -5 "$TEST_ROOT/keg-preserve.log" >&2; fail "keg preserve setup failed"; }
 grep -Fq 'preserving existing NATS/agent environment' "$TEST_ROOT/keg-preserve.log" ||
@@ -1726,7 +1726,7 @@ grep -Fq 'preserving existing NATS/agent environment' "$TEST_ROOT/keg-preserve.l
 grep -Fq '<string>real-secret-W</string>' "$plist_t" ||
   fail "keg-preserve: the real NATS password was lost"
 prog_w="$(plist_program "$plist_t")"
-[ "$prog_w" = "$BREW/opt/oshioki/$BUNDLE_REL" ] ||
+[ "$prog_w" = "$BREW/opt/vouch/$BUNDLE_REL" ] ||
   fail "keg-preserve: ProgramArguments was not moved to the stable bundle path: $prog_w"
 
 # Scenario X: the keg's flat agent not matching its own SHA256SUMS entry is a
@@ -1734,42 +1734,42 @@ prog_w="$(plist_program "$plist_t")"
 # nothing safe to fall back to; before this check an unverified binary was
 # installed into the LaunchAgent without a word.
 keg_reset
-mv "$CELLAR_KEG/Oshioki.app" "$TEST_ROOT/Oshioki.app.stash"
-cp "$CELLAR_KEG/bin/oshioki-agent" "$TEST_ROOT/agent-pristine"
+mv "$CELLAR_KEG/Vouch.app" "$TEST_ROOT/Vouch.app.stash"
+cp "$CELLAR_KEG/bin/vouch-agent" "$TEST_ROOT/agent-pristine"
 # A comment: the file still runs, so what stops the run is the checksum and
 # nothing else.
-printf '# tampered\n' >> "$CELLAR_KEG/bin/oshioki-agent"
+printf '# tampered\n' >> "$CELLAR_KEG/bin/vouch-agent"
 flat_rc=0
 FAKE_UNAME=Darwin DEVICES_ACTIVE=1 SETUP_AGENT_BIN='' \
-  SETUP_CMD="$BREW/bin/oshioki-laptop-setup" \
+  SETUP_CMD="$BREW/bin/vouch-laptop-setup" \
   run_setup --yes >"$TEST_ROOT/keg-tampered.log" 2>&1 || flat_rc=$?
 [ "$flat_rc" -ne 0 ] || fail "keg-tampered: an unverified flat agent did not stop the run"
 grep -Fq 'does not match' "$TEST_ROOT/keg-tampered.log" ||
   fail "keg-tampered: the mismatch was not reported: $(tail -2 "$TEST_ROOT/keg-tampered.log")"
 if [ -f "$plist_t" ]; then fail "keg-tampered: a LaunchAgent was written for an unverified agent"; fi
 
-cp "$TEST_ROOT/agent-pristine" "$CELLAR_KEG/bin/oshioki-agent"
-chmod 0755 "$CELLAR_KEG/bin/oshioki-agent"
+cp "$TEST_ROOT/agent-pristine" "$CELLAR_KEG/bin/vouch-agent"
+chmod 0755 "$CELLAR_KEG/bin/vouch-agent"
 
 # Scenario Y: a manifest from an older release that lists neither name is not
 # a failure -- it simply cannot answer -- so the run proceeds on the flat
 # binary rather than refusing to install at all.
 keg_reset
-# Neither oshioki-agent nor the bundle is named here, which is what a
+# Neither vouch-agent nor the bundle is named here, which is what a
 # manifest from before either entry existed looks like.
-printf '%s  oshioki\n' "0000000000000000000000000000000000000000000000000000000000000000" \
+printf '%s  vouch\n' "0000000000000000000000000000000000000000000000000000000000000000" \
   > "$CELLAR_KEG/libexec/SHA256SUMS"
 FAKE_UNAME=Darwin DEVICES_ACTIVE=1 SETUP_AGENT_BIN='' \
-  SETUP_CMD="$BREW/bin/oshioki-laptop-setup" \
+  SETUP_CMD="$BREW/bin/vouch-laptop-setup" \
   run_setup --yes >"$TEST_ROOT/keg-nomanifest.log" 2>&1 ||
   { tail -5 "$TEST_ROOT/keg-nomanifest.log" >&2; fail "keg-nomanifest: an older manifest stopped the run"; }
 prog_y="$(plist_program "$plist_t")"
-[ "$prog_y" = "$BREW/opt/oshioki/bin/oshioki-agent" ] ||
+[ "$prog_y" = "$BREW/opt/vouch/bin/vouch-agent" ] ||
   fail "keg-nomanifest: expected the flat binary at the opt path, got: $prog_y"
-mv "$TEST_ROOT/Oshioki.app.stash" "$CELLAR_KEG/Oshioki.app"
+mv "$TEST_ROOT/Vouch.app.stash" "$CELLAR_KEG/Vouch.app"
 
 # Self-policing teardown: check every tracked helper, including delayed
 # writers, rather than assuming rm or a listener-only name check proves exit.
 stop_holders || fail "fixture helpers survived cleanup"
 
-echo "test-oshioki-laptop-setup: PASS"
+echo "test-vouch-laptop-setup: PASS"

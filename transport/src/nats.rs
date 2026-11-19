@@ -14,13 +14,13 @@ use async_nats::jetstream::{
     stream,
 };
 use futures::StreamExt as _;
-use oshioki_protocol::{
+use tracing::{debug, info};
+use vouch_protocol::{
     ALLOW_PLAINTEXT_NATS_ENV, ActivationV1, ControlMessageOutcome, ControlMessageV1, DecisionV1,
     EnrollmentIntentV1, EnrollmentSubmissionV1, TOOL_APPROVAL_SUBJECT, ToolAcknowledgementV1,
     ToolApprovalDecisionV1, ToolDeliveryV1, allow_plaintext_nats, auth_v1::AuthDecisionV1,
     check_nats_url, nats_url_is_tls,
 };
-use tracing::{debug, info};
 
 use crate::{
     Ack, AckFuture, BoxFuture, DecisionStream, HookProgress, HookTransport, HookTransportFailure,
@@ -44,7 +44,7 @@ enum ReceiptPosition {
 /// request, or a different message kind -- is not this request's receipt and
 /// the wait skips it.
 fn receipt_matches(bytes: &[u8], request_id: &str, position: ReceiptPosition) -> bool {
-    match (oshioki_protocol::decode_control_message(bytes), position) {
+    match (vouch_protocol::decode_control_message(bytes), position) {
         (
             Ok(ControlMessageOutcome::Message(ControlMessageV1::Alive(alive))),
             ReceiptPosition::Alive,
@@ -61,7 +61,7 @@ fn receipt_matches(bytes: &[u8], request_id: &str, position: ReceiptPosition) ->
 /// message is anything else. Shape and signature checks stay in the hook.
 fn command_decision_for(bytes: &[u8], request_id: &str) -> Option<DecisionV1> {
     let Ok(ControlMessageOutcome::Message(ControlMessageV1::Decision(decision))) =
-        oshioki_protocol::decode_control_message(bytes)
+        vouch_protocol::decode_control_message(bytes)
     else {
         return None;
     };
@@ -76,7 +76,7 @@ fn command_decision_for(bytes: &[u8], request_id: &str) -> Option<DecisionV1> {
 /// The authentication decision `bytes` carry for `request_id`, or `None`.
 fn auth_decision_for(bytes: &[u8], request_id: &str) -> Option<AuthDecisionV1> {
     let Ok(ControlMessageOutcome::Message(ControlMessageV1::AuthDecision(decision))) =
-        oshioki_protocol::decode_control_message(bytes)
+        vouch_protocol::decode_control_message(bytes)
     else {
         return None;
     };
@@ -577,7 +577,7 @@ impl NatsTransport {
                 Err(_) => {
                     let detail = if has_browser_recipient {
                         anyhow::anyhow!(
-                            "daemon or server delivery receipt timeout after {}ms; upgrade oshioki-server before using browser approvals if it predates DeliveryV1",
+                            "daemon or server delivery receipt timeout after {}ms; upgrade vouch-server before using browser approvals if it predates DeliveryV1",
                             receipt_wait.as_millis()
                         )
                     } else {
@@ -979,8 +979,8 @@ mod tests {
     use super::*;
 
     fn deny(request_id: &str) -> DecisionV1 {
-        DecisionV1::Deny(oshioki_protocol::DenyV1 {
-            version: oshioki_protocol::VERSION_V1,
+        DecisionV1::Deny(vouch_protocol::DenyV1 {
+            version: vouch_protocol::VERSION_V1,
             request_id: request_id.into(),
             device_fingerprint: "fp".into(),
             signature: None,
@@ -988,8 +988,8 @@ mod tests {
     }
 
     fn auth_decision(request_id: &str) -> AuthDecisionV1 {
-        AuthDecisionV1::AuthenticateNative(oshioki_protocol::auth_v1::AuthApproveNativeV1 {
-            version: oshioki_protocol::auth_v1::AUTH_WIRE_VERSION,
+        AuthDecisionV1::AuthenticateNative(vouch_protocol::auth_v1::AuthApproveNativeV1 {
+            version: vouch_protocol::auth_v1::AUTH_WIRE_VERSION,
             request_id: request_id.into(),
             device_fingerprint: "fp".into(),
             signature: "c2ln".into(),
@@ -1002,9 +1002,9 @@ mod tests {
     /// any publisher on the subject could send them.
     #[test]
     fn only_this_requests_receipt_ends_the_receipt_wait() {
-        let alive = serde_json::to_vec(&oshioki_protocol::AliveV1::for_request("req-1")).unwrap();
+        let alive = serde_json::to_vec(&vouch_protocol::AliveV1::for_request("req-1")).unwrap();
         let delivery =
-            serde_json::to_vec(&oshioki_protocol::DeliveryV1::for_request("req-1")).unwrap();
+            serde_json::to_vec(&vouch_protocol::DeliveryV1::for_request("req-1")).unwrap();
         assert!(receipt_matches(&alive, "req-1", ReceiptPosition::Alive));
         assert!(receipt_matches(
             &delivery,
@@ -1012,9 +1012,9 @@ mod tests {
             ReceiptPosition::Delivery
         ));
         let other_alive =
-            serde_json::to_vec(&oshioki_protocol::AliveV1::for_request("req-2")).unwrap();
+            serde_json::to_vec(&vouch_protocol::AliveV1::for_request("req-2")).unwrap();
         let other_delivery =
-            serde_json::to_vec(&oshioki_protocol::DeliveryV1::for_request("req-2")).unwrap();
+            serde_json::to_vec(&vouch_protocol::DeliveryV1::for_request("req-2")).unwrap();
         let future_kind = br#"{"type":"future_kind","version":1,"request_id":"req-1"}"#.to_vec();
         let decision = serde_json::to_vec(&deny("req-1")).unwrap();
         for position in [ReceiptPosition::Alive, ReceiptPosition::Delivery] {
@@ -1043,7 +1043,7 @@ mod tests {
         for skipped in [
             serde_json::to_vec(&deny("req-2")).unwrap(),
             serde_json::to_vec(&auth_decision("req-1")).unwrap(),
-            serde_json::to_vec(&oshioki_protocol::AliveV1::for_request("req-1")).unwrap(),
+            serde_json::to_vec(&vouch_protocol::AliveV1::for_request("req-1")).unwrap(),
             br#"{"type":"future_kind","version":1,"request_id":"req-1"}"#.to_vec(),
             br#"{"action":"deny","request_id":"req-1"}"#.to_vec(),
             br#"{"action":"explode","request_id":"req-1"}"#.to_vec(),

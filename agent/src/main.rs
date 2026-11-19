@@ -1,4 +1,4 @@
-//! `oshioki-agent`: pairs a native device with a host and answers sudo
+//! `vouch-agent`: pairs a native device with a host and answers sudo
 //! requests over NATS and a local Unix socket. NATS is optional at runtime:
 //! without it the agent answers socket requests only.
 //!
@@ -22,16 +22,19 @@ use anyhow::{Context as _, Result, bail};
 use clap::ValueEnum;
 use clap::{CommandFactory as _, Parser, Subcommand};
 use futures::StreamExt as _;
-use oshioki_agent::{Identity, OpenedRequest, SignerKind, parse_enrollment_url, remaining_until};
-use oshioki_protocol::{
-    ALLOW_PLAINTEXT_NATS_ENV, AUTH_ENVELOPE_TYPE, ActivationV1, AliveV1, AuthDecisionV1,
-    AuthEnvelopeV1, AuthInvocationV1, AuthRequestV1, DecisionV1, DeviceKindV1, OpenedAuthRequestV1,
-    RequestEnvelopeV1, allow_plaintext_nats, check_nats_url, escape_for_terminal, nats_url_is_tls,
-};
 use sha2::{Digest as _, Sha256};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch};
 use tracing::{info, warn};
+use vouch_agent::approval_log::{self, ApprovalLog, Decided};
+use vouch_agent::review::{MAX_APPROVAL_REASON_CHARS, quote_argv, truncate_chars};
+use vouch_agent::{Identity, OpenedRequest, SignerKind, parse_enrollment_url, remaining_until};
+use vouch_protocol::approval_log::ApprovalOutcome;
+use vouch_protocol::{
+    ALLOW_PLAINTEXT_NATS_ENV, AUTH_ENVELOPE_TYPE, ActivationV1, AliveV1, AuthDecisionV1,
+    AuthEnvelopeV1, AuthInvocationV1, AuthRequestV1, DecisionV1, DeviceKindV1, OpenedAuthRequestV1,
+    RequestEnvelopeV1, allow_plaintext_nats, check_nats_url, escape_for_terminal, nats_url_is_tls,
+};
 
 #[path = "../../cli/terminal_logo.rs"]
 mod terminal_logo;
@@ -45,7 +48,7 @@ const MAX_IN_FLIGHT_REQUESTS: usize = 8;
 /// window, while bounding memory if a publisher sends many unique IDs.
 const MAX_SEEN_REQUEST_IDS: usize = 1024;
 const SEEN_REQUEST_RETENTION: Duration = Duration::from_secs(
-    (oshioki_protocol::MAX_REQUEST_LIFETIME_SECS + oshioki_protocol::MAX_REQUEST_ISSUANCE_SKEW_SECS)
+    (vouch_protocol::MAX_REQUEST_LIFETIME_SECS + vouch_protocol::MAX_REQUEST_ISSUANCE_SKEW_SECS)
         as u64,
 );
 /// A connected socket peer must deliver its complete frame promptly; without
@@ -59,6 +62,8 @@ const SOCKET_FRAME_TIMEOUT: Duration = Duration::from_secs(5);
 struct RequestAdmission {
     permits: Arc<Semaphore>,
     request_ids: Arc<StdMutex<HashMap<String, SeenRequest>>>,
+    /// Every claimed request's line goes here before its answer is released.
+    log: Arc<ApprovalLog>,
 }
 
 /// What a lane produced for one claimed request.
@@ -114,6 +119,7 @@ enum Claim {
 struct RequestLease {
     _permit: OwnedSemaphorePermit,
     outcome: watch::Sender<Option<Arc<RequestOutcome>>>,
+    log: Arc<ApprovalLog>,
 }
 
 /// A delivery that arrived for a request another lane already holds.
@@ -121,6 +127,7 @@ struct RequestWaiter {
     permit: OwnedSemaphorePermit,
     request_ids: Arc<StdMutex<HashMap<String, SeenRequest>>>,
     outcome: watch::Receiver<Option<Arc<RequestOutcome>>>,
+    log: Arc<ApprovalLog>,
 }
 
 /// What a waiting delivery learned from the lane that owns its request.
@@ -136,13 +143,15 @@ enum Relay {
 struct RequestPermit {
     permit: OwnedSemaphorePermit,
     request_ids: Arc<StdMutex<HashMap<String, SeenRequest>>>,
+    log: Arc<ApprovalLog>,
 }
 
 impl RequestAdmission {
-    fn new() -> Self {
+    fn new(log: Arc<ApprovalLog>) -> Self {
         Self {
             permits: Arc::new(Semaphore::new(MAX_IN_FLIGHT_REQUESTS)),
             request_ids: Arc::new(StdMutex::new(HashMap::new())),
+            log,
         }
     }
 
@@ -150,6 +159,7 @@ impl RequestAdmission {
         Some(RequestPermit {
             permit: Arc::clone(&self.permits).try_acquire_owned().ok()?,
             request_ids: Arc::clone(&self.request_ids),
+            log: Arc::clone(&self.log),
         })
     }
 }
@@ -193,6 +203,7 @@ impl RequestPermit {
                     permit: self.permit,
                     request_ids: Arc::clone(&self.request_ids),
                     outcome: seen.outcome.clone(),
+                    log: Arc::clone(&self.log),
                 });
             }
             // The owner dropped its lease without answering. Nothing decided
@@ -220,6 +231,7 @@ impl RequestPermit {
         Claim::Owner(RequestLease {
             _permit: self.permit,
             outcome: sender,
+            log: self.log,
         })
     }
 }
@@ -266,6 +278,7 @@ impl RequestWaiter {
         RequestPermit {
             permit: self.permit,
             request_ids: self.request_ids,
+            log: self.log,
         }
         .claim(request_id, payload_hash)
     }
@@ -280,13 +293,13 @@ fn payload_hash(raw: &[u8]) -> [u8; 32] {
 
 #[derive(Parser)]
 #[command(
-    name = "oshioki-agent",
+    name = "vouch-agent",
     version,
-    about = "Run a native Oshioki approval agent"
+    about = "Run a native Vouch approval agent"
 )]
 struct Cli {
-    /// Directory holding the agent identity (default: `$OSHIOKI_AGENT_STATE`,
-    /// then ~/.config/oshioki).
+    /// Directory holding the agent identity (default: `$VOUCH_AGENT_STATE`,
+    /// then ~/.config/vouch).
     #[arg(long, global = true)]
     state: Option<PathBuf>,
     #[command(subcommand)]
@@ -295,9 +308,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Verb {
-    /// Enroll this device with a host using the URL printed by `oshioki enroll`.
+    /// Enroll this device with a host using the URL printed by `vouch enroll`.
     Pair {
-        /// Enrollment URL printed by `oshioki enroll`.
+        /// Enrollment URL printed by `vouch enroll`.
         #[arg(value_name = "ENROLLMENT_URL", allow_hyphen_values = true)]
         enrollment_url: String,
         /// Label shown on the host's device list.
@@ -336,6 +349,22 @@ enum Verb {
         #[arg(long)]
         force: bool,
     },
+    /// Show the review panel for a sample request, with nothing in flight.
+    ///
+    /// Fixtures: local-sudo, oven-headless, claude-edit, no-reason. The
+    /// panel closes on Esc, Deny, or when its countdown ends.
+    PreviewPanel {
+        /// Which sample request to show.
+        #[arg(long, value_name = "NAME")]
+        fixture: String,
+        /// Print the panel (and the sheet's text) instead of opening it.
+        #[arg(long)]
+        print: bool,
+    },
+    /// Draw one review panel read as JSON from stdin. The agent runs this
+    /// itself beside each Touch ID sheet.
+    #[command(hide = true)]
+    Panel,
     /// Print a public device record.
     ///
     /// This is read-only. It does not contact NATS or the server.
@@ -401,8 +430,14 @@ async fn main() -> Result<()> {
         .with_writer(io::stderr)
         .init();
     let cli = Cli::parse();
+    match &cli.verb {
+        Verb::PreviewPanel { fixture, print } => return cmd_preview_panel(fixture, *print),
+        Verb::Panel => return cmd_panel(),
+        _ => {}
+    }
     let identity_path = state_dir(cli.state)?.join("agent.json");
     match cli.verb {
+        Verb::PreviewPanel { .. } | Verb::Panel => unreachable!("handled above"),
         Verb::Pair {
             enrollment_url,
             label,
@@ -454,15 +489,70 @@ async fn main() -> Result<()> {
     }
 }
 
+fn cmd_preview_panel(fixture: &str, print: bool) -> Result<()> {
+    let now = now();
+    let Some(view) = vouch_agent::review::fixtures::view(fixture, now) else {
+        bail!(
+            "unknown fixture {fixture:?}; try one of: {}",
+            vouch_agent::review::fixtures::NAMES.join(", ")
+        );
+    };
+    if print {
+        print!("{}", view.text(now));
+        if let Some(sheet) = vouch_agent::review::fixtures::sheet(fixture, now) {
+            println!("\nTouch ID sheet: {sheet}");
+        }
+        return Ok(());
+    }
+    show_panel(&view)
+}
+
+fn cmd_panel() -> Result<()> {
+    let mut json = Vec::new();
+    io::Read::read_to_end(&mut io::stdin(), &mut json).context("read the panel from stdin")?;
+    let view: vouch_panel::PanelView = serde_json::from_slice(&json).context("decode the panel")?;
+    show_panel(&view)
+}
+
+#[cfg(target_os = "macos")]
+fn show_panel(view: &vouch_panel::PanelView) -> Result<()> {
+    vouch_panel::run_panel(view).map_err(|error| anyhow::anyhow!(error))
+}
+
+#[cfg(not(target_os = "macos"))]
+#[allow(clippy::unnecessary_wraps)] // Same signature as the macOS window version.
+fn show_panel(view: &vouch_panel::PanelView) -> Result<()> {
+    // No window server: show the same content as text.
+    print!("{}", view.text(now()));
+    Ok(())
+}
+
 fn state_dir(flag: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(dir) = flag {
         return Ok(dir);
     }
-    if let Some(dir) = std::env::var_os("OSHIOKI_AGENT_STATE") {
+    if let Some(dir) = std::env::var_os("VOUCH_AGENT_STATE") {
         return Ok(PathBuf::from(dir));
     }
     let home = std::env::var_os("HOME").context("HOME is not set")?;
-    Ok(PathBuf::from(home).join(".config").join("oshioki"))
+    Ok(default_state_dir(&PathBuf::from(home).join(".config")))
+}
+
+/// `~/.config/vouch`, unless it holds no identity and the pre-rename
+/// `~/.config/oshioki` does: then the old directory, so an enrolled Mac keeps
+/// its fingerprint (and its host pins) across the rename. Kept for one
+/// release; `vouch-laptop-setup` copies the directory instead.
+fn default_state_dir(config: &std::path::Path) -> PathBuf {
+    let current = config.join("vouch");
+    let legacy = config.join("oshioki");
+    if !current.join("agent.json").exists() && legacy.join("agent.json").exists() {
+        info!(
+            legacy = %legacy.display(),
+            "using the identity in the pre-rename state directory"
+        );
+        return legacy;
+    }
+    current
 }
 
 /// Loads the identity, creating one on first use. One identity serves every
@@ -480,7 +570,7 @@ struct Pairing {
 fn load_or_create(path: &std::path::Path, pairing: &Pairing) -> Result<Identity> {
     #[cfg(target_os = "macos")]
     {
-        let store = oshioki_agent::secret_store::KeychainStore::oshioki();
+        let store = vouch_agent::secret_store::KeychainStore::vouch();
         load_or_create_with(path, pairing, &store)
     }
     #[cfg(not(target_os = "macos"))]
@@ -495,12 +585,12 @@ fn load_or_create(path: &std::path::Path, pairing: &Pairing) -> Result<Identity>
 }
 
 /// The macOS pairing flow, and every platform's tests, through an explicit
-/// secret store. See `oshioki_agent::Identity::load_with`.
+/// secret store. See `vouch_agent::Identity::load_with`.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn load_or_create_with(
     path: &std::path::Path,
     pairing: &Pairing,
-    store: &dyn oshioki_agent::secret_store::SecretStore,
+    store: &dyn vouch_agent::secret_store::SecretStore,
 ) -> Result<Identity> {
     if path.exists() && !pairing.force {
         // One identity serves every host this device pairs with, so an
@@ -571,8 +661,8 @@ fn remove_old_secret(path: &std::path::Path) {
         let Some(reference) = file.get("box_secret_ref").and_then(|value| value.as_str()) else {
             return;
         };
-        let store = oshioki_agent::secret_store::KeychainStore::oshioki();
-        if let Err(error) = oshioki_agent::secret_store::SecretStore::remove(&store, reference) {
+        let store = vouch_agent::secret_store::KeychainStore::vouch();
+        if let Err(error) = vouch_agent::secret_store::SecretStore::remove(&store, reference) {
             warn!(path = %path.display(), error = %format!("{error:#}"), "kept the replaced identity's keychain entry");
         }
     }
@@ -592,8 +682,8 @@ async fn cmd_pair(
     let identity = load_or_create(identity_path, &pairing)?;
     let native = identity.enrollment_submission(&enrollment_id, &secret, label)?;
     let submission = match identity.signer_kind() {
-        SignerKind::Software => oshioki_protocol::EnrollmentSubmissionV1::Software(native),
-        SignerKind::Enclave => oshioki_protocol::EnrollmentSubmissionV1::SecureEnclave(native),
+        SignerKind::Software => vouch_protocol::EnrollmentSubmissionV1::Software(native),
+        SignerKind::Enclave => vouch_protocol::EnrollmentSubmissionV1::SecureEnclave(native),
     };
     let nats = connect_nats().await?;
     let mut activations = nats
@@ -636,7 +726,7 @@ async fn cmd_run(
     let identity = Arc::new(Identity::load(identity_path)?);
     // Bind before subscribing so a second instance fails fast instead of
     // double-prompting behind the first one.
-    let socket_path = socket_path(identity_path, std::env::var_os("OSHIOKI_AGENT_SOCKET"))?;
+    let socket_path = socket_path(identity_path, std::env::var_os("VOUCH_AGENT_SOCKET"))?;
     let socket = bind_socket(&socket_path)?;
     info!(
         path = %socket_path.display(),
@@ -672,7 +762,11 @@ async fn cmd_run(
         Decider::Prompt(prompter)
     };
     let decider = Arc::new(decider);
-    let admission = Arc::new(RequestAdmission::new());
+    // The approval log is opened lazily on each append; a log that cannot be
+    // written denies the request it was for rather than stopping the agent.
+    let approval_log = Arc::new(ApprovalLog::from_env()?);
+    info!(path = %approval_log.path().display(), "approval log");
+    let admission = Arc::new(RequestAdmission::new(approval_log));
     tokio::spawn(serve_socket(
         socket,
         Arc::clone(&identity),
@@ -889,12 +983,63 @@ async fn resolve_command_claim(
             }
         }
     };
-    let decision = decide(identity, decider, opened).await?;
+    let record = approval_log::command_record(
+        opened,
+        &identity.fingerprint(),
+        runas_label(opened.request.runas_uid),
+        time::OffsetDateTime::now_utc(),
+    );
+    let outcome = decide(identity, decider, opened).await;
+    let decision = log_decided(&lease.log, record, outcome, opened.request.expires_at)?;
     lease.answered(match &decision {
         Some(decision) => RequestOutcome::Command(Box::new(decision.clone())),
         None => RequestOutcome::Unanswered,
     });
     Ok(decision)
+}
+
+/// Writes one request's approval log line and returns what may be released.
+///
+/// This is the only way a decided request reaches a transport or a waiting
+/// delivery: the line is written and synced first, and a signed decision
+/// whose line could not be written is dropped, so the host fails closed. A
+/// decider error is logged as failed (or expired, past the deadline) and then
+/// returned as before, which leaves the claim to another transport.
+fn log_decided<D>(
+    log: &ApprovalLog,
+    record: vouch_protocol::approval_log::ApprovalRecordV1,
+    decided: Result<Decided<D>>,
+    expires_at: i64,
+) -> Result<Option<D>> {
+    let request_id = record.request_id.clone();
+    let (decided, failure) = match decided {
+        Ok(decided) => (decided, None),
+        Err(error) => (Decided::from_error(&error, expires_at, now()), Some(error)),
+    };
+    let signed = decided.decision.is_some();
+    let (decision, log_error) = approval_log::record_then_release(log, record, decided);
+    if let Some(error) = log_error {
+        let error = escape_for_terminal(&format!("{error:#}"));
+        if signed {
+            tracing::error!(
+                request_id = %escape_for_terminal(&request_id),
+                path = %log.path().display(),
+                error = %error,
+                "approval log write failed; request denied"
+            );
+        } else {
+            warn!(
+                request_id = %escape_for_terminal(&request_id),
+                path = %log.path().display(),
+                error = %error,
+                "approval log write failed"
+            );
+        }
+    }
+    match failure {
+        Some(error) => Err(error),
+        None => Ok(decision),
+    }
 }
 
 /// Decodes and admits one contextual sudo authentication delivery. It mirrors
@@ -1016,7 +1161,13 @@ async fn resolve_authentication_claim(
             }
         }
     };
-    let decision = decide_authentication(identity, decider, opened).await?;
+    let record = approval_log::authentication_record(
+        opened,
+        &identity.fingerprint(),
+        time::OffsetDateTime::now_utc(),
+    );
+    let outcome = decide_authentication(identity, decider, opened).await;
+    let decision = log_decided(&lease.log, record, outcome, opened.request.expires_at)?;
     lease.answered(match &decision {
         Some(decision) => RequestOutcome::Authentication(Box::new(decision.clone())),
         None => RequestOutcome::Unanswered,
@@ -1061,7 +1212,7 @@ async fn decide_authentication(
     identity: &Arc<Identity>,
     decider: &Decider,
     opened: &OpenedAuthRequestV1,
-) -> Result<Option<AuthDecisionV1>> {
+) -> Result<Decided<AuthDecisionV1>> {
     let request = &opened.request;
     if request.expires_at <= now() {
         bail!("authentication request already expired");
@@ -1081,7 +1232,10 @@ async fn decide_authentication(
                 request_id = %escape_for_terminal(&request.request_id),
                 "ignoring authentication request: --auto never answers a sudo authentication"
             );
-            Ok(None)
+            Ok(Decided::unsigned(
+                ApprovalOutcome::Canceled,
+                Some("--auto never answers a sudo authentication".to_owned()),
+            ))
         }
         Decider::Prompt(prompter) => {
             let summary = authentication_summary(request);
@@ -1094,10 +1248,11 @@ async fn decide_authentication(
                     host = %escape_for_terminal(&request.trusted.host),
                     "authentication request was not answered"
                 );
-                return Ok(None);
+                return Ok(Decided::unsigned(ApprovalOutcome::Expired, None));
             };
-            Ok(Some(
+            Ok(Decided::signed(
                 identity.authenticate(opened, &authentication_reason(request))?,
+                ApprovalOutcome::Approved,
             ))
         }
     }
@@ -1288,7 +1443,7 @@ async fn decide(
     identity: &Arc<Identity>,
     decider: &Decider,
     opened: &OpenedRequest,
-) -> Result<Option<DecisionV1>> {
+) -> Result<Decided<DecisionV1>> {
     let request = &opened.request;
     if request.expires_at <= now() {
         bail!("request already expired");
@@ -1298,10 +1453,7 @@ async fn decide(
         Decider::TouchId(prompt) => {
             // The signature is the approval here, so this path builds the
             // whole decision rather than answering yes or no.
-            let Some(decision) = mac::decide(prompt, identity, opened).await? else {
-                return Ok(None);
-            };
-            return Ok(Some(decision));
+            return mac::decide(prompt, identity, opened).await;
         }
         Decider::Auto(answer) => *answer,
         Decider::Prompt(prompter) => {
@@ -1329,21 +1481,24 @@ async fn decide(
                     host = %escape_for_terminal(&request.host),
                     "request expired unanswered"
                 );
-                return Ok(None);
+                return Ok(Decided::unsigned(ApprovalOutcome::Expired, None));
             };
             answer
         }
     };
     let reason = approval_reason_for_raw(request);
-    let decision = if approve {
-        identity.approve(opened, &reason)?
+    let signed = if approve {
+        Decided::signed(
+            identity.approve(opened, &reason)?,
+            ApprovalOutcome::Approved,
+        )
     } else {
         // An explicit refusal signs like an approval: the hook verifies the
         // denial against the pinned device, so no NATS credential suffices
         // to deny for it. Silence (timeout, dismissal) signs nothing.
-        identity.deny(opened, &reason)?
+        Decided::signed(identity.deny(opened, &reason)?, ApprovalOutcome::Denied)
     };
-    Ok(Some(decision))
+    Ok(signed)
 }
 
 /// The prompt a Mac holding an enclave key uses: the Touch ID sheet itself.
@@ -1353,12 +1508,10 @@ fn native_decider(identity: &Arc<Identity>) -> Option<Decider> {
         return None;
     }
     info!("approvals are the Touch ID sheet; nothing is read from stdin");
-    Some(Decider::TouchId(
-        oshioki_agent::touchid::TouchIdPrompt::new(
-            Box::new(mac::Screen),
-            Arc::new(mac::Canceller(Arc::clone(identity))),
-        ),
-    ))
+    Some(Decider::TouchId(vouch_agent::touchid::TouchIdPrompt::new(
+        Box::new(mac::Screen),
+        Arc::new(mac::Canceller(Arc::clone(identity))),
+    )))
 }
 
 /// Only a Mac has a native prompt, and only for an enclave key.
@@ -1370,7 +1523,7 @@ fn native_decider(_identity: &Arc<Identity>) -> Option<Decider> {
 /// Publishes one decision and says so in the log.
 async fn publish(
     nats: &async_nats::Client,
-    request: &oshioki_protocol::RequestV1,
+    request: &vouch_protocol::RequestV1,
     decision: DecisionV1,
 ) -> Result<()> {
     nats.publish(
@@ -1413,7 +1566,7 @@ async fn publish_alive(nats: &async_nats::Client, request_id: &str) -> Result<()
 // ---------------------------------------------------------------------------
 
 /// File name of the agent socket inside the agent state directory, unless
-/// `OSHIOKI_AGENT_SOCKET` overrides it.
+/// `VOUCH_AGENT_SOCKET` overrides it.
 const AGENT_SOCKET_NAME: &str = "agent.sock";
 
 /// Resolve the socket path: explicit override first, then the state dir next
@@ -1425,7 +1578,7 @@ fn socket_path(
 ) -> Result<PathBuf> {
     if let Some(path) = override_path {
         if path.is_empty() {
-            bail!("OSHIOKI_AGENT_SOCKET is set but empty");
+            bail!("VOUCH_AGENT_SOCKET is set but empty");
         }
         return Ok(PathBuf::from(path));
     }
@@ -1571,7 +1724,7 @@ async fn handle_socket(
         );
         return Ok(());
     }
-    let alive = oshioki_protocol::socket_v1::encode_frame(&serde_json::to_vec(
+    let alive = vouch_protocol::socket_v1::encode_frame(&serde_json::to_vec(
         &AliveV1::for_request(&opened.request.request_id),
     )?)?;
     writer
@@ -1587,7 +1740,7 @@ async fn handle_socket(
     else {
         return Ok(());
     };
-    let frame = oshioki_protocol::socket_v1::encode_frame(&serde_json::to_vec(&decision)?)?;
+    let frame = vouch_protocol::socket_v1::encode_frame(&serde_json::to_vec(&decision)?)?;
     writer
         .write_all(&frame)
         .await
@@ -1636,7 +1789,7 @@ async fn handle_socket_authentication(
         );
         return Ok(());
     }
-    let alive = oshioki_protocol::socket_v1::encode_frame(&serde_json::to_vec(
+    let alive = vouch_protocol::socket_v1::encode_frame(&serde_json::to_vec(
         &AliveV1::for_request(&opened.request.request_id),
     )?)?;
     writer
@@ -1652,7 +1805,7 @@ async fn handle_socket_authentication(
     else {
         return Ok(());
     };
-    let frame = oshioki_protocol::socket_v1::encode_frame(&serde_json::to_vec(&decision)?)?;
+    let frame = vouch_protocol::socket_v1::encode_frame(&serde_json::to_vec(&decision)?)?;
     writer
         .write_all(&frame)
         .await
@@ -1667,13 +1820,13 @@ async fn handle_socket_authentication(
 /// Read one length-delimited frame. A peer that hangs up before delivering
 /// one has not answered.
 async fn read_frame(reader: &mut tokio::net::unix::OwnedReadHalf) -> Result<Option<Vec<u8>>> {
-    let mut prefix = [0u8; oshioki_protocol::socket_v1::FRAME_LEN_BYTES];
+    let mut prefix = [0u8; vouch_protocol::socket_v1::FRAME_LEN_BYTES];
     match reader.read_exact(&mut prefix).await {
         Ok(_) => {}
         Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
         Err(error) => return Err(error.into()),
     }
-    let len = oshioki_protocol::socket_v1::decode_frame_len(prefix)?;
+    let len = vouch_protocol::socket_v1::decode_frame_len(prefix)?;
     let mut payload = vec![0u8; len];
     match reader.read_exact(&mut payload).await {
         Ok(_) => {}
@@ -1681,35 +1834,6 @@ async fn read_frame(reader: &mut tokio::net::unix::OwnedReadHalf) -> Result<Opti
         Err(error) => return Err(error.into()),
     }
     Ok(Some(payload))
-}
-
-/// Renders argv so the boundaries between arguments are visible.
-///
-/// Joined with plain spaces, `["/tmp/a b"]` and `["/tmp/a", "b"]` render
-/// identically, and the operator approves the wrong one of the two. Every
-/// argument that is not plainly printable, including the empty one, is
-/// wrapped in shell single quotes instead.
-fn quote_argv(argv: &[String]) -> String {
-    argv.iter()
-        .map(|argument| quote_argument(argument))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// Single-quotes one argument unless every byte of it is unambiguous.
-///
-/// The escape is the shell's own: a single quote ends the quoted run, adds a
-/// backslash-escaped quote, and opens the next run.
-fn quote_argument(argument: &str) -> String {
-    let plain = !argument.is_empty()
-        && argument
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || "@%+=:,./-_".contains(character));
-    if plain {
-        argument.to_owned()
-    } else {
-        format!("'{}'", argument.replace('\'', r"'\''"))
-    }
 }
 
 /// Names the account the command would run as.
@@ -1734,169 +1858,35 @@ enum Decider {
     Auto(bool),
     Prompt(Prompter),
     #[cfg(target_os = "macos")]
-    TouchId(oshioki_agent::touchid::TouchIdPrompt),
+    TouchId(vouch_agent::touchid::TouchIdPrompt),
 }
 
-/// What the operator is being asked to allow, shown on the Touch ID sheet
-/// itself: the companion review dialog this text once deferred to is gone
-/// (#70), so the sheet is the only thing an operator reads before approving.
-/// A hash and a request ID told them nothing; host, user, and the command
-/// are what a person actually recognizes at a glance. Everything here still
-/// comes from the signed request, so a truncated or even fully dropped
-/// suffix cannot change what gets executed — the full bytes are verified
+/// What the Touch ID sheet says: `<session> wants sudo <argv…>`. The panel
+/// beside it carries the detail; see `vouch_agent::review`. Everything here
+/// comes from the signed request, and the full bytes are verified
 /// independently of this display string.
-///
-/// Format: `<session>: <user>@<host> sudo <argv...>`, with the `<session>: `
-/// prefix dropped when no session name resolves, and `sudo` omitted when
-/// `argv[0]` already names it. Host and user are never dropped; the argv
-/// tail is truncated with "…" to fit the cap, and the session prefix is the
-/// first thing dropped under pressure.
-fn approval_reason_for_raw(request: &oshioki_protocol::RequestV1) -> String {
-    let target = format!(
-        "{}@{}",
-        escape_for_terminal(&request.user),
-        escape_for_terminal(&request.host)
-    );
-    let argv = quote_argv(&request.argv);
-    let wants_sudo_prefix = !matches!(request.argv.first(), Some(first) if first == "sudo");
-    let command = if argv.is_empty() {
-        escape_for_terminal(&request.command)
-    } else if wants_sudo_prefix {
-        format!("sudo {}", escape_for_terminal(&argv))
-    } else {
-        escape_for_terminal(&argv)
-    };
-    let session = session_name_for(request);
-
-    // The target (`<user>@<host>`) is never truncated or dropped. The
-    // session prefix is the first thing dropped under pressure: the command
-    // is more useful than the session label when space is tight, so the
-    // session is shown only when the full command fits alongside it too —
-    // never as a surviving label next to a chopped-up command.
-    let target_only_room = MAX_APPROVAL_REASON_CHARS.saturating_sub(target.chars().count() + 1);
-    if target_only_room == 0 {
-        // The target alone overflows the cap (an implausibly long
-        // user/host): show as much of it as fits rather than nothing.
-        return truncate_chars(&target, MAX_APPROVAL_REASON_CHARS);
-    }
-    if let Some(name) = &session {
-        let prefix = format!("{name}: ");
-        let fixed_len = prefix.chars().count() + target.chars().count() + 1;
-        if fixed_len + command.chars().count() <= MAX_APPROVAL_REASON_CHARS {
-            return format!("{prefix}{target} {command}");
-        }
-        // The session plus the full command does not fit: drop the session
-        // rather than show a truncated command next to an intact label.
-    }
-    format!("{target} {}", truncate_chars(&command, target_only_room))
+fn approval_reason_for_raw(request: &vouch_protocol::RequestV1) -> String {
+    vouch_agent::review::sheet_reason(request, &local_host())
 }
 
-/// Shrinks `value` to at most `max_chars` characters, replacing a dropped
-/// tail with "…" so the operator can tell the text was cut rather than
-/// reading a command that happens to end early.
-fn truncate_chars(value: &str, max_chars: usize) -> String {
-    if value.chars().count() <= max_chars {
-        return value.to_owned();
-    }
-    if max_chars == 0 {
-        return String::new();
-    }
-    let keep = max_chars.saturating_sub(1);
-    let mut truncated: String = value.chars().take(keep).collect();
-    truncated.push('…');
-    truncated
+/// This Mac's hostname, to tell a local request from a remote one.
+fn local_host() -> String {
+    nix::unistd::gethostname()
+        .ok()
+        .and_then(|name| name.into_string().ok())
+        .unwrap_or_default()
 }
 
-/// Names the session a request came from, using only fields carried on the
-/// request itself — the agent never reads the requesting host's live
-/// process table. First match wins:
-///
-/// 1. The request's `session` field, which the hook resolves on the host
-///    from an `OSHIOKI_SESSION` entry in the caller's original environment
-///    — see `session_label` in `hook/src/main.rs`. Absent when the hook
-///    predates this field (0.1.4 and earlier), in which case the remaining
-///    rules apply exactly as before.
-/// 2. An `OSHIOKI_SESSION` environment entry, which a user can export in a
-///    shell or terminal tab to label it (documented in `docs/configuration.md`).
-///    Kept as a fallback for an old hook that bound the environment but
-///    never resolved `session` itself.
-/// 3. The nearest "interesting" ancestor in `pid_chain` — entries are
-///    `"pid:comm"` pairs (see `pid_chain_darwin`/`pid_chain_linux` in
-///    `hook/src/main.rs`), so a process name like `claude`, `codex`, or
-///    `tmux` is usable directly; shells and `sudo` itself are skipped as
-///    uninteresting. Rendered as `comm[pid]` (e.g. `claude[44930]`) so two
-///    concurrent agent sessions on the same host are distinguishable, while
-///    staying short enough for the reason's character budget.
-/// 4. The tty's basename (e.g. `ttys004`), if the request carries one.
-///
-/// `None` when nothing resolves, in which case the reason drops the prefix
-/// entirely rather than show a blank label.
-fn session_name_for(request: &oshioki_protocol::RequestV1) -> Option<String> {
-    if let Some(session) = request.session.as_ref().filter(|value| !value.is_empty()) {
-        return Some(escape_for_terminal(session));
-    }
-    if let Some(entry) = request
-        .env
-        .iter()
-        .rev()
-        .find(|entry| entry.name == "OSHIOKI_SESSION" && !entry.value.is_empty())
-    {
-        return Some(escape_for_terminal(&entry.value));
-    }
-    if let Some((pid, comm)) = request.pid_chain.iter().find_map(|entry| {
-        let (pid, comm) = entry.split_once(':')?;
-        is_interesting_session_process(comm).then_some((pid, comm))
-    }) {
-        return Some(escape_for_terminal(&format!("{comm}[{pid}]")));
-    }
-    if let Some(tty) = &request.tty
-        && let Some(basename) = tty.rsplit('/').next().filter(|value| !value.is_empty())
-    {
-        return Some(escape_for_terminal(basename));
-    }
-    None
-}
-
-/// Whether a `pid_chain` process name is worth naming a session after.
-/// Shells, `sudo` itself, and init/daemon wrappers say nothing a user would
-/// recognize as "their" session; an agent harness or multiplexer name does.
-fn is_interesting_session_process(comm: &str) -> bool {
-    !matches!(
-        comm,
-        "sudo"
-            | "sh"
-            | "bash"
-            | "zsh"
-            | "dash"
-            | "fish"
-            | "login"
-            | "sshd"
-            | "systemd"
-            | "launchd"
-            | "init"
-    )
-}
-
-/// The reason's cap for a system-owned biometric prompt. `LocalAuthentication`
-/// wraps a long reason across lines on the sheet rather than truncating it
-/// outright (confirmed on-device with a two-line reason under the previous,
-/// tighter cap), so this is set with headroom for host, user, and a short
-/// command rather than the bare id-and-hash the sheet used to show. Still
-/// conservative pending a longer on-device check of how many lines look
-/// reasonable.
-const MAX_APPROVAL_REASON_CHARS: usize = 160;
-
-/// Test helper for the short reason generated from a semantically valid
-/// request. Production paths use the exact retained bytes directly.
+/// Test helper: the sheet reason with the request's own host as this Mac.
 #[cfg(test)]
-fn approval_reason(request: &oshioki_protocol::RequestV1) -> String {
-    approval_reason_for_raw(request)
+fn approval_reason(request: &vouch_protocol::RequestV1) -> String {
+    vouch_agent::review::sheet_reason(request, &request.host)
 }
 
 /// The complete bound environment as approver-visible lines, empty when the
 /// request carries none. The terminal is scrollable, so hiding a suffix or
 /// summarizing entries would let an unreviewed value affect execution.
-fn format_env(request: &oshioki_protocol::RequestV1) -> String {
+fn format_env(request: &vouch_protocol::RequestV1) -> String {
     use std::fmt::Write as _;
     let mut shown = String::new();
     for (index, entry) in request.env.iter().enumerate() {
@@ -2111,22 +2101,25 @@ mod mac {
     use std::sync::Arc;
 
     use anyhow::Result;
-    use oshioki_agent::{
+    use tracing::{error, info};
+    use vouch_agent::{
         Identity, OpenedRequest,
+        approval_log::Decided,
         touchid::{AttemptError, Outcome, PromptCancel, ScreenLock, TouchIdPrompt},
     };
-    use oshioki_enclave::SignError;
-    use oshioki_protocol::{AuthDecisionV1, DecisionV1, OpenedAuthRequestV1, escape_for_terminal};
-    use tracing::{error, info};
+    use vouch_enclave::SignError;
+    use vouch_protocol::{AuthDecisionV1, DecisionV1, OpenedAuthRequestV1, escape_for_terminal};
 
-    use super::{approval_reason_for_raw, authentication_reason};
+    use super::{approval_reason_for_raw, local_host};
+    use vouch_agent::panel_process::{self, PanelProcess};
+    use vouch_agent::review;
 
     /// The login session's lock state, read fresh each time it is asked for.
     pub struct Screen;
 
     impl ScreenLock for Screen {
         fn is_locked(&self) -> bool {
-            oshioki_enclave::screen_is_locked()
+            vouch_enclave::screen_is_locked()
         }
     }
 
@@ -2151,29 +2144,34 @@ mod mac {
         prompt: &TouchIdPrompt,
         identity: &Arc<Identity>,
         opened: &OpenedRequest,
-    ) -> Result<Option<DecisionV1>> {
+    ) -> Result<Decided<DecisionV1>> {
         let request = &opened.request;
         let reason = approval_reason_for_raw(request);
         let sign = {
             let (identity, opened, reason) = (Arc::clone(identity), opened.clone(), reason.clone());
             move || identity.approve(&opened, &reason).map_err(classify)
         };
-        match prompt
-            .ask(&request.request_id, request.expires_at, sign)
-            .await
-        {
-            Ok(Outcome::Approved(decision)) => Ok(Some(decision)),
+        let asked = if panel_process::panel_enabled() {
+            let panel = PanelProcess::new(review::sudo_view(request, &local_host()));
+            prompt
+                .ask_with_companion(&request.request_id, request.expires_at, &panel, sign)
+                .await
+        } else {
+            prompt
+                .ask(&request.request_id, request.expires_at, sign)
+                .await
+        };
+        match &asked {
             // Dismissal carries no signature, and an unsigned denial is
             // indistinguishable from a forgery: the hook fails closed at
             // the deadline instead.
-            Ok(Outcome::Denied) => Ok(None),
+            Ok(Outcome::Approved(_) | Outcome::Denied) => {}
             Ok(Outcome::Expired) => {
                 info!(
                     request_id = %escape_for_terminal(&request.request_id),
                     host = %escape_for_terminal(&request.host),
                     "request expired unanswered"
                 );
-                Ok(None)
             }
             Err(error) => {
                 // Not a verdict: the key is unusable, not refused. Biometry
@@ -2182,11 +2180,11 @@ mod mac {
                 error!(
                     request_id = %escape_for_terminal(&request.request_id),
                     error = %escape_for_terminal(&format!("{error:#}")),
-                    "the Secure Enclave would not sign; re-pair with `oshioki-agent pair`"
+                    "the Secure Enclave would not sign; re-pair with `vouch-agent pair`"
                 );
-                Ok(None)
             }
         }
+        Ok(Decided::from_touch_id(asked))
     }
 
     /// Asks for one contextual sudo authentication with a Touch ID sheet.
@@ -2198,36 +2196,41 @@ mod mac {
         prompt: &TouchIdPrompt,
         identity: &Arc<Identity>,
         opened: &OpenedAuthRequestV1,
-    ) -> Result<Option<AuthDecisionV1>> {
+    ) -> Result<Decided<AuthDecisionV1>> {
         let request = &opened.request;
-        let reason = authentication_reason(request);
+        let reason = vouch_agent::review::sheet_authentication_reason(request, &local_host());
         let sign = {
             let (identity, opened, reason) = (Arc::clone(identity), opened.clone(), reason.clone());
             move || identity.authenticate(&opened, &reason).map_err(classify)
         };
-        match prompt
-            .ask(&request.request_id, request.expires_at, sign)
-            .await
-        {
-            Ok(Outcome::Approved(decision)) => Ok(Some(decision)),
-            Ok(Outcome::Denied) => Ok(None),
+        let asked = if panel_process::panel_enabled() {
+            let panel = PanelProcess::new(review::authentication_view(request, &local_host()));
+            prompt
+                .ask_with_companion(&request.request_id, request.expires_at, &panel, sign)
+                .await
+        } else {
+            prompt
+                .ask(&request.request_id, request.expires_at, sign)
+                .await
+        };
+        match &asked {
+            Ok(Outcome::Approved(_) | Outcome::Denied) => {}
             Ok(Outcome::Expired) => {
                 info!(
                     request_id = %escape_for_terminal(&request.request_id),
                     host = %escape_for_terminal(&request.trusted.host),
                     "authentication request expired unanswered"
                 );
-                Ok(None)
             }
             Err(error) => {
                 error!(
                     request_id = %escape_for_terminal(&request.request_id),
                     error = %escape_for_terminal(&format!("{error:#}")),
-                    "the Secure Enclave would not sign; re-pair with `oshioki-agent pair`"
+                    "the Secure Enclave would not sign; re-pair with `vouch-agent pair`"
                 );
-                Ok(None)
             }
         }
+        Ok(Decided::from_touch_id(asked))
     }
 
     /// A dismissed sheet is an answer; anything else is a broken key.
@@ -2243,25 +2246,34 @@ mod mac {
 #[cfg(test)]
 mod tests {
     use super::{
-        Claim, Cli, Decider, MAX_APPROVAL_REASON_CHARS, MAX_IN_FLIGHT_REQUESTS, Pairing, Prompter,
-        Relay, RequestAdmission, RequestOutcome, Verb, approval_reason,
+        Claim, Cli, Decider, MAX_APPROVAL_REASON_CHARS, MAX_IN_FLIGHT_REQUESTS, OpenedRequest,
+        Pairing, Prompter, Relay, RequestAdmission, RequestOutcome, Verb, approval_reason,
         authentication_prompt_output, authentication_reason, authentication_summary, bind_socket,
         decide, decide_authentication, dispatch_nats_request, format_env, load_or_create_with, now,
         payload_hash, prompt_output, quote_argv, runas_label, socket_path,
     };
     use clap::Parser as _;
-    use oshioki_agent::SignerKind;
-    use oshioki_agent::secret_store::MemoryStore;
-    use oshioki_protocol::{
-        EnvEntryV1, RequestEnvelopeV1, RequestV1, VERSION_V1, encode_base64url,
-    };
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     use tokio::sync::mpsc;
+    use vouch_agent::SignerKind;
+    use vouch_agent::approval_log::ApprovalLog;
+    use vouch_agent::secret_store::MemoryStore;
+
+    /// A fresh approval log in its own temporary directory.
+    fn test_approval_log() -> std::sync::Arc<ApprovalLog> {
+        let dir = std::env::temp_dir().join(format!(
+            "vouch-agent-approvals-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        std::sync::Arc::new(ApprovalLog::at(dir.join("approvals.jsonl")))
+    }
+    use vouch_protocol::{EnvEntryV1, RequestEnvelopeV1, RequestV1, VERSION_V1, encode_base64url};
 
     /// One test decision, distinct per request id so a relayed answer can be
     /// told apart from a freshly minted one.
-    fn test_decision(request_id: &str) -> oshioki_protocol::DecisionV1 {
-        oshioki_protocol::DecisionV1::Deny(oshioki_protocol::DenyV1 {
+    fn test_decision(request_id: &str) -> vouch_protocol::DecisionV1 {
+        vouch_protocol::DecisionV1::Deny(vouch_protocol::DenyV1 {
             version: VERSION_V1,
             request_id: request_id.to_owned(),
             device_fingerprint: "fingerprint".into(),
@@ -2271,7 +2283,7 @@ mod tests {
 
     #[test]
     fn request_admission_is_bounded_and_deduplicates_answered_ids() {
-        let admission = RequestAdmission::new();
+        let admission = RequestAdmission::new(test_approval_log());
         let body = payload_hash(b"one body");
         let mut leases = Vec::new();
         for index in 0..MAX_IN_FLIGHT_REQUESTS {
@@ -2304,7 +2316,7 @@ mod tests {
     /// exists is the id a replay.
     #[tokio::test]
     async fn a_retry_on_another_transport_attaches_to_the_in_flight_decision() {
-        let admission = RequestAdmission::new();
+        let admission = RequestAdmission::new(test_approval_log());
         let body = payload_hash(b"one body");
         let Claim::Owner(owner) = admission
             .reserve()
@@ -2358,7 +2370,7 @@ mod tests {
     /// relays nothing.
     #[test]
     fn a_different_body_under_a_claimed_id_is_discarded() {
-        let admission = RequestAdmission::new();
+        let admission = RequestAdmission::new(test_approval_log());
         let Claim::Owner(_owner) = admission
             .reserve()
             .expect("capacity should be available")
@@ -2380,7 +2392,7 @@ mod tests {
     /// request nobody answered is still answerable.
     #[tokio::test]
     async fn a_lane_that_dies_without_answering_leaves_the_request_claimable() {
-        let admission = RequestAdmission::new();
+        let admission = RequestAdmission::new(test_approval_log());
         let body = payload_hash(b"one body");
         let Claim::Owner(owner) = admission
             .reserve()
@@ -2410,7 +2422,7 @@ mod tests {
     /// the answer.
     #[tokio::test]
     async fn a_waiter_attaches_to_whoever_took_the_abandoned_request_over() {
-        let admission = RequestAdmission::new();
+        let admission = RequestAdmission::new(test_approval_log());
         let body = payload_hash(b"one body");
         let Claim::Owner(owner) = admission
             .reserve()
@@ -2459,7 +2471,7 @@ mod tests {
         let dir = socket_test_dir("late-ack");
         let store = MemoryStore::new();
         let identity = std::sync::Arc::new(
-            oshioki_agent::Identity::generate_to_with(
+            vouch_agent::Identity::generate_to_with(
                 &dir.join("agent.json"),
                 SignerKind::Software,
                 &store,
@@ -2475,7 +2487,7 @@ mod tests {
 
         let (answers, lines) = mpsc::channel(8);
         let decider = Decider::Prompt(Prompter::new(lines));
-        let admission = RequestAdmission::new();
+        let admission = RequestAdmission::new(test_approval_log());
         let permit = admission.reserve().expect("capacity should be available");
         let (mut hook_side, agent_side) = tokio::net::UnixStream::pair().unwrap();
         let socket_identity = std::sync::Arc::clone(&identity);
@@ -2483,9 +2495,9 @@ mod tests {
             super::handle_socket(agent_side, &socket_identity, &decider, permit).await
         });
 
-        let frame = oshioki_protocol::socket_v1::encode_frame(&envelope).unwrap();
+        let frame = vouch_protocol::socket_v1::encode_frame(&envelope).unwrap();
         hook_side.write_all(&frame).await.unwrap();
-        let acknowledgement: oshioki_protocol::AliveV1 =
+        let acknowledgement: vouch_protocol::AliveV1 =
             serde_json::from_slice(&read_socket_frame(&mut hook_side).await).unwrap();
         acknowledgement.validate(&request.request_id).unwrap();
 
@@ -2506,7 +2518,7 @@ mod tests {
             }
         });
         let relayed = waiter.wait(request.expires_at).await;
-        let verdict: oshioki_protocol::DecisionV1 =
+        let verdict: vouch_protocol::DecisionV1 =
             serde_json::from_slice(&read_socket_frame(&mut hook_side).await).unwrap();
         serve.await.unwrap().unwrap();
         feeder.abort();
@@ -2523,7 +2535,7 @@ mod tests {
 
     /// Read one length-delimited frame from a connected hook-side socket.
     async fn read_socket_frame(stream: &mut tokio::net::UnixStream) -> Vec<u8> {
-        let mut prefix = [0u8; oshioki_protocol::socket_v1::FRAME_LEN_BYTES];
+        let mut prefix = [0u8; vouch_protocol::socket_v1::FRAME_LEN_BYTES];
         stream.read_exact(&mut prefix).await.unwrap();
         let len = usize::try_from(u32::from_be_bytes(prefix)).unwrap();
         let mut payload = vec![0u8; len];
@@ -2536,21 +2548,21 @@ mod tests {
         let dir = socket_test_dir("flood");
         let store = MemoryStore::new();
         let identity = std::sync::Arc::new(
-            oshioki_agent::Identity::generate_to_with(
+            vouch_agent::Identity::generate_to_with(
                 &dir.join("agent.json"),
-                oshioki_agent::SignerKind::Software,
+                vouch_agent::SignerKind::Software,
                 &store,
             )
             .unwrap(),
         );
         let (_sender, receiver) = mpsc::channel(1);
         let decider = std::sync::Arc::new(Decider::Prompt(Prompter::new(receiver)));
-        let admission = std::sync::Arc::new(RequestAdmission::new());
+        let admission = std::sync::Arc::new(RequestAdmission::new(test_approval_log()));
         for index in 0..(MAX_IN_FLIGHT_REQUESTS * 4) {
             let mut request = request_for_log_probe();
             request.request_id = format!("encrypted-flood-{index}");
             request.issued_at = now();
-            request.expires_at = request.issued_at + oshioki_protocol::MAX_REQUEST_LIFETIME_SECS;
+            request.expires_at = request.issued_at + vouch_protocol::MAX_REQUEST_LIFETIME_SECS;
             let payload = sealed_envelope_bytes(&identity, &request);
             dispatch_nats_request(&payload, &identity, &decider, None, &admission);
         }
@@ -2566,25 +2578,25 @@ mod tests {
         let dir = socket_test_dir("dedupe");
         let store = MemoryStore::new();
         let identity = std::sync::Arc::new(
-            oshioki_agent::Identity::generate_to_with(
+            vouch_agent::Identity::generate_to_with(
                 &dir.join("agent.json"),
-                oshioki_agent::SignerKind::Software,
+                vouch_agent::SignerKind::Software,
                 &store,
             )
             .unwrap(),
         );
         let (_sender, receiver) = mpsc::channel(1);
         let decider = std::sync::Arc::new(Decider::Prompt(Prompter::new(receiver)));
-        let admission = std::sync::Arc::new(RequestAdmission::new());
+        let admission = std::sync::Arc::new(RequestAdmission::new(test_approval_log()));
         let mut request = request_for_log_probe();
         request.request_id = "claim-after-rejection".into();
         request.issued_at = now();
-        request.expires_at = request.issued_at + oshioki_protocol::MAX_REQUEST_LIFETIME_SECS;
+        request.expires_at = request.issued_at + vouch_protocol::MAX_REQUEST_LIFETIME_SECS;
 
         let mut invalid: RequestEnvelopeV1 =
             serde_json::from_slice(&sealed_envelope_bytes(&identity, &request)).unwrap();
-        invalid.issued_at = now() + oshioki_protocol::MAX_REQUEST_ISSUANCE_SKEW_SECS + 1;
-        invalid.expires_at = invalid.issued_at + oshioki_protocol::MAX_REQUEST_LIFETIME_SECS;
+        invalid.issued_at = now() + vouch_protocol::MAX_REQUEST_ISSUANCE_SKEW_SECS + 1;
+        invalid.expires_at = invalid.issued_at + vouch_protocol::MAX_REQUEST_LIFETIME_SECS;
         dispatch_nats_request(
             &serde_json::to_vec(&invalid).unwrap(),
             &identity,
@@ -2595,7 +2607,7 @@ mod tests {
         assert!(admission.request_ids.lock().unwrap().is_empty());
 
         let foreign =
-            oshioki_agent::Identity::from_material([0x44; 32], [0x55; 32], [0x66; 32]).unwrap();
+            vouch_agent::Identity::from_material([0x44; 32], [0x55; 32], [0x66; 32]).unwrap();
         dispatch_nats_request(
             &sealed_envelope_bytes(&foreign, &request),
             &identity,
@@ -2616,15 +2628,15 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    fn auth_request_for_tests() -> oshioki_protocol::AuthRequestV1 {
-        oshioki_protocol::AuthRequestV1 {
-            message_type: oshioki_protocol::AUTH_REQUEST_TYPE.into(),
-            version: oshioki_protocol::AUTH_WIRE_VERSION,
+    fn auth_request_for_tests() -> vouch_protocol::AuthRequestV1 {
+        vouch_protocol::AuthRequestV1 {
+            message_type: vouch_protocol::AUTH_REQUEST_TYPE.into(),
+            version: vouch_protocol::AUTH_WIRE_VERSION,
             request_id: "auth-1".into(),
             nonce: encode_base64url(&[3; 16]),
             issued_at: now(),
             expires_at: now() + 70,
-            trusted: oshioki_protocol::TrustedAuthContextV1 {
+            trusted: vouch_protocol::TrustedAuthContextV1 {
                 host: "host.example".into(),
                 service: "sudo".into(),
                 pam_user: "root".into(),
@@ -2633,10 +2645,11 @@ mod tests {
                 invoking_user: Some("eric".into()),
                 tty: Some("/dev/pts/3".into()),
             },
-            submitted: oshioki_protocol::SubmittedAuthContextV1 {
+            submitted: vouch_protocol::SubmittedAuthContextV1 {
                 session: None,
                 agent_label: None,
-                invocation: oshioki_protocol::AuthInvocationV1::Truncated {
+                reason: None,
+                invocation: vouch_protocol::AuthInvocationV1::Truncated {
                     command: None,
                     argv: vec!["apt".into(), "upgrade".into()],
                     cwd: None,
@@ -2647,14 +2660,14 @@ mod tests {
     }
 
     fn auth_envelope_bytes(
-        identity: &oshioki_agent::Identity,
-        request: &oshioki_protocol::AuthRequestV1,
+        identity: &vouch_agent::Identity,
+        request: &vouch_protocol::AuthRequestV1,
     ) -> Vec<u8> {
         let raw = request.raw_json().unwrap();
-        let sealed = oshioki_protocol::seal_v1(&raw, &identity.device_record("test")).unwrap();
-        let envelope = oshioki_protocol::AuthEnvelopeV1 {
-            message_type: oshioki_protocol::AUTH_ENVELOPE_TYPE.into(),
-            version: oshioki_protocol::AUTH_WIRE_VERSION,
+        let sealed = vouch_protocol::seal_v1(&raw, &identity.device_record("test")).unwrap();
+        let envelope = vouch_protocol::AuthEnvelopeV1 {
+            message_type: vouch_protocol::AUTH_ENVELOPE_TYPE.into(),
+            version: vouch_protocol::AUTH_WIRE_VERSION,
             request_id: request.request_id.clone(),
             host: request.trusted.host.clone(),
             issued_at: request.issued_at,
@@ -2674,16 +2687,16 @@ mod tests {
         let dir = socket_test_dir("auth-software");
         let store = MemoryStore::new();
         let identity = std::sync::Arc::new(
-            oshioki_agent::Identity::generate_to_with(
+            vouch_agent::Identity::generate_to_with(
                 &dir.join("agent.json"),
-                oshioki_agent::SignerKind::Software,
+                vouch_agent::SignerKind::Software,
                 &store,
             )
             .unwrap(),
         );
         let (_sender, receiver) = mpsc::channel(1);
         let decider = std::sync::Arc::new(Decider::Prompt(Prompter::new(receiver)));
-        let admission = std::sync::Arc::new(RequestAdmission::new());
+        let admission = std::sync::Arc::new(RequestAdmission::new(test_approval_log()));
         let payload = auth_envelope_bytes(&identity, &auth_request_for_tests());
         dispatch_nats_request(&payload, &identity, &decider, None, &admission);
         assert!(admission.request_ids.lock().unwrap().is_empty());
@@ -2697,16 +2710,16 @@ mod tests {
         let dir = socket_test_dir("auth-unknown");
         let store = MemoryStore::new();
         let identity = std::sync::Arc::new(
-            oshioki_agent::Identity::generate_to_with(
+            vouch_agent::Identity::generate_to_with(
                 &dir.join("agent.json"),
-                oshioki_agent::SignerKind::Software,
+                vouch_agent::SignerKind::Software,
                 &store,
             )
             .unwrap(),
         );
         let (_sender, receiver) = mpsc::channel(1);
         let decider = std::sync::Arc::new(Decider::Prompt(Prompter::new(receiver)));
-        let admission = std::sync::Arc::new(RequestAdmission::new());
+        let admission = std::sync::Arc::new(RequestAdmission::new(test_approval_log()));
         let mut envelope: serde_json::Value =
             serde_json::from_slice(&auth_envelope_bytes(&identity, &auth_request_for_tests()))
                 .unwrap();
@@ -2728,10 +2741,10 @@ mod tests {
     #[tokio::test]
     async fn auto_never_answers_an_authentication() {
         let identity = std::sync::Arc::new(
-            oshioki_agent::Identity::from_material([0x11; 32], [0x22; 32], [0x33; 32]).unwrap(),
+            vouch_agent::Identity::from_material([0x11; 32], [0x22; 32], [0x33; 32]).unwrap(),
         );
         let request = auth_request_for_tests();
-        let opened = oshioki_protocol::OpenedAuthRequestV1 {
+        let opened = vouch_protocol::OpenedAuthRequestV1 {
             raw: request.raw_json().unwrap(),
             request,
         };
@@ -2740,6 +2753,7 @@ mod tests {
                 decide_authentication(&identity, &Decider::Auto(answer), &opened)
                     .await
                     .unwrap()
+                    .decision
                     .is_none()
             );
         }
@@ -2789,7 +2803,7 @@ mod tests {
     #[test]
     fn an_unavailable_invocation_is_labelled_honestly() {
         let mut request = auth_request_for_tests();
-        request.submitted.invocation = oshioki_protocol::AuthInvocationV1::Unavailable;
+        request.submitted.invocation = vouch_protocol::AuthInvocationV1::Unavailable;
         assert!(authentication_summary(&request).contains("invocation: unavailable"));
         assert!(authentication_reason(&request).contains("unavailable"));
         assert!(
@@ -2819,6 +2833,7 @@ mod tests {
             pid_chain: vec![],
             env: vec![],
             session: None,
+            reason: None,
             issued_at: 1_000,
             expires_at: 1_090,
         }
@@ -2868,7 +2883,7 @@ mod tests {
     fn reason_without_session_shows_user_host_and_command() {
         let request = request_for_reason();
         let reason = approval_reason(&request);
-        assert_eq!(reason, "eric@host.example sudo apt update");
+        assert_eq!(reason, "eric@host.example wants sudo apt update");
         assert!(reason.chars().count() <= MAX_APPROVAL_REASON_CHARS);
     }
 
@@ -2877,15 +2892,12 @@ mod tests {
     #[test]
     fn reason_prefers_request_session_field_over_env() {
         let mut request = request_for_reason();
-        request.session = Some("oshioki-1b".into());
+        request.session = Some("vouch-1b".into());
         request.env = vec![EnvEntryV1 {
             name: "OSHIOKI_SESSION".into(),
             value: "laptop-ghostty".into(),
         }];
-        assert_eq!(
-            approval_reason(&request),
-            "oshioki-1b: eric@host.example sudo apt update"
-        );
+        assert_eq!(approval_reason(&request), "vouch-1b wants sudo apt update");
     }
 
     /// `OSHIOKI_SESSION` in the bound environment names the session, shown
@@ -2899,7 +2911,7 @@ mod tests {
         }];
         assert_eq!(
             approval_reason(&request),
-            "laptop-ghostty: eric@host.example sudo apt update"
+            "laptop-ghostty wants sudo apt update"
         );
     }
 
@@ -2918,7 +2930,7 @@ mod tests {
                 value: "second".into(),
             },
         ];
-        assert!(approval_reason(&request).starts_with("second: "));
+        assert!(approval_reason(&request).starts_with("second wants sudo "));
     }
 
     /// Without an `OSHIOKI_SESSION` entry, the nearest interesting
@@ -2934,7 +2946,7 @@ mod tests {
             "50:claude".into(),
             "1:launchd".into(),
         ];
-        assert!(approval_reason(&request).starts_with("claude[50]: "));
+        assert!(approval_reason(&request).starts_with("claude[50] wants sudo "));
     }
 
     /// With no session env and no interesting `pid_chain` entry, the tty
@@ -2944,7 +2956,7 @@ mod tests {
         let mut request = request_for_reason();
         request.pid_chain = vec!["99:zsh".into(), "1:launchd".into()];
         request.tty = Some("/dev/ttys004".into());
-        assert!(approval_reason(&request).starts_with("ttys004: "));
+        assert!(approval_reason(&request).starts_with("ttys004 wants sudo "));
     }
 
     /// No session env, no interesting `pid_chain` ancestor, and no tty: the
@@ -2956,7 +2968,7 @@ mod tests {
         request.tty = None;
         let reason = approval_reason(&request);
         assert!(!reason.contains(':') || reason.starts_with("eric@"));
-        assert_eq!(reason, "eric@host.example sudo apt update");
+        assert_eq!(reason, "eric@host.example wants sudo apt update");
     }
 
     /// `sudo` is not repeated when the caller's argv already names it.
@@ -2966,7 +2978,7 @@ mod tests {
         request.argv = vec!["sudo".into(), "apt".into(), "update".into()];
         assert_eq!(
             approval_reason(&request),
-            "eric@host.example sudo apt update"
+            "eric@host.example wants sudo apt update"
         );
     }
 
@@ -2991,15 +3003,15 @@ mod tests {
         ];
         let reason = approval_reason(&request);
         assert!(reason.chars().count() <= MAX_APPROVAL_REASON_CHARS);
-        assert!(reason.starts_with("eric@host.example sudo "));
+        assert!(reason.starts_with("eric@host.example wants sudo "));
         assert!(reason.ends_with('…'));
     }
 
-    /// Under the same pressure, a session-carrying request still shows the
-    /// full user@host and drops the session prefix entirely rather than
-    /// truncate it, since the command is more useful when space is tight.
+    /// Under the same pressure the session stays whole and the command's
+    /// tail is cut: the session is the one thing the sheet adds that the
+    /// command alone does not say, and the panel shows the full argv.
     #[test]
-    fn reason_truncation_prefers_command_over_session_name() {
+    fn reason_truncation_keeps_the_session_and_cuts_the_command() {
         let mut request = request_for_reason();
         request.env = vec![EnvEntryV1 {
             name: "OSHIOKI_SESSION".into(),
@@ -3014,10 +3026,11 @@ mod tests {
         ];
         let reason = approval_reason(&request);
         assert!(reason.chars().count() <= MAX_APPROVAL_REASON_CHARS);
-        assert!(reason.starts_with("eric@host.example sudo "));
         assert!(
-            !reason.contains("a-very-long-session-label"),
-            "the session prefix should be dropped, not truncated into noise: {reason}"
+            reason.starts_with(
+                "a-very-long-session-label-that-eats-the-budget wants sudo find / -name "
+            ),
+            "{reason}"
         );
         assert!(reason.ends_with('…'));
     }
@@ -3061,14 +3074,13 @@ mod tests {
 
     #[test]
     fn device_record_takes_a_label() {
-        let cli =
-            Cli::try_parse_from(["oshioki-agent", "device-record", "--label", "mbp"]).unwrap();
+        let cli = Cli::try_parse_from(["vouch-agent", "device-record", "--label", "mbp"]).unwrap();
         assert!(matches!(cli.verb, Verb::DeviceRecord { .. }));
     }
 
     #[test]
     fn init_takes_signer_and_force() {
-        let cli = Cli::try_parse_from(["oshioki-agent", "init", "--signer", "software"]).unwrap();
+        let cli = Cli::try_parse_from(["vouch-agent", "init", "--signer", "software"]).unwrap();
         assert!(matches!(
             cli.verb,
             Verb::Init {
@@ -3076,7 +3088,7 @@ mod tests {
                 force: false
             }
         ));
-        let cli = Cli::try_parse_from(["oshioki-agent", "init", "--force"]).unwrap();
+        let cli = Cli::try_parse_from(["vouch-agent", "init", "--force"]).unwrap();
         assert!(matches!(
             cli.verb,
             Verb::Init {
@@ -3108,7 +3120,7 @@ mod tests {
     /// part of them.
     #[test]
     fn approvals_differ_by_environment() {
-        let dir = std::env::temp_dir().join(format!("oshioki-env-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vouch-env-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let pairing = Pairing {
@@ -3122,12 +3134,12 @@ mod tests {
             let mut request = request_for_reason();
             request.env = env;
             let raw = request.raw_json().unwrap();
-            let opened = oshioki_agent::OpenedRequest { request, raw };
+            let opened = vouch_agent::OpenedRequest { request, raw };
             match identity
                 .approve(&opened, &approval_reason(&opened.request))
                 .unwrap()
             {
-                oshioki_protocol::DecisionV1::ApproveNative(approval) => approval.signature,
+                vouch_protocol::DecisionV1::ApproveNative(approval) => approval.signature,
                 other => panic!("expected an approval, got {other:?}"),
             }
         };
@@ -3150,7 +3162,7 @@ mod tests {
     /// quietly does nothing is worse than a refusal.
     #[test]
     fn pairing_reuses_an_identity_and_refuses_to_pretend_otherwise() {
-        let dir = std::env::temp_dir().join(format!("oshioki-pair-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vouch-pair-{}", std::process::id()));
         let path = dir.join("agent.json");
         let _ = std::fs::remove_dir_all(&dir);
         let pairing = |requested, force| Pairing {
@@ -3281,13 +3293,24 @@ mod tests {
     }
 
     fn socket_test_dir(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "oshioki-agent-socket-{name}-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("vouch-agent-socket-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn the_pre_rename_identity_is_found_until_a_new_one_exists() {
+        let config = socket_test_dir("legacy-state");
+        assert_eq!(super::default_state_dir(&config), config.join("vouch"));
+        std::fs::create_dir_all(config.join("oshioki")).unwrap();
+        std::fs::write(config.join("oshioki/agent.json"), b"{}").unwrap();
+        assert_eq!(super::default_state_dir(&config), config.join("oshioki"));
+        std::fs::create_dir_all(config.join("vouch")).unwrap();
+        std::fs::write(config.join("vouch/agent.json"), b"{}").unwrap();
+        assert_eq!(super::default_state_dir(&config), config.join("vouch"));
+        let _ = std::fs::remove_dir_all(config);
     }
 
     #[test]
@@ -3354,14 +3377,14 @@ mod tests {
     /// one envelope per active device.
     #[cfg(feature = "unattended")]
     fn sealed_envelope_for(
-        identity: &oshioki_agent::Identity,
-        request: &oshioki_protocol::RequestV1,
+        identity: &vouch_agent::Identity,
+        request: &vouch_protocol::RequestV1,
     ) -> Vec<u8> {
-        use oshioki_protocol::RequestEnvelopeV1;
+        use vouch_protocol::RequestEnvelopeV1;
         let raw = request.raw_json().unwrap();
-        let sealed = oshioki_protocol::seal_v1(&raw, &identity.device_record("test")).unwrap();
+        let sealed = vouch_protocol::seal_v1(&raw, &identity.device_record("test")).unwrap();
         let envelope = RequestEnvelopeV1 {
-            version: oshioki_protocol::VERSION_V1,
+            version: vouch_protocol::VERSION_V1,
             request_id: request.request_id.clone(),
             host: request.host.clone(),
             user: request.user.clone(),
@@ -3378,10 +3401,10 @@ mod tests {
     /// only exists in the E2E build, like `run --auto` itself.
     #[cfg(feature = "unattended")]
     async fn socket_verdict(
-        identity: std::sync::Arc<oshioki_agent::Identity>,
+        identity: std::sync::Arc<vouch_agent::Identity>,
         approve: bool,
         envelope: &[u8],
-    ) -> oshioki_protocol::DecisionV1 {
+    ) -> vouch_protocol::DecisionV1 {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let (mut hook_side, agent_side) = tokio::net::UnixStream::pair().unwrap();
         let serve = tokio::spawn(async move {
@@ -3390,21 +3413,22 @@ mod tests {
                 agent_side,
                 &identity,
                 &decider,
-                super::RequestAdmission::new().reserve().unwrap(),
+                super::RequestAdmission::new(test_approval_log())
+                    .reserve()
+                    .unwrap(),
             )
             .await
         });
-        let frame = oshioki_protocol::socket_v1::encode_frame(envelope).unwrap();
+        let frame = vouch_protocol::socket_v1::encode_frame(envelope).unwrap();
         hook_side.write_all(&frame).await.unwrap();
-        let mut prefix = [0u8; oshioki_protocol::socket_v1::FRAME_LEN_BYTES];
+        let mut prefix = [0u8; vouch_protocol::socket_v1::FRAME_LEN_BYTES];
         hook_side.read_exact(&mut prefix).await.unwrap();
         let len = usize::try_from(u32::from_be_bytes(prefix)).unwrap();
         let mut acknowledgement = vec![0u8; len];
         hook_side.read_exact(&mut acknowledgement).await.unwrap();
-        let acknowledgement: oshioki_protocol::AliveV1 =
+        let acknowledgement: vouch_protocol::AliveV1 =
             serde_json::from_slice(&acknowledgement).unwrap();
-        let request: oshioki_protocol::RequestEnvelopeV1 =
-            serde_json::from_slice(envelope).unwrap();
+        let request: vouch_protocol::RequestEnvelopeV1 = serde_json::from_slice(envelope).unwrap();
         acknowledgement.validate(&request.request_id).unwrap();
         hook_side.read_exact(&mut prefix).await.unwrap();
         let len = usize::try_from(u32::from_be_bytes(prefix)).unwrap();
@@ -3421,14 +3445,14 @@ mod tests {
     async fn socket_auto_approve_returns_a_signed_verdict() {
         let dir = socket_test_dir("happy");
         let identity =
-            oshioki_agent::Identity::from_material([0x41; 32], [0x42; 32], [0x43; 32]).unwrap();
+            vouch_agent::Identity::from_material([0x41; 32], [0x42; 32], [0x43; 32]).unwrap();
         let mut request = request_for_reason();
         request.issued_at = now();
         request.expires_at = now() + 60;
         let envelope = sealed_envelope_for(&identity, &request);
         let identity = std::sync::Arc::new(identity);
         match socket_verdict(identity.clone(), true, &envelope).await {
-            oshioki_protocol::DecisionV1::ApproveNative(approval) => {
+            vouch_protocol::DecisionV1::ApproveNative(approval) => {
                 assert_eq!(approval.request_id, request.request_id);
                 assert_eq!(approval.device_fingerprint, identity.fingerprint());
             }
@@ -3443,19 +3467,18 @@ mod tests {
     async fn socket_auto_deny_returns_a_denial() {
         let dir = socket_test_dir("deny");
         let identity =
-            oshioki_agent::Identity::from_material([0x44; 32], [0x45; 32], [0x46; 32]).unwrap();
+            vouch_agent::Identity::from_material([0x44; 32], [0x45; 32], [0x46; 32]).unwrap();
         let mut request = request_for_reason();
         request.issued_at = now();
         request.expires_at = now() + 60;
         let envelope = sealed_envelope_for(&identity, &request);
         let identity = std::sync::Arc::new(identity);
         match socket_verdict(identity.clone(), false, &envelope).await {
-            oshioki_protocol::DecisionV1::Deny(denial) => {
+            vouch_protocol::DecisionV1::Deny(denial) => {
                 assert_eq!(denial.request_id, request.request_id);
                 // Auto-deny signs like an explicit refusal: the hook
                 // verifies this against the pinned record.
-                oshioki_protocol::verify_deny_v1(&denial, &identity.device_record("laptop"))
-                    .unwrap();
+                vouch_protocol::verify_deny_v1(&denial, &identity.device_record("laptop")).unwrap();
             }
             other => panic!("expected a denial, got {other:?}"),
         }
@@ -3499,6 +3522,7 @@ mod tests {
             pid_chain: vec![format!("{LOG_PROBE}:4242")],
             env: vec![],
             session: None,
+            reason: None,
             issued_at: now(),
             expires_at: now() + 60,
         }
@@ -3507,9 +3531,9 @@ mod tests {
     /// Seal one envelope the way the hook seals one per active device.
     /// Unlike `sealed_envelope_for` this is not gated on `unattended`: seal
     /// and open work with a software key in every build.
-    fn sealed_envelope_bytes(identity: &oshioki_agent::Identity, request: &RequestV1) -> Vec<u8> {
+    fn sealed_envelope_bytes(identity: &vouch_agent::Identity, request: &RequestV1) -> Vec<u8> {
         let raw = request.raw_json().unwrap();
-        let sealed = oshioki_protocol::seal_v1(&raw, &identity.device_record("test")).unwrap();
+        let sealed = vouch_protocol::seal_v1(&raw, &identity.device_record("test")).unwrap();
         let envelope = RequestEnvelopeV1 {
             version: VERSION_V1,
             request_id: request.request_id.clone(),
@@ -3686,9 +3710,9 @@ mod tests {
         let dir = socket_test_dir("logprobe");
         let store = MemoryStore::new();
         let identity = std::sync::Arc::new(
-            oshioki_agent::Identity::generate_to_with(
+            vouch_agent::Identity::generate_to_with(
                 &dir.join("agent.json"),
-                oshioki_agent::SignerKind::Software,
+                vouch_agent::SignerKind::Software,
                 &store,
             )
             .unwrap(),
@@ -3701,8 +3725,8 @@ mod tests {
         let request = request_for_log_probe();
         let reason = approval_reason(&request);
         assert!(
-            reason.contains(&format!("user-{LOG_PROBE}")),
-            "the reason should show who asked: {reason}"
+            reason.contains(&format!("--token={LOG_PROBE}")),
+            "the reason should show the command: {reason}"
         );
 
         // Terminal prompt path: answer yes to the canned prompt.
@@ -3712,19 +3736,17 @@ mod tests {
         let (prompter, _sender) = canned_prompter("y");
         let decision = decide(&identity, &Decider::Prompt(prompter), &opened)
             .await
-            .unwrap();
+            .unwrap()
+            .decision;
         assert!(
-            matches!(
-                decision,
-                Some(oshioki_protocol::DecisionV1::ApproveNative(_))
-            ),
+            matches!(decision, Some(vouch_protocol::DecisionV1::ApproveNative(_))),
             "the canned yes should approve"
         );
 
         // Local socket path: the same request through `handle_socket`.
         let (mut hook_side, agent_side) = tokio::net::UnixStream::pair().unwrap();
         let frame =
-            oshioki_protocol::socket_v1::encode_frame(&sealed_envelope_bytes(&identity, &request))
+            vouch_protocol::socket_v1::encode_frame(&sealed_envelope_bytes(&identity, &request))
                 .unwrap();
         hook_side.write_all(&frame).await.unwrap();
         let (prompter, _sender) = canned_prompter("y");
@@ -3733,11 +3755,13 @@ mod tests {
             agent_side,
             &identity,
             &decider,
-            RequestAdmission::new().reserve().unwrap(),
+            RequestAdmission::new(test_approval_log())
+                .reserve()
+                .unwrap(),
         )
         .await
         .unwrap();
-        let mut prefix = [0u8; oshioki_protocol::socket_v1::FRAME_LEN_BYTES];
+        let mut prefix = [0u8; vouch_protocol::socket_v1::FRAME_LEN_BYTES];
         hook_side.read_exact(&mut prefix).await.unwrap();
         let len = usize::try_from(u32::from_be_bytes(prefix)).unwrap();
         assert!(len > 0, "the socket path should answer");
@@ -3751,6 +3775,233 @@ mod tests {
             !text.contains(LOG_PROBE),
             "request plaintext reached the log:\n{text}"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // -----------------------------------------------------------------------
+    // Approval log
+    // -----------------------------------------------------------------------
+
+    fn log_test_identity(
+        name: &str,
+    ) -> (std::path::PathBuf, std::sync::Arc<vouch_agent::Identity>) {
+        let dir = socket_test_dir(name);
+        let identity = vouch_agent::Identity::generate_to_with(
+            &dir.join("agent.json"),
+            vouch_agent::SignerKind::Software,
+            &MemoryStore::new(),
+        )
+        .unwrap();
+        (dir, std::sync::Arc::new(identity))
+    }
+
+    /// A request whose environment carries a value the log must never see.
+    fn request_with_secret_env(request_id: &str, expires_in: i64) -> RequestV1 {
+        let mut request = request_for_log_probe();
+        request.request_id = request_id.into();
+        request.session = Some("shell".into());
+        request.reason = Some("restart hevd".into());
+        request.env = vec![
+            vouch_protocol::EnvEntryV1 {
+                name: "PATH".into(),
+                value: "/usr/bin:/bin".into(),
+            },
+            vouch_protocol::EnvEntryV1 {
+                name: "API_TOKEN".into(),
+                value: format!("secret-{LOG_PROBE}"),
+            },
+        ];
+        request.expires_at = now() + expires_in;
+        request
+    }
+
+    fn open_for_log(identity: &vouch_agent::Identity, request: &RequestV1) -> OpenedRequest {
+        let envelope: RequestEnvelopeV1 =
+            serde_json::from_slice(&sealed_envelope_bytes(identity, request)).unwrap();
+        identity.open_request(&envelope).unwrap().unwrap()
+    }
+
+    async fn resolve_logged(
+        log: &std::sync::Arc<ApprovalLog>,
+        identity: &std::sync::Arc<vouch_agent::Identity>,
+        decider: &Decider,
+        opened: &OpenedRequest,
+    ) -> Option<vouch_protocol::DecisionV1> {
+        let hash = payload_hash(&opened.raw);
+        let claim = RequestAdmission::new(std::sync::Arc::clone(log))
+            .reserve()
+            .unwrap()
+            .claim(&opened.request.request_id, hash);
+        super::resolve_command_claim(claim, identity, decider, opened, hash)
+            .await
+            .unwrap()
+    }
+
+    fn log_lines(log: &ApprovalLog) -> Vec<vouch_protocol::approval_log::ApprovalRecordV1> {
+        std::fs::read_to_string(log.path())
+            .unwrap_or_default()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn approved_and_denied_requests_each_write_one_matching_line() {
+        let (dir, identity) = log_test_identity("approval-log-lines");
+        let log = std::sync::Arc::new(ApprovalLog::at(dir.join("logs/approvals.jsonl")));
+
+        let approved = open_for_log(&identity, &request_with_secret_env("req-approve", 60));
+        let decision = resolve_logged(&log, &identity, &Decider::Auto(true), &approved).await;
+        assert!(matches!(
+            decision,
+            Some(vouch_protocol::DecisionV1::ApproveNative(_))
+        ));
+        let denied = open_for_log(&identity, &request_with_secret_env("req-deny", 60));
+        let decision = resolve_logged(&log, &identity, &Decider::Auto(false), &denied).await;
+        assert!(matches!(
+            decision,
+            Some(vouch_protocol::DecisionV1::Deny(_))
+        ));
+
+        let lines = log_lines(&log);
+        assert_eq!(lines.len(), 2, "one line per request");
+        let (first, second) = (&lines[0], &lines[1]);
+        assert_eq!(first.request_id, "req-approve");
+        assert_eq!(first.outcome.label(), "approved");
+        assert_eq!(second.request_id, "req-deny");
+        assert_eq!(second.outcome.label(), "denied");
+        assert_eq!(
+            first.lane,
+            vouch_protocol::approval_log::ApprovalLane::SudoExact
+        );
+        // The digest is over the exact bytes the signature covers, and the
+        // device is the one that signed: enough to match a host's record.
+        assert_eq!(
+            first.request_sha256,
+            vouch_protocol::approval_log::hex_digest(&payload_hash(&approved.raw))
+        );
+        assert_eq!(first.device_id, identity.fingerprint());
+        assert_eq!(first.session.as_deref(), Some("shell"));
+        assert_eq!(first.reason.as_deref(), Some("restart hevd"));
+        assert_eq!(first.argv, approved.request.argv);
+        assert_eq!(first.run_as.as_deref(), Some("root (uid 0)"));
+        assert_eq!(first.env_names, ["PATH", "API_TOKEN"]);
+        assert!(first.shown_at.is_some() && !first.decided_at.is_empty());
+        let text = std::fs::read_to_string(log.path()).unwrap();
+        assert!(
+            !text.contains(&format!("secret-{LOG_PROBE}")) && !text.contains("/usr/bin:/bin"),
+            "environment values reached the approval log:\n{text}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn an_unanswered_prompt_logs_expired() {
+        let (dir, identity) = log_test_identity("approval-log-expired");
+        let log = std::sync::Arc::new(ApprovalLog::at(dir.join("approvals.jsonl")));
+        let opened = open_for_log(&identity, &request_with_secret_env("req-expire", 1));
+        let (_sender, receiver) = mpsc::channel(1);
+        let decider = Decider::Prompt(Prompter::new(receiver));
+        assert!(
+            resolve_logged(&log, &identity, &decider, &opened)
+                .await
+                .is_none()
+        );
+        let lines = log_lines(&log);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].outcome.label(), "expired");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn an_unwritable_log_withholds_the_signature() {
+        let (dir, identity) = log_test_identity("approval-log-fail-closed");
+        // The log's parent is a regular file, so the line cannot be written.
+        std::fs::write(dir.join("blocked"), "").unwrap();
+        let log = std::sync::Arc::new(ApprovalLog::at(dir.join("blocked/approvals.jsonl")));
+        let opened = open_for_log(&identity, &request_with_secret_env("req-blocked", 60));
+        let decision = resolve_logged(&log, &identity, &Decider::Auto(true), &opened).await;
+        assert!(
+            decision.is_none(),
+            "an approval whose line was not written must not be released"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A second transport waiting on the same request receives the answer
+    /// only after the line is on disk: the log is written before any
+    /// signature leaves the owning lane.
+    #[tokio::test]
+    async fn the_line_is_written_before_the_signature_is_released() {
+        let (dir, identity) = log_test_identity("approval-log-order");
+        let log = std::sync::Arc::new(ApprovalLog::at(dir.join("approvals.jsonl")));
+        let opened = open_for_log(&identity, &request_with_secret_env("req-order", 60));
+        let hash = payload_hash(&opened.raw);
+        let admission = RequestAdmission::new(std::sync::Arc::clone(&log));
+        let owner = admission.reserve().unwrap().claim("req-order", hash);
+        let Claim::Attach(mut waiter) = admission.reserve().unwrap().claim("req-order", hash)
+        else {
+            panic!("the second delivery should attach to the first");
+        };
+        let expires_at = opened.request.expires_at;
+        let watched = std::sync::Arc::clone(&log);
+        let relayed = tokio::spawn(async move {
+            let Relay::Answer(outcome) = waiter.wait(expires_at).await else {
+                panic!("the owner's answer should be relayed");
+            };
+            // Read at the moment the signature reaches the second transport.
+            let lines = log_lines(&watched);
+            (outcome, lines)
+        });
+        let decision =
+            super::resolve_command_claim(owner, &identity, &Decider::Auto(true), &opened, hash)
+                .await
+                .unwrap();
+        assert!(decision.is_some());
+        let (outcome, lines) = relayed.await.unwrap();
+        assert!(matches!(outcome.as_ref(), RequestOutcome::Command(_)));
+        assert_eq!(
+            lines.len(),
+            1,
+            "the line must be on disk before the answer is relayed"
+        );
+        assert_eq!(lines[0].request_id, "req-order");
+        assert_eq!(lines[0].outcome.label(), "approved");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn an_authentication_the_agent_will_not_answer_logs_canceled() {
+        let (dir, identity) = log_test_identity("approval-log-auth");
+        let log = std::sync::Arc::new(ApprovalLog::at(dir.join("approvals.jsonl")));
+        let request = auth_request_for_tests();
+        let opened = vouch_protocol::OpenedAuthRequestV1 {
+            raw: request.raw_json().unwrap(),
+            request,
+        };
+        let hash = payload_hash(&opened.raw);
+        let claim = RequestAdmission::new(std::sync::Arc::clone(&log))
+            .reserve()
+            .unwrap()
+            .claim("auth-1", hash);
+        let decision = super::resolve_authentication_claim(
+            claim,
+            &identity,
+            &Decider::Auto(true),
+            &opened,
+            hash,
+        )
+        .await
+        .unwrap();
+        assert!(decision.is_none());
+        let lines = log_lines(&log);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(
+            lines[0].lane,
+            vouch_protocol::approval_log::ApprovalLane::ContextualPam
+        );
+        assert_eq!(lines[0].outcome.label(), "canceled");
+        assert_eq!(lines[0].run_as.as_deref(), Some("root"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

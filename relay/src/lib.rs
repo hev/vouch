@@ -4,13 +4,13 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Result, bail, ensure};
-use oshioki_protocol::{decode_base64url, encode_base64url};
 use p256::ecdsa::{
     Signature, SigningKey, VerifyingKey,
     signature::{Signer as _, Verifier as _},
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
+use vouch_protocol::{decode_base64url, encode_base64url};
 
 pub const MAX_FRAME: usize = 16_384;
 pub const MAX_LIFETIME: u64 = 300;
@@ -76,7 +76,7 @@ pub fn verify(bytes: &[u8], key: &VerifyingKey, now: u64) -> Result<Message> {
     Ok(message)
 }
 
-/// Challenge signed by the Mac's enrolled Oshioki Secure Enclave identity.
+/// Challenge signed by the Mac's enrolled Vouch Secure Enclave identity.
 /// Relay keys authenticate transport; this separate signature proves that a
 /// person approved this account-bound ceremony on the Mac.
 pub fn approval_challenge(
@@ -86,7 +86,7 @@ pub fn approval_challenge(
     nonce: &str,
     account: &str,
 ) -> Vec<u8> {
-    oshioki_protocol::browser_relay_challenge(lane, attempt, expires, nonce, account)
+    vouch_protocol::browser_relay_challenge(lane, attempt, expires, nonce, account)
 }
 
 /// Accept only the first-party gcloud authorization-code flow. Unknown and
@@ -250,7 +250,7 @@ mod tests {
             assert_ne!(baseline, changed);
         }
         assert_ne!(
-            oshioki_protocol::browser_relay_signature_payload(&baseline),
+            vouch_protocol::browser_relay_signature_payload(&baseline),
             baseline
         );
     }

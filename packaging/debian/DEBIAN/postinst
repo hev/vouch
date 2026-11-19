@@ -1,22 +1,22 @@
 #!/bin/sh
-# oshioki postinst: create the service user and state, wire the hook when the
-# operator has provided /etc/oshioki/install.env, enable the server unit.
+# vouch postinst: create the service user and state, wire the hook when the
+# operator has provided /etc/vouch/install.env, enable the server unit.
 # The unit is only restarted below on upgrade ($2 non-empty): a fresh install
 # enables without starting, and the operator starts it once server.env exists.
 set -e
 
-INSTALLER="${OSHIOKI_INSTALLER:-/usr/share/oshioki/install-oshioki-hook}"
-INSTALL_ENV="${OSHIOKI_INSTALL_ENV:-/etc/oshioki/install.env}"
-STATE_DIR="${OSHIOKI_STATE_DIR:-/etc/oshioki}"
+INSTALLER="${VOUCH_INSTALLER:-/usr/share/vouch/install-vouch-hook}"
+INSTALL_ENV="${VOUCH_INSTALL_ENV:-/etc/vouch/install.env}"
+STATE_DIR="${VOUCH_STATE_DIR:-/etc/vouch}"
 # Same spelling and default as the installer's own PAM_D, so a test harness
 # or a packager overriding one overrides both.
 PAM_D="${PAM_D:-/etc/pam.d}"
 
 installer_hook() {
-  HOOK_BIN=/usr/share/oshioki/oshioki \
-  PLUGIN_BIN=/usr/share/oshioki/liboshioki_plugin.so \
-  PAM_MODULE_BIN=/usr/share/oshioki/liboshioki_pam.so \
-  OSHIOKI_CHECKSUMS=/usr/share/oshioki/SHA256SUMS \
+  HOOK_BIN=/usr/share/vouch/vouch \
+  PLUGIN_BIN=/usr/share/vouch/libvouch_plugin.so \
+  PAM_MODULE_BIN=/usr/share/vouch/libvouch_pam.so \
+  VOUCH_CHECKSUMS=/usr/share/vouch/SHA256SUMS \
     "$INSTALLER" "$@"
 }
 
@@ -32,34 +32,34 @@ pam_lane_active() {
   for pam_service in sudo sudo-i; do
     pam_file="$PAM_D/$pam_service"
     [ -f "$pam_file" ] || continue
-    if grep -Fq '# BEGIN oshioki pam' "$pam_file" 2>/dev/null; then return 0; fi
-    if grep -Eq '^[[:space:]]*auth[[:space:]].*liboshioki_pam' "$pam_file" 2>/dev/null; then return 0; fi
+    if grep -Fq '# BEGIN vouch pam' "$pam_file" 2>/dev/null; then return 0; fi
+    if grep -Eq '^[[:space:]]*auth[[:space:]].*libvouch_pam' "$pam_file" 2>/dev/null; then return 0; fi
   done
   return 1
 }
 
 case "$1" in
   configure)
-    if ! getent passwd oshioki >/dev/null; then
+    if ! getent passwd vouch >/dev/null; then
       adduser --system --no-create-home --group \
-        --home /var/lib/oshioki --gecos "Oshioki approval server" oshioki
+        --home /var/lib/vouch --gecos "Vouch approval server" vouch
     fi
-    install -d -m 0750 -o oshioki -g oshioki /var/lib/oshioki
+    install -d -m 0750 -o vouch -g vouch /var/lib/vouch
     # Reconfigure/upgrade must preserve the registry and stable lock files.
     # Tighten owner-controlled legacy 0750 state; never adopt an unsafe path.
     if [ -L "$STATE_DIR" ]; then
-      echo "oshioki: refusing symlink state directory: $STATE_DIR" >&2
+      echo "vouch: refusing symlink state directory: $STATE_DIR" >&2
       exit 1
     fi
     if [ -e "$STATE_DIR" ]; then
       if [ ! -d "$STATE_DIR" ] || [ "$(stat -c '%u' "$STATE_DIR")" != 0 ]; then
-        echo "oshioki: state directory must be root-owned: $STATE_DIR" >&2
+        echo "vouch: state directory must be root-owned: $STATE_DIR" >&2
         exit 1
       fi
       state_mode="$(stat -c '%a' "$STATE_DIR")"
       case "$state_mode" in ''|*[!0-7]*) exit 1 ;; esac
       if [ "$((0$state_mode & 022))" -ne 0 ]; then
-        echo "oshioki: state directory must not be group/world writable: $STATE_DIR" >&2
+        echo "vouch: state directory must not be group/world writable: $STATE_DIR" >&2
         exit 1
       fi
     fi
@@ -67,7 +67,7 @@ case "$1" in
 
     if [ -f "$INSTALL_ENV" ]; then
       # --prelaunch first, always: it writes the hook state (config.env,
-      # hook.json), installs /usr/local/sbin/oshioki, and validates
+      # hook.json), installs /usr/local/sbin/vouch, and validates
       # $INSTALL_ENV itself (root-owned, 0600, no unknown keys) -- which the
       # opt-in read at the end of this script relies on. On a host already
       # on the contextual PAM lane it refreshes those artifacts without
@@ -84,37 +84,37 @@ case "$1" in
       case "$prelaunch_status" in
         0) ;;
         3)
-          echo "oshioki: this host's sudo does not run the approval plugin, or sudo-rs is installed; passwordless sudo was not enabled and sudo keeps its password path." >&2
-          echo "oshioki: remove sudo-rs and use classic sudo 1.9, then re-run: $INSTALLER --prelaunch --config-file $INSTALL_ENV" >&2
-          echo "oshioki: the contextual PAM lane ($INSTALLER --contextual-pam) may work with sudo-rs but has not been validated." >&2
+          echo "vouch: this host's sudo does not run the approval plugin, or sudo-rs is installed; passwordless sudo was not enabled and sudo keeps its password path." >&2
+          echo "vouch: remove sudo-rs and use classic sudo 1.9, then re-run: $INSTALLER --prelaunch --config-file $INSTALL_ENV" >&2
+          echo "vouch: the contextual PAM lane ($INSTALLER --contextual-pam) may work with sudo-rs but has not been validated." >&2
           ;;
         *) exit "$prelaunch_status" ;;
       esac
     else
-      echo "oshioki: hook not enabled (no $INSTALL_ENV)." >&2
-      echo "oshioki: pre-seed that file (0600, root-owned) before installing," >&2
-      echo "oshioki: or create it now and run: $INSTALLER --prelaunch --config-file $INSTALL_ENV" >&2
+      echo "vouch: hook not enabled (no $INSTALL_ENV)." >&2
+      echo "vouch: pre-seed that file (0600, root-owned) before installing," >&2
+      echo "vouch: or create it now and run: $INSTALLER --prelaunch --config-file $INSTALL_ENV" >&2
     fi
 
     # Record enablement through the helper, not systemctl: it remembers what
     # was enabled in /var/lib/systemd/deb-systemd-helper-enabled/ so postrm
     # can remove the symlinks after dpkg has deleted the unit file.
-    deb-systemd-helper unmask oshioki-server.service >/dev/null || true
-    deb-systemd-helper --system enable oshioki-server.service >/dev/null
+    deb-systemd-helper unmask vouch-server.service >/dev/null || true
+    deb-systemd-helper --system enable vouch-server.service >/dev/null
     # The drift watcher for the passwordless rule. It only ever removes the
-    # rule (install-oshioki-hook --reconcile-plugin-rule), so it is enabled
+    # rule (install-vouch-hook --reconcile-plugin-rule), so it is enabled
     # unconditionally, and a failure to enable or start it is reported
     # without failing the configure: the installer re-proves on every run.
-    deb-systemd-helper unmask oshioki-sudo-reconcile.path >/dev/null || true
-    deb-systemd-helper --system enable oshioki-sudo-reconcile.path >/dev/null ||
-      echo "oshioki: warning: could not enable oshioki-sudo-reconcile.path" >&2
+    deb-systemd-helper unmask vouch-sudo-reconcile.path >/dev/null || true
+    deb-systemd-helper --system enable vouch-sudo-reconcile.path >/dev/null ||
+      echo "vouch: warning: could not enable vouch-sudo-reconcile.path" >&2
     if [ -d /run/systemd/system ]; then
       systemctl daemon-reload
-      systemctl restart oshioki-sudo-reconcile.path ||
-        echo "oshioki: warning: could not start oshioki-sudo-reconcile.path; inspect systemctl status oshioki-sudo-reconcile.path" >&2
+      systemctl restart vouch-sudo-reconcile.path ||
+        echo "vouch: warning: could not start vouch-sudo-reconcile.path; inspect systemctl status vouch-sudo-reconcile.path" >&2
       if [ -n "${2:-}" ]; then
-        systemctl try-restart oshioki-server.service || {
-          echo "oshioki: upgraded but failed to restart oshioki-server; inspect systemctl status oshioki-server.service" >&2
+        systemctl try-restart vouch-server.service || {
+          echo "vouch: upgraded but failed to restart vouch-server; inspect systemctl status vouch-server.service" >&2
           exit 1
         }
       fi
@@ -131,7 +131,7 @@ case "$1" in
     # $INSTALL_ENV was validated by --prelaunch above before this reads it.
     contextual_pam=0
     if [ -f "$INSTALL_ENV" ] &&
-       [ "$(sed -n 's/^OSHIOKI_CONTEXTUAL_PAM=//p' "$INSTALL_ENV" | tail -n 1)" = 1 ]; then
+       [ "$(sed -n 's/^VOUCH_CONTEXTUAL_PAM=//p' "$INSTALL_ENV" | tail -n 1)" = 1 ]; then
       contextual_pam=1
     fi
     # Host state wins over the file: an already-migrated host is opted in
@@ -142,13 +142,13 @@ case "$1" in
     if [ "$contextual_pam" = 1 ]; then
       if [ -f "$INSTALL_ENV" ]; then
         installer_hook --contextual-pam --config-file "$INSTALL_ENV" || {
-          echo "oshioki: the contextual PAM migration did not complete; sudo is unchanged." >&2
-          echo "oshioki: re-run: $INSTALLER --contextual-pam --config-file $INSTALL_ENV" >&2
+          echo "vouch: the contextual PAM migration did not complete; sudo is unchanged." >&2
+          echo "vouch: re-run: $INSTALLER --contextual-pam --config-file $INSTALL_ENV" >&2
         }
       else
         installer_hook --contextual-pam || {
-          echo "oshioki: the contextual PAM migration did not complete; sudo is unchanged." >&2
-          echo "oshioki: re-run: $INSTALLER --contextual-pam" >&2
+          echo "vouch: the contextual PAM migration did not complete; sudo is unchanged." >&2
+          echo "vouch: re-run: $INSTALLER --contextual-pam" >&2
         }
       fi
     fi

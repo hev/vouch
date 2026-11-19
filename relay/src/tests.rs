@@ -99,7 +99,7 @@ impl Harness {
         let replies = client.subscribe(reply.clone()).await.unwrap();
         let traffic = client.subscribe("oshioki.browser.>").await.unwrap();
         client.flush().await.unwrap();
-        let directory = PathBuf::from(format!("/tmp/oshioki-relay-test-{}", uuid::Uuid::new_v4()));
+        let directory = PathBuf::from(format!("/tmp/vouch-relay-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&directory).unwrap();
         Self {
             _server: server,
@@ -167,7 +167,7 @@ async fn authenticated_nats_url_uses_url_credentials() {
     .await
     .expect("authenticated nats-server did not start");
 
-    let directory = PathBuf::from(format!("/tmp/oshioki-relay-auth-{}", uuid::Uuid::new_v4()));
+    let directory = PathBuf::from(format!("/tmp/vouch-relay-auth-{}", uuid::Uuid::new_v4()));
     fs::create_dir(&directory).unwrap();
     let _cleanup = TempDir(directory.clone());
     let key = SigningKey::generate();
@@ -199,7 +199,7 @@ async fn authenticated_nats_url_uses_url_credentials() {
 async fn legacy_successful_gcloud_without_browser_is_rejected() {
     let mut h = Harness::new().await;
     let socket_path = PathBuf::from(format!(
-        "/tmp/oshioki-relay-login-test-{}",
+        "/tmp/vouch-relay-login-test-{}",
         uuid::Uuid::new_v4()
     ));
     let listener = UnixListener::bind(&socket_path).unwrap();
@@ -242,7 +242,7 @@ fn install_test_executable(path: &Path, contents: impl AsRef<[u8]>) {
     // the inode busy until that child execs. Write in a separate process so
     // sibling test children never inherit a writable fixture descriptor.
     let mut writer = StdCommand::new("/bin/sh")
-        .args(["-c", "umask 077; cat > \"$1\"", "oshioki-test-fixture"])
+        .args(["-c", "umask 077; cat > \"$1\"", "vouch-test-fixture"])
         .arg(&staging)
         .stdin(Stdio::piped())
         .spawn()
@@ -263,10 +263,7 @@ fn install_test_executable(path: &Path, contents: impl AsRef<[u8]>) {
 #[allow(clippy::too_many_lines)]
 async fn startup_transport_fault_is_bounded(stage: StartupStage) {
     let _port_guard = PORT_TEST_LOCK.lock().await;
-    let directory = PathBuf::from(format!(
-        "/tmp/oshioki-relay-startup-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let directory = PathBuf::from(format!("/tmp/vouch-relay-startup-{}", uuid::Uuid::new_v4()));
     fs::create_dir(&directory).unwrap();
     let _cleanup = TempDir(directory.clone());
 
@@ -356,7 +353,7 @@ async fn startup_transport_fault_is_bounded(stage: StartupStage) {
         .unwrap()
         .clone()
         .expect("fault hook did not capture the attempt");
-    let browser_directory = PathBuf::from(format!("/tmp/oshioki-browser-{}", attempt.attempt));
+    let browser_directory = PathBuf::from(format!("/tmp/vouch-browser-{}", attempt.attempt));
     let mut restarted = StdCommand::new("nats-server")
         .args(["-a", "127.0.0.1", "-p", &port.to_string()])
         .stdout(Stdio::null())
@@ -865,10 +862,7 @@ async fn ipv6_collision_does_not_leave_ipv4_listener() {
 
 #[tokio::test]
 async fn ssh_exit_does_not_wait_for_browser_write_half() {
-    let directory = PathBuf::from(format!(
-        "/tmp/oshioki-relay-forward-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let directory = PathBuf::from(format!("/tmp/vouch-relay-forward-{}", uuid::Uuid::new_v4()));
     fs::create_dir(&directory).unwrap();
     let _cleanup = TempDir(directory.clone());
     let ssh = directory.join("ssh");
@@ -900,10 +894,7 @@ async fn ssh_exit_does_not_wait_for_browser_write_half() {
 
 #[tokio::test]
 async fn ssh_response_is_drained_before_success() {
-    let directory = PathBuf::from(format!(
-        "/tmp/oshioki-relay-forward-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let directory = PathBuf::from(format!("/tmp/vouch-relay-forward-{}", uuid::Uuid::new_v4()));
     fs::create_dir(&directory).unwrap();
     let _cleanup = TempDir(directory.clone());
     let ssh = directory.join("ssh");
@@ -942,7 +933,7 @@ async fn ssh_response_is_drained_before_success() {
 #[tokio::test]
 async fn process_group_terminates_launcher_descendants_before_reaping() {
     let directory = PathBuf::from(format!(
-        "/tmp/oshioki-relay-process-group-{}",
+        "/tmp/vouch-relay-process-group-{}",
         uuid::Uuid::new_v4()
     ));
     fs::create_dir(&directory).unwrap();
@@ -981,7 +972,7 @@ async fn process_group_terminates_launcher_descendants_before_reaping() {
 #[tokio::test]
 async fn process_group_anchor_cleans_descendant_after_leader_exit() {
     let directory = PathBuf::from(format!(
-        "/tmp/oshioki-relay-process-group-{}",
+        "/tmp/vouch-relay-process-group-{}",
         uuid::Uuid::new_v4()
     ));
     fs::create_dir(&directory).unwrap();
@@ -1024,7 +1015,7 @@ async fn local_mode_approval_and_gcloud_cleanup_are_deterministic() {
         ("timeout", "sleep 30"),
     ] {
         let directory = PathBuf::from(format!(
-            "/tmp/oshioki-relay-local-{name}-{}",
+            "/tmp/vouch-relay-local-{name}-{}",
             std::process::id()
         ));
         fs::create_dir(&directory).unwrap();
@@ -1087,7 +1078,7 @@ async fn local_mode_approval_and_gcloud_cleanup_are_deterministic() {
     }
 
     let directory = PathBuf::from(format!(
-        "/tmp/oshioki-relay-local-denied-{}",
+        "/tmp/vouch-relay-local-denied-{}",
         std::process::id()
     ));
     fs::create_dir(&directory).unwrap();

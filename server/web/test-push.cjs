@@ -7,10 +7,10 @@ const vm = require("node:vm");
 const appContext = { TextEncoder, TextDecoder, URL, btoa, atob, console, crypto: {}, globalThis: {} };
 vm.createContext(appContext);
 vm.runInContext(fs.readFileSync(`${__dirname}/app.js`, "utf8"), appContext, { filename: "app.js" });
-const push = appContext.globalThis.OshiokiPush;
+const push = appContext.globalThis.VouchPush;
 
 assert.equal(push.parseEnrollmentUrl("https://sudo.test/enroll/abc-123#secret", "https://sudo.test"), "/enroll/abc-123#secret");
-assert.throws(() => push.parseEnrollmentUrl("https://other.test/enroll/abc#secret", "https://sudo.test"), /Oshioki origin/);
+assert.throws(() => push.parseEnrollmentUrl("https://other.test/enroll/abc#secret", "https://sudo.test"), /Vouch origin/);
 assert.throws(() => push.parseEnrollmentUrl("https://sudo.test/enroll/abc?x=1#secret", "https://sudo.test"), /fragment secret/);
 assert.throws(() => push.parseEnrollmentUrl("https://sudo.test/setup#secret", "https://sudo.test"), /\/enroll\/<id>/);
 assert.throws(() => push.parseEnrollmentUrl("https://sudo.test/enroll/abc", "https://sudo.test"), /fragment secret/);
@@ -26,7 +26,7 @@ const worker = {
 const workerContext = { self: worker, URL, console };
 vm.createContext(workerContext);
 vm.runInContext(fs.readFileSync(`${__dirname}/service-worker.js`, "utf8"), workerContext, { filename: "service-worker.js" });
-const workerApi = worker.OshiokiPushWorker;
+const workerApi = worker.VouchPushWorker;
 assert.equal(JSON.stringify(workerApi.pushPayload({ version: 1, lane: "request", request_id: "req-1" })), JSON.stringify({ version: 1, lane: "request", request_id: "req-1" }));
 assert.equal(workerApi.notificationTarget({ version: 1, lane: "auth", request_id: "auth-1" }), "https://sudo.test/a/auth-1");
 assert.equal(workerApi.notificationTarget({ version: 1, lane: "tool", request_id: "tool-1" }), "https://sudo.test/t/tool-1");
@@ -42,7 +42,7 @@ events.push({
 });
 pushWait.then(() => {
   assert.equal(shown.length, 1);
-  assert.equal(shown[0][0], "Oshioki");
+  assert.equal(shown[0][0], "Vouch");
   assert.equal(shown[0][1].tag, "request:req-1");
   assert.equal(shown[0][1].data.request_id, "req-1");
 
@@ -167,7 +167,7 @@ function pushHarness({ legacy = false, subscription = true } = {}) {
     return sandbox;
   }
   const sandbox = context();
-  return { stores, calls, events, sandbox, push: sandbox.OshiokiPush, context,
+  return { stores, calls, events, sandbox, push: sandbox.VouchPush, context,
     posts: () => calls.filter(call => call.options.method === "POST"),
     setPost(value) { post = value; }, setStatus(value) { status = value; }, setMultiEnrollment(value) { multiEnrollment = value; }, setNextEndpoint(value) { nextEndpoint = value; },
     counters: () => ({ unsubscribed, subscribed, permissionRequests }),
@@ -414,7 +414,7 @@ async function testBootstrapPreflightRetry() {
 }
 async function testAtomicBootstrapAndStaleSuccess() {
   const h = pushHarness({ legacy: true });
-  const other = h.context().OshiokiPush;
+  const other = h.context().VouchPush;
   const [a, b] = await Promise.all([
     h.push.createPushBinding("https://push.example/original", "second"),
     other.createPushBinding("https://push.example/original", "first"),

@@ -1,16 +1,16 @@
 //! Frozen previous-release wire shapes. Regenerate with
-//! `OSHIOKI_WRITE_COMPAT_GOLDENS=1 cargo test -p oshioki-protocol --test compat_goldens`.
+//! `VOUCH_WRITE_COMPAT_GOLDENS=1 cargo test -p vouch-protocol --test compat_goldens`.
 
 use std::{fs, path::PathBuf};
 
-use oshioki_protocol::{
+use p256::ecdsa::SigningKey;
+use serde::Deserialize;
+use vouch_protocol::{
     AUTH_ENVELOPE_TYPE, AUTH_REQUEST_TYPE, AUTH_WIRE_VERSION, AliveV1, AuthEnvelopeV1,
     AuthInvocationV1, AuthRequestV1, DecisionV1, DeliveryV1, DenyV1, DeviceKindV1,
     DevicePublicRecordV1, DeviceRegistryV1, RequestV1, SealedDeviceBodyV1, SubmittedAuthContextV1,
     TrustedAuthContextV1, VERSION_V1, decode_base64url, device_fingerprint, encode_base64url,
 };
-use p256::ecdsa::SigningKey;
-use serde::Deserialize;
 
 fn goldens_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/compat/goldens")
@@ -23,14 +23,14 @@ fn golden_path(name: &str) -> PathBuf {
 fn write_or_compare(name: &str, value: &serde_json::Value) {
     let pretty = serde_json::to_string_pretty(value).unwrap() + "\n";
     let path = golden_path(name);
-    if std::env::var_os("OSHIOKI_WRITE_COMPAT_GOLDENS").is_some() {
+    if std::env::var_os("VOUCH_WRITE_COMPAT_GOLDENS").is_some() {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, pretty).unwrap();
         return;
     }
     let stored = fs::read_to_string(&path).unwrap_or_else(|error| {
         panic!(
-            "missing golden {}: {error}; regenerate with OSHIOKI_WRITE_COMPAT_GOLDENS=1",
+            "missing golden {}: {error}; regenerate with VOUCH_WRITE_COMPAT_GOLDENS=1",
             path.display()
         )
     });
@@ -81,6 +81,7 @@ fn request() -> RequestV1 {
         pid_chain: vec![],
         env: vec![],
         session: None,
+        reason: None,
         issued_at: 1_000,
         expires_at: 1_090,
     }
@@ -224,6 +225,7 @@ fn device_and_auth_goldens_round_trip() {
         submitted: SubmittedAuthContextV1 {
             session: None,
             agent_label: None,
+            reason: None,
             invocation: AuthInvocationV1::Available {
                 command: "/usr/bin/true".into(),
                 argv: vec!["true".into()],
@@ -265,7 +267,7 @@ fn read_golden(name: &str) -> String {
     let path = golden_path(name);
     fs::read_to_string(&path).unwrap_or_else(|error| {
         panic!(
-            "{}: {error}; regenerate with OSHIOKI_WRITE_COMPAT_GOLDENS=1",
+            "{}: {error}; regenerate with VOUCH_WRITE_COMPAT_GOLDENS=1",
             path.display()
         )
     })
@@ -273,7 +275,7 @@ fn read_golden(name: &str) -> String {
 
 #[test]
 fn stored_goldens_decode_as_current_types() {
-    if std::env::var_os("OSHIOKI_WRITE_COMPAT_GOLDENS").is_some() {
+    if std::env::var_os("VOUCH_WRITE_COMPAT_GOLDENS").is_some() {
         return;
     }
     serde_json::from_str::<RequestV1>(&read_golden("request-v1.json"))

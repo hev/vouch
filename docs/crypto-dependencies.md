@@ -24,7 +24,7 @@ declaring version 0.9.0-beta.1, with its immutable git source recorded in the
 root lockfile. The removed `std` feature is not requested. No OpenSSL, AWS-LC,
 new ECE implementation, or alternative JWT backend is introduced.
 
-Oshioki maintainers own these temporary source selections. Replace them with
+Vouch maintainers own these temporary source selections. Replace them with
 reviewed compatible upstream releases when available, preserving the source
 provenance and compatibility tests during that transition.
 

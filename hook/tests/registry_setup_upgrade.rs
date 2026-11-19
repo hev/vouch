@@ -4,7 +4,7 @@ fn registry_setup_upgrade_preserves_state() {
         .join("../scripts/test-registry-setup-upgrade");
     let result = std::process::Command::new("python3")
         .arg(script)
-        .arg(env!("CARGO_BIN_EXE_oshioki"))
+        .arg(env!("CARGO_BIN_EXE_vouch"))
         .output()
         .expect("run offline registry setup upgrade fixture");
     assert!(

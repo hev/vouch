@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-14]
+        os: [ubuntu-24.04, macos-15]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -62,7 +62,7 @@ jobs:
           shared-key: compat-upgrade
           save-if: ${{ github.ref == 'refs/heads/main' }}
           # test-compat-upgrade builds the previous release in a temp worktree;
-          # OSHIOKI_COMPAT_PREV_TARGET (set below) puts that build here.
+          # VOUCH_COMPAT_PREV_TARGET (set below) puts that build here.
           cache-directories: ${{ runner.temp }}/compat-prev-target
       - run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libpam0g-dev nats-server
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -79,11 +79,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           scripts/test-compat-release-selection
-          tag="$(scripts/select-compat-previous-release)"
-          echo "OSHIOKI_COMPAT_PREV_TAG=$tag" >> "$GITHUB_ENV"
+          # hev/vouch has no published releases yet. Until it does, fall back
+          # to the newest tag that is not HEAD (the last Oshioki release),
+          # which is what test-compat-upgrade picks when no tag is given.
+          if [ -n "$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName --jq '.[].tagName')" ]; then
+            tag="$(scripts/select-compat-previous-release)"
+            echo "VOUCH_COMPAT_PREV_TAG=$tag" >> "$GITHUB_ENV"
+          else
+            echo "no published release on $GITHUB_REPOSITORY; test-compat-upgrade uses the newest tag" >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: NATS lane repair
         run: scripts/test-nats-lane-upgrade
       - name: Mixed-version upgrade
         run: scripts/test-compat-upgrade
         env:
-          OSHIOKI_COMPAT_PREV_TARGET: ${{ runner.temp }}/compat-prev-target
+          VOUCH_COMPAT_PREV_TARGET: ${{ runner.temp }}/compat-prev-target

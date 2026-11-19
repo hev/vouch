@@ -1,10 +1,28 @@
 # Release and recovery
 
-From v0.4.1 onward, sign new commits and annotated `vMAJOR.MINOR.PATCH` tags.
-Keep existing history append-only. The public v0.4.1 checkpoint introduces
-signing and release provenance. Repository signing and ref-immutability rules
-are configured separately after reviewed bootstrap changes merge; this PR
-does not enable them.
+## Publishing is off
+
+Vouch has not published a release. The `release` workflow's `gate` job runs
+only when the repository is `hev/vouch` and the repository variable
+`VOUCH_RELEASES_ENABLED` is `true`. Every build, release and apt job needs
+`gate`, so with the variable unset nothing is built or published. Tags
+`v0.5.1` and older are upstream Oshioki releases and stay as they are.
+
+Before turning publishing on:
+
+1. Add a release signer to [`.github/signing/allowed_signers`](../.github/signing/README.md).
+   It is empty now, so `scripts/verify-release-tag` rejects every tag.
+2. Create the apt and provenance signing key and set the
+   `APT_SIGNING_PRIVATE_KEY` secret and `APT_SIGNING_KEY_FINGERPRINT`
+   variable. Publish the fingerprint in [the apt guide](apt-repository.md).
+3. Enable GitHub Pages (Actions source) for the apt repository.
+4. Set `VOUCH_RELEASES_ENABLED=true`.
+
+## Signing
+
+Sign new commits and annotated `vMAJOR.MINOR.PATCH` tags, and keep existing
+history append-only. Release provenance binds each published package to its
+verified source tag.
 
 ## Prepare a release
 
@@ -15,13 +33,13 @@ package/compatibility checks relevant to the release. Submit signed commits
 for review, merge, and confirm the merged commit's signature and tree.
 
 Use the signer in [the committed policy](../.github/signing/README.md). After
-fetching complete history and tags from `epsalmond/oshioki`, create a signed
+fetching complete history and tags from `hev/vouch`, create a signed
 annotated tag on the exact reviewed main commit, then verify it:
 
 ```sh
 git fetch origin main --tags
-git tag -s v0.4.1 REVIEWED_COMMIT_SHA -m 'Oshioki v0.4.1'
-scripts/verify-release-tag v0.4.1 REVIEWED_COMMIT_SHA
+git tag -s vX.Y.Z REVIEWED_COMMIT_SHA -m 'Vouch vX.Y.Z'
+scripts/verify-release-tag vX.Y.Z REVIEWED_COMMIT_SHA
 ```
 
 Substitute the intended new version and commit; never move an existing tag.

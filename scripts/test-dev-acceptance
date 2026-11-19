@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 SCRIPT="$REPO_ROOT/scripts/dev-acceptance"
-TEST_ROOT="$(mktemp -d -t oshioki-dev-acceptance-test.XXXXXX)"
+TEST_ROOT="$(mktemp -d -t vouch-dev-acceptance-test.XXXXXX)"
 SESSION_FILE="$TEST_ROOT/session.json"
 FAKE_BIN="$TEST_ROOT/bin"
 TAILSCALE_LOG="$TEST_ROOT/tailscale.log"
@@ -49,17 +49,17 @@ printf 'nats %s\n' "$$" >>"$FAKE_PROCESS_LOG"
 printf '%s\n' "$*" >>"$FAKE_NATS_ARGS_LOG"
 exec sleep 300
 EOF
-cat >"$FAKE_BIN/oshioki-server" <<'EOF'
+cat >"$FAKE_BIN/vouch-server" <<'EOF'
 #!/usr/bin/env bash
 printf 'server %s\n' "$$" >>"$FAKE_PROCESS_LOG"
 exec sleep 300
 EOF
-cat >"$FAKE_BIN/oshioki" <<'EOF'
+cat >"$FAKE_BIN/vouch" <<'EOF'
 #!/usr/bin/env bash
 case "${1:-}" in
   enroll)
     url="https://nas.example.test:18444/enroll/test-enrollment#test-secret"
-    printf 'Enrollment URL (expires in five minutes):\n  %s\nNative agent:\n  oshioki-agent pair '"'"'%s'"'"'\n' "$url" "$url"
+    printf 'Enrollment URL (expires in five minutes):\n  %s\nNative agent:\n  vouch-agent pair '"'"'%s'"'"'\n' "$url" "$url"
     ;;
   test) echo "synthetic request complete" ;;
   *) exit 2 ;;
@@ -118,14 +118,14 @@ export FAKE_PRIVILEGE_LOG="$PRIVILEGE_LOG"
 export FAKE_PROCESS_LOG="$PROCESS_LOG"
 export FAKE_NATS_ARGS_LOG="$NATS_ARGS_LOG"
 export FAKE_SERVE_STATE="$SERVE_STATE"
-export OSHIOKI_ACCEPTANCE_SESSION_FILE="$SESSION_FILE"
-export OSHIOKI_ACCEPTANCE_TAILSCALE_BIN="$FAKE_BIN/tailscale"
-export OSHIOKI_ACCEPTANCE_PRIVILEGE_BIN="$FAKE_BIN/sudo"
-export OSHIOKI_ACCEPTANCE_NATS_PORT=14222
-export OSHIOKI_ACCEPTANCE_SERVER_PORT=18443
-export OSHIOKI_ACCEPTANCE_HTTPS_PORT=18444
-export OSHIOKI_ACCEPTANCE_SERVER_BIN="$FAKE_BIN/oshioki-server"
-export OSHIOKI_ACCEPTANCE_HOOK_BIN="$FAKE_BIN/oshioki"
+export VOUCH_ACCEPTANCE_SESSION_FILE="$SESSION_FILE"
+export VOUCH_ACCEPTANCE_TAILSCALE_BIN="$FAKE_BIN/tailscale"
+export VOUCH_ACCEPTANCE_PRIVILEGE_BIN="$FAKE_BIN/sudo"
+export VOUCH_ACCEPTANCE_NATS_PORT=14222
+export VOUCH_ACCEPTANCE_SERVER_PORT=18443
+export VOUCH_ACCEPTANCE_HTTPS_PORT=18444
+export VOUCH_ACCEPTANCE_SERVER_BIN="$FAKE_BIN/vouch-server"
+export VOUCH_ACCEPTANCE_HOOK_BIN="$FAKE_BIN/vouch"
 
 "$SCRIPT" up --state-dir "$TEST_ROOT/state"
 [ -f "$SESSION_FILE" ] || fail "session file was not created"
@@ -230,7 +230,7 @@ grep -Fxq 'NATS_URL=nats://100.64.0.1:14222' "$MAC_STATE/hook/config.env" ||
   fail "hook environment does not point at the tailnet NATS host"
 grep -Fq -- '-a 100.64.0.1 -p 14222' "$NATS_ARGS_LOG" || fail "NATS is not bound to the tailnet address"
 MAC_PASSWORD="$(sed -n 's/^NATS_PASS=//p' "$MAC_STATE/hook/config.env")"
-MAC_EXPECTED="OSHIOKI_ALLOW_PLAINTEXT_NATS=1 NATS_URL=nats://100.64.0.1:14222 NATS_USER=oshioki NATS_PASS=$MAC_PASSWORD sh -c 'cd ~/git/oshioki && git pull --ff-only && export PATH=\$HOME/.cargo/bin:\$PATH && cargo build --release -p oshioki-agent && scripts/mac/bundle-agent && target/mac/Oshioki.app/Contents/MacOS/oshioki-agent pair \"https://nas.example.test:18444/enroll/test-enrollment#test-secret\" --label testmac && exec target/mac/Oshioki.app/Contents/MacOS/oshioki-agent run'"
+MAC_EXPECTED="VOUCH_ALLOW_PLAINTEXT_NATS=1 NATS_URL=nats://100.64.0.1:14222 NATS_USER=vouch NATS_PASS=$MAC_PASSWORD sh -c 'cd ~/git/vouch && git pull --ff-only && export PATH=\$HOME/.cargo/bin:\$PATH && cargo build --release -p vouch-agent && scripts/mac/bundle-agent && target/mac/Vouch.app/Contents/MacOS/vouch-agent pair \"https://nas.example.test:18444/enroll/test-enrollment#test-secret\" --label testmac && exec target/mac/Vouch.app/Contents/MacOS/vouch-agent run'"
 grep -Fxq "$MAC_EXPECTED" "$TEST_ROOT/mac.log" || {
   cat "$TEST_ROOT/mac.log" >&2
   fail "mac verb did not print the expected Mac command"
@@ -240,7 +240,7 @@ grep -Fq 'Enrollment URL (expires in five minutes):' "$TEST_ROOT/mac.log" ||
 if grep -Fq 'Native agent:' "$TEST_ROOT/mac.log"; then
   fail "mac verb left the hook's competing pair hint in the output"
 fi
-if grep -Fq "oshioki-agent pair 'https" "$TEST_ROOT/mac.log"; then
+if grep -Fq "vouch-agent pair 'https" "$TEST_ROOT/mac.log"; then
   fail "mac verb left the hook's competing pair command in the output"
 fi
 grep -Fxq 'next: scripts/dev-acceptance test' "$TEST_ROOT/mac.log" ||

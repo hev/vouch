@@ -13,7 +13,7 @@ sodium.ready.then(() => {
   const browserContext = { console, TextEncoder, TextDecoder, crypto: {}, globalThis: {} };
   vm.createContext(browserContext);
   vm.runInContext(browserSource, browserContext, { filename: "app.js" });
-  const { formatEnvironment, quoteReviewString } = browserContext.globalThis.OshiokiApprovalReview;
+  const { formatEnvironment, quoteReviewString } = browserContext.globalThis.VouchApprovalReview;
   assert.equal(
     formatEnvironment([
       { name: "BASH_ENV", value: "/tmp/attacker-init" },

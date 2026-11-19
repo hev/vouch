@@ -1,5 +1,5 @@
 [package]
-name = "oshioki-transport"
+name = "vouch-transport"
 edition = { workspace = true }
 rust-version = { workspace = true }
 version = { workspace = true }
@@ -12,7 +12,7 @@ publish = { workspace = true }
 # change.
 
 [dependencies]
-oshioki-protocol = { path = "../protocol" }
+vouch-protocol = { path = "../protocol" }
 tokio = { workspace = true }
 async-nats = { workspace = true }
 serde_json = { workspace = true }

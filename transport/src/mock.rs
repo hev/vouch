@@ -9,7 +9,7 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, anyhow};
-use oshioki_protocol::{
+use vouch_protocol::{
     ActivationV1, DecisionV1, EnrollmentIntentV1, EnrollmentSubmissionV1, ToolApprovalDecisionV1,
     auth_v1::AuthDecisionV1,
 };
@@ -178,7 +178,7 @@ impl HookTransport for MockTransport {
             let mut state = self.lock();
             state
                 .published
-                .push((oshioki_protocol::TOOL_APPROVAL_SUBJECT.to_owned(), payload));
+                .push((vouch_protocol::TOOL_APPROVAL_SUBJECT.to_owned(), payload));
             state
                 .hook_tool_verdicts
                 .pop_front()
@@ -305,7 +305,7 @@ impl ServerTransport for MockTransport {
 mod tests {
     use super::*;
     use futures::StreamExt as _;
-    use oshioki_protocol::VERSION_V1;
+    use vouch_protocol::VERSION_V1;
 
     /// The accessors capture what the operations record: revocation
     /// fingerprints, activation payloads, and publishes, in order.
@@ -316,9 +316,9 @@ mod tests {
         let activation = ActivationV1 {
             version: VERSION_V1,
             enrollment_id: "enroll-1".into(),
-            device: oshioki_protocol::DevicePublicRecordV1 {
+            device: vouch_protocol::DevicePublicRecordV1 {
                 version: VERSION_V1,
-                kind: oshioki_protocol::DeviceKindV1::SecureEnclave,
+                kind: vouch_protocol::DeviceKindV1::SecureEnclave,
                 fingerprint: "fp-1".into(),
                 credential_id: "cred".into(),
                 credential_public_key: "pub".into(),
@@ -344,7 +344,7 @@ mod tests {
     /// queued for `request_decision` can never satisfy it.
     #[tokio::test]
     async fn mock_carries_an_authentication_verdict_on_its_own_subject() {
-        use oshioki_protocol::auth_v1::{AUTH_WIRE_VERSION, AuthApproveNativeV1};
+        use vouch_protocol::auth_v1::{AUTH_WIRE_VERSION, AuthApproveNativeV1};
 
         let transport = MockTransport::new();
         let approval = AuthApproveNativeV1 {
@@ -380,7 +380,7 @@ mod tests {
     #[tokio::test]
     async fn mock_authentication_without_a_queued_verdict_fails() {
         let transport = MockTransport::new();
-        transport.push_verdict(DecisionV1::Deny(oshioki_protocol::DenyV1 {
+        transport.push_verdict(DecisionV1::Deny(vouch_protocol::DenyV1 {
             version: VERSION_V1,
             request_id: "req-1".into(),
             device_fingerprint: "fp-1".into(),
@@ -407,7 +407,7 @@ mod tests {
     async fn mock_carries_an_enrollment_submission() {
         let transport = MockTransport::new();
         let submission =
-            EnrollmentSubmissionV1::SecureEnclave(oshioki_protocol::NativeEnrollmentSubmissionV1 {
+            EnrollmentSubmissionV1::SecureEnclave(vouch_protocol::NativeEnrollmentSubmissionV1 {
                 version: VERSION_V1,
                 enrollment_id: "enroll-1".into(),
                 credential_public_key: "pub".into(),

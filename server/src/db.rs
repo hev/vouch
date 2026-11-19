@@ -5,15 +5,15 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use oshioki_protocol::{
-    AuthDecisionV1, AuthEnvelopeV1, DecisionV1, DeliveryV1, DeviceKindV1, DevicePublicRecordV1,
-    EnrollmentStatusV1, EnrollmentSubmissionV1, RequestEnvelopeV1, ToolApprovalDecisionV1,
-    ToolApprovalEnvelopeV1, ToolDeliveryV1, native_credential_id,
-};
 use rusqlite::{Connection, OptionalExtension as _, Transaction, TransactionBehavior, params};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use url::Url;
+use vouch_protocol::{
+    AuthDecisionV1, AuthEnvelopeV1, DecisionV1, DeliveryV1, DeviceKindV1, DevicePublicRecordV1,
+    EnrollmentStatusV1, EnrollmentSubmissionV1, RequestEnvelopeV1, ToolApprovalDecisionV1,
+    ToolApprovalEnvelopeV1, ToolDeliveryV1, native_credential_id,
+};
 
 /// The server keeps request state only briefly after its local receipt time.
 /// This bound is intentionally independent of timestamps supplied by a
@@ -172,7 +172,7 @@ impl Store {
     #[cfg(test)]
     pub fn put_device(&self, device: &DevicePublicRecordV1) -> Result<()> {
         device.validate().context("validate device")?;
-        let api_token_hash = oshioki_protocol::decode_base64url(&device.api_token_hash)?;
+        let api_token_hash = vouch_protocol::decode_base64url(&device.api_token_hash)?;
         let public_json = serde_json::to_string(device)?;
         self.lock()?.execute(
             "INSERT INTO devices(fingerprint, credential_id, api_token_hash, public_record_json, active, updated_at)
@@ -529,7 +529,7 @@ impl Store {
         if !submission_binds_device(&submission, device)? {
             bail!("activation does not match the stored submission");
         }
-        let api_token_hash = oshioki_protocol::decode_base64url(&device.api_token_hash)?;
+        let api_token_hash = vouch_protocol::decode_base64url(&device.api_token_hash)?;
         let public_json = serde_json::to_string(device)?;
         // The upsert refreshes the public record but never the pinned
         // credential: a re-enrollment with a new label converges the served
@@ -614,8 +614,8 @@ fn installation_token_hash(token: &str) -> Result<Vec<u8>> {
     {
         bail!("invalid installation token");
     }
-    let bytes = oshioki_protocol::decode_base64url(token).context("invalid installation token")?;
-    if bytes.len() != 32 || oshioki_protocol::encode_base64url(&bytes) != token {
+    let bytes = vouch_protocol::decode_base64url(token).context("invalid installation token")?;
+    if bytes.len() != 32 || vouch_protocol::encode_base64url(&bytes) != token {
         bail!("invalid installation token");
     }
     Ok(Sha256::digest(&bytes).to_vec())
@@ -677,10 +677,10 @@ fn submission_binds_device(
             EnrollmentSubmissionV1::Software(submission)
             | EnrollmentSubmissionV1::SecureEnclave(submission) => {
                 let public_key =
-                    oshioki_protocol::decode_base64url(&submission.credential_public_key)
+                    vouch_protocol::decode_base64url(&submission.credential_public_key)
                         .context("decode submitted credential key")?;
                 let credential_id =
-                    oshioki_protocol::encode_base64url(&native_credential_id(&public_key));
+                    vouch_protocol::encode_base64url(&native_credential_id(&public_key));
                 (
                     credential_id,
                     Some(submission.credential_public_key.clone()),
@@ -738,7 +738,7 @@ impl Store {
         envelope: &RequestEnvelopeV1,
         now: i64,
     ) -> Result<InsertResult> {
-        if raw.len() > oshioki_protocol::v1::MAX_ENVELOPE_BYTES {
+        if raw.len() > vouch_protocol::v1::MAX_ENVELOPE_BYTES {
             bail!("oversized request envelope");
         }
         envelope.validate_at(now).context("validate envelope")?;
@@ -846,7 +846,7 @@ impl Store {
         envelope: &ToolApprovalEnvelopeV1,
         now: i64,
     ) -> Result<InsertResult> {
-        if raw.len() > oshioki_protocol::v1::MAX_ENVELOPE_BYTES {
+        if raw.len() > vouch_protocol::v1::MAX_ENVELOPE_BYTES {
             bail!("oversized tool approval envelope");
         }
         envelope
@@ -1060,7 +1060,7 @@ impl Store {
         envelope: &AuthEnvelopeV1,
         now: i64,
     ) -> Result<InsertResult> {
-        if raw.len() > oshioki_protocol::v1::MAX_ENVELOPE_BYTES {
+        if raw.len() > vouch_protocol::v1::MAX_ENVELOPE_BYTES {
             bail!("oversized authentication envelope");
         }
         envelope
@@ -2104,25 +2104,32 @@ COMMIT;
 mod tests {
     include!("db_push_tests.rs");
     use super::*;
-    use oshioki_protocol::{
-        DenyV1, DeviceKindV1, EnrollmentSubmissionV1, NativeEnrollmentSubmissionV1,
-        SealedDeviceBodyV1, ToolApprovalDecisionV1, ToolApprovalEnvelopeV1, ToolApprovalWebauthnV1,
-        ToolSealedBodyV1, WebauthnEnrollmentSubmissionV1, native_credential_id,
-        v1::{VERSION_V1, encode_base64url},
-    };
     use p256::ecdsa::SigningKey;
     use std::{
         path::{Path, PathBuf},
         time::{SystemTime, UNIX_EPOCH},
     };
+    use vouch_protocol::{
+        DenyV1, DeviceKindV1, EnrollmentSubmissionV1, NativeEnrollmentSubmissionV1,
+        SealedDeviceBodyV1, ToolApprovalDecisionV1, ToolApprovalEnvelopeV1, ToolApprovalWebauthnV1,
+        ToolSealedBodyV1, WebauthnEnrollmentSubmissionV1, native_credential_id,
+        v1::{VERSION_V1, encode_base64url},
+    };
 
     fn temporary_database() -> PathBuf {
+        // The clock alone is not unique: macOS reports microseconds, and two
+        // tests starting in the same one shared a database and failed with
+        // "database is locked". The counter makes each path distinct.
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let sequence = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir =
-            std::env::temp_dir().join(format!("oshioki-db-test-{}-{nonce}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "vouch-db-test-{}-{nonce}-{sequence}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         dir.join("state.sqlite3")
     }
@@ -2133,7 +2140,7 @@ mod tests {
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            if name.starts_with("oshioki-db-test-") {
+            if name.starts_with("vouch-db-test-") {
                 let _ = std::fs::remove_dir_all(parent);
                 let _ = std::fs::create_dir_all(parent);
                 return;
@@ -2173,14 +2180,14 @@ mod tests {
         let mut credential_public_key = Vec::new();
         ciborium::ser::into_writer(&cose, &mut credential_public_key).unwrap();
         let box_public_key = vec![3; 32];
-        let fingerprint = oshioki_protocol::device_fingerprint(
+        let fingerprint = vouch_protocol::device_fingerprint(
             &credential_id,
             &credential_public_key,
             &box_public_key,
         );
         DevicePublicRecordV1 {
             version: 1,
-            kind: oshioki_protocol::DeviceKindV1::Webauthn,
+            kind: vouch_protocol::DeviceKindV1::Webauthn,
             fingerprint,
             credential_id: encode_base64url(&credential_id),
             credential_public_key: encode_base64url(&credential_public_key),
@@ -2196,10 +2203,10 @@ mod tests {
         let mut value = device(token);
         let credential_id = vec![2; 16];
         value.credential_id = encode_base64url(&credential_id);
-        value.fingerprint = oshioki_protocol::device_fingerprint(
+        value.fingerprint = vouch_protocol::device_fingerprint(
             &credential_id,
-            &oshioki_protocol::decode_base64url(&value.credential_public_key).unwrap(),
-            &oshioki_protocol::decode_base64url(&value.box_public_key).unwrap(),
+            &vouch_protocol::decode_base64url(&value.credential_public_key).unwrap(),
+            &vouch_protocol::decode_base64url(&value.box_public_key).unwrap(),
         );
         value
     }
@@ -2239,8 +2246,8 @@ mod tests {
 
     fn auth_envelope(fingerprint: &str, id: &str, now: i64) -> AuthEnvelopeV1 {
         AuthEnvelopeV1 {
-            message_type: oshioki_protocol::AUTH_ENVELOPE_TYPE.into(),
-            version: oshioki_protocol::AUTH_WIRE_VERSION,
+            message_type: vouch_protocol::AUTH_ENVELOPE_TYPE.into(),
+            version: vouch_protocol::AUTH_WIRE_VERSION,
             request_id: id.into(),
             host: "nas".into(),
             issued_at: now - 1,
@@ -2256,8 +2263,8 @@ mod tests {
 
     fn tool_envelope(fingerprint: &str, id: &str, now: i64) -> ToolApprovalEnvelopeV1 {
         ToolApprovalEnvelopeV1 {
-            message_type: oshioki_protocol::TOOL_ENVELOPE_TYPE.into(),
-            version: oshioki_protocol::TOOL_WIRE_VERSION,
+            message_type: vouch_protocol::TOOL_ENVELOPE_TYPE.into(),
+            version: vouch_protocol::TOOL_WIRE_VERSION,
             request_id: id.into(),
             issued_at: now - 1,
             expires_at: now + 89,
@@ -2308,7 +2315,7 @@ mod tests {
         assert_eq!(body.device_fingerprint, browser.fingerprint);
 
         let assertion = ToolApprovalWebauthnV1 {
-            version: oshioki_protocol::TOOL_WIRE_VERSION,
+            version: vouch_protocol::TOOL_WIRE_VERSION,
             request_id: tool.request_id.clone(),
             device_fingerprint: browser.fingerprint.clone(),
             credential_id: browser.credential_id.clone(),
@@ -2382,7 +2389,7 @@ mod tests {
         let raw = serde_json::to_vec(&envelope).unwrap();
         store.ingest_tool_request(&raw, &envelope, 100).unwrap();
         let assertion = ToolApprovalWebauthnV1 {
-            version: oshioki_protocol::TOOL_WIRE_VERSION,
+            version: vouch_protocol::TOOL_WIRE_VERSION,
             request_id: envelope.request_id.clone(),
             device_fingerprint: browser.fingerprint.clone(),
             credential_id: browser.credential_id.clone(),
@@ -2984,7 +2991,7 @@ mod tests {
     }
 
     fn insert_device_on(connection: &Connection, device: &DevicePublicRecordV1) {
-        let api_token_hash = oshioki_protocol::decode_base64url(&device.api_token_hash).unwrap();
+        let api_token_hash = vouch_protocol::decode_base64url(&device.api_token_hash).unwrap();
         connection
             .execute(
                 "INSERT INTO devices(fingerprint, credential_id, api_token_hash, public_record_json, active, updated_at)
@@ -3069,8 +3076,7 @@ mod tests {
             old.execute_batch(MIGRATION_V1).unwrap();
             old.execute_batch(MIGRATION_V2).unwrap();
             let device = device(b"corrupt-me");
-            let api_token_hash =
-                oshioki_protocol::decode_base64url(&device.api_token_hash).unwrap();
+            let api_token_hash = vouch_protocol::decode_base64url(&device.api_token_hash).unwrap();
             old.execute(
                 "INSERT INTO devices(fingerprint, credential_id, api_token_hash, public_record_json, active, updated_at)
                  VALUES (?1, ?2, ?3, ?4, 1, unixepoch())",
@@ -3118,8 +3124,8 @@ mod tests {
     #[test]
     fn restore_snapshot_path_keeps_the_live_stem() {
         assert_eq!(
-            restore_snapshot_path(Path::new("/var/lib/oshioki/state.sqlite3"), 2),
-            PathBuf::from("/var/lib/oshioki/state.pre-v2.sqlite3")
+            restore_snapshot_path(Path::new("/var/lib/vouch/state.sqlite3"), 2),
+            PathBuf::from("/var/lib/vouch/state.pre-v2.sqlite3")
         );
         assert_eq!(
             restore_snapshot_path(Path::new("state.sqlite3"), 1),
@@ -3204,20 +3210,20 @@ mod tests {
         let base = envelope(&fingerprint);
 
         let mut future = base.clone();
-        future.issued_at = now + oshioki_protocol::MAX_REQUEST_ISSUANCE_SKEW_SECS + 1;
-        future.expires_at = future.issued_at + oshioki_protocol::MAX_REQUEST_LIFETIME_SECS;
+        future.issued_at = now + vouch_protocol::MAX_REQUEST_ISSUANCE_SKEW_SECS + 1;
+        future.expires_at = future.issued_at + vouch_protocol::MAX_REQUEST_LIFETIME_SECS;
         let future_raw = serde_json::to_vec(&future).unwrap();
         assert!(store.ingest_request(&future_raw, &future, now).is_err());
 
         let mut stale = base.clone();
-        stale.issued_at = now - oshioki_protocol::MAX_REQUEST_ISSUANCE_SKEW_SECS - 1;
+        stale.issued_at = now - vouch_protocol::MAX_REQUEST_ISSUANCE_SKEW_SECS - 1;
         stale.expires_at = now + 1;
         let stale_raw = serde_json::to_vec(&stale).unwrap();
         assert!(store.ingest_request(&stale_raw, &stale, now).is_err());
 
         let mut long_lived = base;
         long_lived.issued_at = now;
-        long_lived.expires_at = now + oshioki_protocol::MAX_REQUEST_LIFETIME_SECS + 1;
+        long_lived.expires_at = now + vouch_protocol::MAX_REQUEST_LIFETIME_SECS + 1;
         let long_lived_raw = serde_json::to_vec(&long_lived).unwrap();
         assert!(
             store
@@ -3234,7 +3240,7 @@ mod tests {
         let received_at = 1_000;
         let mut request = envelope(&device.fingerprint);
         request.issued_at = received_at;
-        request.expires_at = received_at + oshioki_protocol::MAX_REQUEST_LIFETIME_SECS;
+        request.expires_at = received_at + vouch_protocol::MAX_REQUEST_LIFETIME_SECS;
         let raw = serde_json::to_vec(&request).unwrap();
         store.ingest_request(&raw, &request, received_at).unwrap();
 
@@ -3435,7 +3441,7 @@ mod tests {
         let box_key = vec![key_byte ^ 0xa5; 32];
         let token_hash = Sha256::digest(token).to_vec();
         let credential_id = native_credential_id(&public);
-        let fingerprint = oshioki_protocol::device_fingerprint(&credential_id, &public, &box_key);
+        let fingerprint = vouch_protocol::device_fingerprint(&credential_id, &public, &box_key);
         let submission = NativeEnrollmentSubmissionV1 {
             version: VERSION_V1,
             enrollment_id: enrollment_id.into(),
