@@ -2117,12 +2117,19 @@ mod tests {
     };
 
     fn temporary_database() -> PathBuf {
+        // The clock alone is not unique: macOS reports microseconds, and two
+        // tests starting in the same one shared a database and failed with
+        // "database is locked". The counter makes each path distinct.
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let sequence = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir =
-            std::env::temp_dir().join(format!("vouch-db-test-{}-{nonce}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "vouch-db-test-{}-{nonce}-{sequence}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         dir.join("state.sqlite3")
     }

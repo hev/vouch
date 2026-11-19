@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 
 #[cfg(target_os = "macos")]
+pub mod approval_log;
 pub mod panel_process;
 pub mod review;
 pub mod secret_store;
@@ -140,6 +141,13 @@ impl BrowserRelaySigner {
 
     pub fn cancel_prompt(&self, attempt: u64) {
         self.0.cancel_prompt(attempt);
+    }
+
+    /// The signing key's credential id, base64url: how the approval log
+    /// names this device on the browser-relay lane, which loads no box key
+    /// and so has no full fingerprint.
+    pub fn key_id(&self) -> String {
+        vouch_protocol::encode_base64url(&native_credential_id(&self.0.public_key_sec1()))
     }
 
     pub fn sign_browser_relay(&self, challenge: &[u8], reason: &str) -> Result<Vec<u8>> {

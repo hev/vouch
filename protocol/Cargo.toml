@@ -18,6 +18,7 @@ serde_json = { workspace = true }
 ciborium = { workspace = true }
 p256 = { workspace = true }
 sha2 = { workspace = true }
+time = { workspace = true }
 hmac = { workspace = true }
 x25519-dalek = { workspace = true }
 rand = { workspace = true }

@@ -26,8 +26,10 @@ use sha2::{Digest as _, Sha256};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch};
 use tracing::{info, warn};
+use vouch_agent::approval_log::{self, ApprovalLog, Decided};
 use vouch_agent::review::{MAX_APPROVAL_REASON_CHARS, quote_argv, truncate_chars};
 use vouch_agent::{Identity, OpenedRequest, SignerKind, parse_enrollment_url, remaining_until};
+use vouch_protocol::approval_log::ApprovalOutcome;
 use vouch_protocol::{
     ALLOW_PLAINTEXT_NATS_ENV, AUTH_ENVELOPE_TYPE, ActivationV1, AliveV1, AuthDecisionV1,
     AuthEnvelopeV1, AuthInvocationV1, AuthRequestV1, DecisionV1, DeviceKindV1, OpenedAuthRequestV1,
@@ -60,6 +62,8 @@ const SOCKET_FRAME_TIMEOUT: Duration = Duration::from_secs(5);
 struct RequestAdmission {
     permits: Arc<Semaphore>,
     request_ids: Arc<StdMutex<HashMap<String, SeenRequest>>>,
+    /// Every claimed request's line goes here before its answer is released.
+    log: Arc<ApprovalLog>,
 }
 
 /// What a lane produced for one claimed request.
@@ -115,6 +119,7 @@ enum Claim {
 struct RequestLease {
     _permit: OwnedSemaphorePermit,
     outcome: watch::Sender<Option<Arc<RequestOutcome>>>,
+    log: Arc<ApprovalLog>,
 }
 
 /// A delivery that arrived for a request another lane already holds.
@@ -122,6 +127,7 @@ struct RequestWaiter {
     permit: OwnedSemaphorePermit,
     request_ids: Arc<StdMutex<HashMap<String, SeenRequest>>>,
     outcome: watch::Receiver<Option<Arc<RequestOutcome>>>,
+    log: Arc<ApprovalLog>,
 }
 
 /// What a waiting delivery learned from the lane that owns its request.
@@ -137,13 +143,15 @@ enum Relay {
 struct RequestPermit {
     permit: OwnedSemaphorePermit,
     request_ids: Arc<StdMutex<HashMap<String, SeenRequest>>>,
+    log: Arc<ApprovalLog>,
 }
 
 impl RequestAdmission {
-    fn new() -> Self {
+    fn new(log: Arc<ApprovalLog>) -> Self {
         Self {
             permits: Arc::new(Semaphore::new(MAX_IN_FLIGHT_REQUESTS)),
             request_ids: Arc::new(StdMutex::new(HashMap::new())),
+            log,
         }
     }
 
@@ -151,6 +159,7 @@ impl RequestAdmission {
         Some(RequestPermit {
             permit: Arc::clone(&self.permits).try_acquire_owned().ok()?,
             request_ids: Arc::clone(&self.request_ids),
+            log: Arc::clone(&self.log),
         })
     }
 }
@@ -194,6 +203,7 @@ impl RequestPermit {
                     permit: self.permit,
                     request_ids: Arc::clone(&self.request_ids),
                     outcome: seen.outcome.clone(),
+                    log: Arc::clone(&self.log),
                 });
             }
             // The owner dropped its lease without answering. Nothing decided
@@ -221,6 +231,7 @@ impl RequestPermit {
         Claim::Owner(RequestLease {
             _permit: self.permit,
             outcome: sender,
+            log: self.log,
         })
     }
 }
@@ -267,6 +278,7 @@ impl RequestWaiter {
         RequestPermit {
             permit: self.permit,
             request_ids: self.request_ids,
+            log: self.log,
         }
         .claim(request_id, payload_hash)
     }
@@ -749,7 +761,11 @@ async fn cmd_run(
         Decider::Prompt(prompter)
     };
     let decider = Arc::new(decider);
-    let admission = Arc::new(RequestAdmission::new());
+    // The approval log is opened lazily on each append; a log that cannot be
+    // written denies the request it was for rather than stopping the agent.
+    let approval_log = Arc::new(ApprovalLog::from_env()?);
+    info!(path = %approval_log.path().display(), "approval log");
+    let admission = Arc::new(RequestAdmission::new(approval_log));
     tokio::spawn(serve_socket(
         socket,
         Arc::clone(&identity),
@@ -966,12 +982,63 @@ async fn resolve_command_claim(
             }
         }
     };
-    let decision = decide(identity, decider, opened).await?;
+    let record = approval_log::command_record(
+        opened,
+        &identity.fingerprint(),
+        runas_label(opened.request.runas_uid),
+        time::OffsetDateTime::now_utc(),
+    );
+    let outcome = decide(identity, decider, opened).await;
+    let decision = log_decided(&lease.log, record, outcome, opened.request.expires_at)?;
     lease.answered(match &decision {
         Some(decision) => RequestOutcome::Command(Box::new(decision.clone())),
         None => RequestOutcome::Unanswered,
     });
     Ok(decision)
+}
+
+/// Writes one request's approval log line and returns what may be released.
+///
+/// This is the only way a decided request reaches a transport or a waiting
+/// delivery: the line is written and synced first, and a signed decision
+/// whose line could not be written is dropped, so the host fails closed. A
+/// decider error is logged as failed (or expired, past the deadline) and then
+/// returned as before, which leaves the claim to another transport.
+fn log_decided<D>(
+    log: &ApprovalLog,
+    record: vouch_protocol::approval_log::ApprovalRecordV1,
+    decided: Result<Decided<D>>,
+    expires_at: i64,
+) -> Result<Option<D>> {
+    let request_id = record.request_id.clone();
+    let (decided, failure) = match decided {
+        Ok(decided) => (decided, None),
+        Err(error) => (Decided::from_error(&error, expires_at, now()), Some(error)),
+    };
+    let signed = decided.decision.is_some();
+    let (decision, log_error) = approval_log::record_then_release(log, record, decided);
+    if let Some(error) = log_error {
+        let error = escape_for_terminal(&format!("{error:#}"));
+        if signed {
+            tracing::error!(
+                request_id = %escape_for_terminal(&request_id),
+                path = %log.path().display(),
+                error = %error,
+                "approval log write failed; request denied"
+            );
+        } else {
+            warn!(
+                request_id = %escape_for_terminal(&request_id),
+                path = %log.path().display(),
+                error = %error,
+                "approval log write failed"
+            );
+        }
+    }
+    match failure {
+        Some(error) => Err(error),
+        None => Ok(decision),
+    }
 }
 
 /// Decodes and admits one contextual sudo authentication delivery. It mirrors
@@ -1093,7 +1160,13 @@ async fn resolve_authentication_claim(
             }
         }
     };
-    let decision = decide_authentication(identity, decider, opened).await?;
+    let record = approval_log::authentication_record(
+        opened,
+        &identity.fingerprint(),
+        time::OffsetDateTime::now_utc(),
+    );
+    let outcome = decide_authentication(identity, decider, opened).await;
+    let decision = log_decided(&lease.log, record, outcome, opened.request.expires_at)?;
     lease.answered(match &decision {
         Some(decision) => RequestOutcome::Authentication(Box::new(decision.clone())),
         None => RequestOutcome::Unanswered,
@@ -1138,7 +1211,7 @@ async fn decide_authentication(
     identity: &Arc<Identity>,
     decider: &Decider,
     opened: &OpenedAuthRequestV1,
-) -> Result<Option<AuthDecisionV1>> {
+) -> Result<Decided<AuthDecisionV1>> {
     let request = &opened.request;
     if request.expires_at <= now() {
         bail!("authentication request already expired");
@@ -1158,7 +1231,10 @@ async fn decide_authentication(
                 request_id = %escape_for_terminal(&request.request_id),
                 "ignoring authentication request: --auto never answers a sudo authentication"
             );
-            Ok(None)
+            Ok(Decided::unsigned(
+                ApprovalOutcome::Canceled,
+                Some("--auto never answers a sudo authentication".to_owned()),
+            ))
         }
         Decider::Prompt(prompter) => {
             let summary = authentication_summary(request);
@@ -1171,10 +1247,11 @@ async fn decide_authentication(
                     host = %escape_for_terminal(&request.trusted.host),
                     "authentication request was not answered"
                 );
-                return Ok(None);
+                return Ok(Decided::unsigned(ApprovalOutcome::Expired, None));
             };
-            Ok(Some(
+            Ok(Decided::signed(
                 identity.authenticate(opened, &authentication_reason(request))?,
+                ApprovalOutcome::Approved,
             ))
         }
     }
@@ -1365,7 +1442,7 @@ async fn decide(
     identity: &Arc<Identity>,
     decider: &Decider,
     opened: &OpenedRequest,
-) -> Result<Option<DecisionV1>> {
+) -> Result<Decided<DecisionV1>> {
     let request = &opened.request;
     if request.expires_at <= now() {
         bail!("request already expired");
@@ -1375,10 +1452,7 @@ async fn decide(
         Decider::TouchId(prompt) => {
             // The signature is the approval here, so this path builds the
             // whole decision rather than answering yes or no.
-            let Some(decision) = mac::decide(prompt, identity, opened).await? else {
-                return Ok(None);
-            };
-            return Ok(Some(decision));
+            return mac::decide(prompt, identity, opened).await;
         }
         Decider::Auto(answer) => *answer,
         Decider::Prompt(prompter) => {
@@ -1406,21 +1480,24 @@ async fn decide(
                     host = %escape_for_terminal(&request.host),
                     "request expired unanswered"
                 );
-                return Ok(None);
+                return Ok(Decided::unsigned(ApprovalOutcome::Expired, None));
             };
             answer
         }
     };
     let reason = approval_reason_for_raw(request);
-    let decision = if approve {
-        identity.approve(opened, &reason)?
+    let signed = if approve {
+        Decided::signed(
+            identity.approve(opened, &reason)?,
+            ApprovalOutcome::Approved,
+        )
     } else {
         // An explicit refusal signs like an approval: the hook verifies the
         // denial against the pinned device, so no NATS credential suffices
         // to deny for it. Silence (timeout, dismissal) signs nothing.
-        identity.deny(opened, &reason)?
+        Decided::signed(identity.deny(opened, &reason)?, ApprovalOutcome::Denied)
     };
-    Ok(Some(decision))
+    Ok(signed)
 }
 
 /// The prompt a Mac holding an enclave key uses: the Touch ID sheet itself.
@@ -2026,6 +2103,7 @@ mod mac {
     use tracing::{error, info};
     use vouch_agent::{
         Identity, OpenedRequest,
+        approval_log::Decided,
         touchid::{AttemptError, Outcome, PromptCancel, ScreenLock, TouchIdPrompt},
     };
     use vouch_enclave::SignError;
@@ -2065,7 +2143,7 @@ mod mac {
         prompt: &TouchIdPrompt,
         identity: &Arc<Identity>,
         opened: &OpenedRequest,
-    ) -> Result<Option<DecisionV1>> {
+    ) -> Result<Decided<DecisionV1>> {
         let request = &opened.request;
         let reason = approval_reason_for_raw(request);
         let sign = {
@@ -2082,19 +2160,17 @@ mod mac {
                 .ask(&request.request_id, request.expires_at, sign)
                 .await
         };
-        match asked {
-            Ok(Outcome::Approved(decision)) => Ok(Some(decision)),
+        match &asked {
             // Dismissal carries no signature, and an unsigned denial is
             // indistinguishable from a forgery: the hook fails closed at
             // the deadline instead.
-            Ok(Outcome::Denied) => Ok(None),
+            Ok(Outcome::Approved(_) | Outcome::Denied) => {}
             Ok(Outcome::Expired) => {
                 info!(
                     request_id = %escape_for_terminal(&request.request_id),
                     host = %escape_for_terminal(&request.host),
                     "request expired unanswered"
                 );
-                Ok(None)
             }
             Err(error) => {
                 // Not a verdict: the key is unusable, not refused. Biometry
@@ -2105,9 +2181,9 @@ mod mac {
                     error = %escape_for_terminal(&format!("{error:#}")),
                     "the Secure Enclave would not sign; re-pair with `vouch-agent pair`"
                 );
-                Ok(None)
             }
         }
+        Ok(Decided::from_touch_id(asked))
     }
 
     /// Asks for one contextual sudo authentication with a Touch ID sheet.
@@ -2119,7 +2195,7 @@ mod mac {
         prompt: &TouchIdPrompt,
         identity: &Arc<Identity>,
         opened: &OpenedAuthRequestV1,
-    ) -> Result<Option<AuthDecisionV1>> {
+    ) -> Result<Decided<AuthDecisionV1>> {
         let request = &opened.request;
         let reason = vouch_agent::review::sheet_authentication_reason(request, &local_host());
         let sign = {
@@ -2136,16 +2212,14 @@ mod mac {
                 .ask(&request.request_id, request.expires_at, sign)
                 .await
         };
-        match asked {
-            Ok(Outcome::Approved(decision)) => Ok(Some(decision)),
-            Ok(Outcome::Denied) => Ok(None),
+        match &asked {
+            Ok(Outcome::Approved(_) | Outcome::Denied) => {}
             Ok(Outcome::Expired) => {
                 info!(
                     request_id = %escape_for_terminal(&request.request_id),
                     host = %escape_for_terminal(&request.trusted.host),
                     "authentication request expired unanswered"
                 );
-                Ok(None)
             }
             Err(error) => {
                 error!(
@@ -2153,9 +2227,9 @@ mod mac {
                     error = %escape_for_terminal(&format!("{error:#}")),
                     "the Secure Enclave would not sign; re-pair with `vouch-agent pair`"
                 );
-                Ok(None)
             }
         }
+        Ok(Decided::from_touch_id(asked))
     }
 
     /// A dismissed sheet is an answer; anything else is a broken key.
@@ -2171,8 +2245,8 @@ mod mac {
 #[cfg(test)]
 mod tests {
     use super::{
-        Claim, Cli, Decider, MAX_APPROVAL_REASON_CHARS, MAX_IN_FLIGHT_REQUESTS, Pairing, Prompter,
-        Relay, RequestAdmission, RequestOutcome, Verb, approval_reason,
+        Claim, Cli, Decider, MAX_APPROVAL_REASON_CHARS, MAX_IN_FLIGHT_REQUESTS, OpenedRequest,
+        Pairing, Prompter, Relay, RequestAdmission, RequestOutcome, Verb, approval_reason,
         authentication_prompt_output, authentication_reason, authentication_summary, bind_socket,
         decide, decide_authentication, dispatch_nats_request, format_env, load_or_create_with, now,
         payload_hash, prompt_output, quote_argv, runas_label, socket_path,
@@ -2181,7 +2255,18 @@ mod tests {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     use tokio::sync::mpsc;
     use vouch_agent::SignerKind;
+    use vouch_agent::approval_log::ApprovalLog;
     use vouch_agent::secret_store::MemoryStore;
+
+    /// A fresh approval log in its own temporary directory.
+    fn test_approval_log() -> std::sync::Arc<ApprovalLog> {
+        let dir = std::env::temp_dir().join(format!(
+            "vouch-agent-approvals-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        std::sync::Arc::new(ApprovalLog::at(dir.join("approvals.jsonl")))
+    }
     use vouch_protocol::{EnvEntryV1, RequestEnvelopeV1, RequestV1, VERSION_V1, encode_base64url};
 
     /// One test decision, distinct per request id so a relayed answer can be
@@ -2197,7 +2282,7 @@ mod tests {
 
     #[test]
     fn request_admission_is_bounded_and_deduplicates_answered_ids() {
-        let admission = RequestAdmission::new();
+        let admission = RequestAdmission::new(test_approval_log());
         let body = payload_hash(b"one body");
         let mut leases = Vec::new();
         for index in 0..MAX_IN_FLIGHT_REQUESTS {
@@ -2230,7 +2315,7 @@ mod tests {
     /// exists is the id a replay.
     #[tokio::test]
     async fn a_retry_on_another_transport_attaches_to_the_in_flight_decision() {
-        let admission = RequestAdmission::new();
+        let admission = RequestAdmission::new(test_approval_log());
         let body = payload_hash(b"one body");
         let Claim::Owner(owner) = admission
             .reserve()
@@ -2284,7 +2369,7 @@ mod tests {
     /// relays nothing.
     #[test]
     fn a_different_body_under_a_claimed_id_is_discarded() {
-        let admission = RequestAdmission::new();
+        let admission = RequestAdmission::new(test_approval_log());
         let Claim::Owner(_owner) = admission
             .reserve()
             .expect("capacity should be available")
@@ -2306,7 +2391,7 @@ mod tests {
     /// request nobody answered is still answerable.
     #[tokio::test]
     async fn a_lane_that_dies_without_answering_leaves_the_request_claimable() {
-        let admission = RequestAdmission::new();
+        let admission = RequestAdmission::new(test_approval_log());
         let body = payload_hash(b"one body");
         let Claim::Owner(owner) = admission
             .reserve()
@@ -2336,7 +2421,7 @@ mod tests {
     /// the answer.
     #[tokio::test]
     async fn a_waiter_attaches_to_whoever_took_the_abandoned_request_over() {
-        let admission = RequestAdmission::new();
+        let admission = RequestAdmission::new(test_approval_log());
         let body = payload_hash(b"one body");
         let Claim::Owner(owner) = admission
             .reserve()
@@ -2401,7 +2486,7 @@ mod tests {
 
         let (answers, lines) = mpsc::channel(8);
         let decider = Decider::Prompt(Prompter::new(lines));
-        let admission = RequestAdmission::new();
+        let admission = RequestAdmission::new(test_approval_log());
         let permit = admission.reserve().expect("capacity should be available");
         let (mut hook_side, agent_side) = tokio::net::UnixStream::pair().unwrap();
         let socket_identity = std::sync::Arc::clone(&identity);
@@ -2471,7 +2556,7 @@ mod tests {
         );
         let (_sender, receiver) = mpsc::channel(1);
         let decider = std::sync::Arc::new(Decider::Prompt(Prompter::new(receiver)));
-        let admission = std::sync::Arc::new(RequestAdmission::new());
+        let admission = std::sync::Arc::new(RequestAdmission::new(test_approval_log()));
         for index in 0..(MAX_IN_FLIGHT_REQUESTS * 4) {
             let mut request = request_for_log_probe();
             request.request_id = format!("encrypted-flood-{index}");
@@ -2501,7 +2586,7 @@ mod tests {
         );
         let (_sender, receiver) = mpsc::channel(1);
         let decider = std::sync::Arc::new(Decider::Prompt(Prompter::new(receiver)));
-        let admission = std::sync::Arc::new(RequestAdmission::new());
+        let admission = std::sync::Arc::new(RequestAdmission::new(test_approval_log()));
         let mut request = request_for_log_probe();
         request.request_id = "claim-after-rejection".into();
         request.issued_at = now();
@@ -2610,7 +2695,7 @@ mod tests {
         );
         let (_sender, receiver) = mpsc::channel(1);
         let decider = std::sync::Arc::new(Decider::Prompt(Prompter::new(receiver)));
-        let admission = std::sync::Arc::new(RequestAdmission::new());
+        let admission = std::sync::Arc::new(RequestAdmission::new(test_approval_log()));
         let payload = auth_envelope_bytes(&identity, &auth_request_for_tests());
         dispatch_nats_request(&payload, &identity, &decider, None, &admission);
         assert!(admission.request_ids.lock().unwrap().is_empty());
@@ -2633,7 +2718,7 @@ mod tests {
         );
         let (_sender, receiver) = mpsc::channel(1);
         let decider = std::sync::Arc::new(Decider::Prompt(Prompter::new(receiver)));
-        let admission = std::sync::Arc::new(RequestAdmission::new());
+        let admission = std::sync::Arc::new(RequestAdmission::new(test_approval_log()));
         let mut envelope: serde_json::Value =
             serde_json::from_slice(&auth_envelope_bytes(&identity, &auth_request_for_tests()))
                 .unwrap();
@@ -2667,6 +2752,7 @@ mod tests {
                 decide_authentication(&identity, &Decider::Auto(answer), &opened)
                     .await
                     .unwrap()
+                    .decision
                     .is_none()
             );
         }
@@ -3326,7 +3412,9 @@ mod tests {
                 agent_side,
                 &identity,
                 &decider,
-                super::RequestAdmission::new().reserve().unwrap(),
+                super::RequestAdmission::new(test_approval_log())
+                    .reserve()
+                    .unwrap(),
             )
             .await
         });
@@ -3647,7 +3735,8 @@ mod tests {
         let (prompter, _sender) = canned_prompter("y");
         let decision = decide(&identity, &Decider::Prompt(prompter), &opened)
             .await
-            .unwrap();
+            .unwrap()
+            .decision;
         assert!(
             matches!(decision, Some(vouch_protocol::DecisionV1::ApproveNative(_))),
             "the canned yes should approve"
@@ -3665,7 +3754,9 @@ mod tests {
             agent_side,
             &identity,
             &decider,
-            RequestAdmission::new().reserve().unwrap(),
+            RequestAdmission::new(test_approval_log())
+                .reserve()
+                .unwrap(),
         )
         .await
         .unwrap();
@@ -3683,6 +3774,233 @@ mod tests {
             !text.contains(LOG_PROBE),
             "request plaintext reached the log:\n{text}"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // -----------------------------------------------------------------------
+    // Approval log
+    // -----------------------------------------------------------------------
+
+    fn log_test_identity(
+        name: &str,
+    ) -> (std::path::PathBuf, std::sync::Arc<vouch_agent::Identity>) {
+        let dir = socket_test_dir(name);
+        let identity = vouch_agent::Identity::generate_to_with(
+            &dir.join("agent.json"),
+            vouch_agent::SignerKind::Software,
+            &MemoryStore::new(),
+        )
+        .unwrap();
+        (dir, std::sync::Arc::new(identity))
+    }
+
+    /// A request whose environment carries a value the log must never see.
+    fn request_with_secret_env(request_id: &str, expires_in: i64) -> RequestV1 {
+        let mut request = request_for_log_probe();
+        request.request_id = request_id.into();
+        request.session = Some("shell".into());
+        request.reason = Some("restart hevd".into());
+        request.env = vec![
+            vouch_protocol::EnvEntryV1 {
+                name: "PATH".into(),
+                value: "/usr/bin:/bin".into(),
+            },
+            vouch_protocol::EnvEntryV1 {
+                name: "API_TOKEN".into(),
+                value: format!("secret-{LOG_PROBE}"),
+            },
+        ];
+        request.expires_at = now() + expires_in;
+        request
+    }
+
+    fn open_for_log(identity: &vouch_agent::Identity, request: &RequestV1) -> OpenedRequest {
+        let envelope: RequestEnvelopeV1 =
+            serde_json::from_slice(&sealed_envelope_bytes(identity, request)).unwrap();
+        identity.open_request(&envelope).unwrap().unwrap()
+    }
+
+    async fn resolve_logged(
+        log: &std::sync::Arc<ApprovalLog>,
+        identity: &std::sync::Arc<vouch_agent::Identity>,
+        decider: &Decider,
+        opened: &OpenedRequest,
+    ) -> Option<vouch_protocol::DecisionV1> {
+        let hash = payload_hash(&opened.raw);
+        let claim = RequestAdmission::new(std::sync::Arc::clone(log))
+            .reserve()
+            .unwrap()
+            .claim(&opened.request.request_id, hash);
+        super::resolve_command_claim(claim, identity, decider, opened, hash)
+            .await
+            .unwrap()
+    }
+
+    fn log_lines(log: &ApprovalLog) -> Vec<vouch_protocol::approval_log::ApprovalRecordV1> {
+        std::fs::read_to_string(log.path())
+            .unwrap_or_default()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn approved_and_denied_requests_each_write_one_matching_line() {
+        let (dir, identity) = log_test_identity("approval-log-lines");
+        let log = std::sync::Arc::new(ApprovalLog::at(dir.join("logs/approvals.jsonl")));
+
+        let approved = open_for_log(&identity, &request_with_secret_env("req-approve", 60));
+        let decision = resolve_logged(&log, &identity, &Decider::Auto(true), &approved).await;
+        assert!(matches!(
+            decision,
+            Some(vouch_protocol::DecisionV1::ApproveNative(_))
+        ));
+        let denied = open_for_log(&identity, &request_with_secret_env("req-deny", 60));
+        let decision = resolve_logged(&log, &identity, &Decider::Auto(false), &denied).await;
+        assert!(matches!(
+            decision,
+            Some(vouch_protocol::DecisionV1::Deny(_))
+        ));
+
+        let lines = log_lines(&log);
+        assert_eq!(lines.len(), 2, "one line per request");
+        let (first, second) = (&lines[0], &lines[1]);
+        assert_eq!(first.request_id, "req-approve");
+        assert_eq!(first.outcome.label(), "approved");
+        assert_eq!(second.request_id, "req-deny");
+        assert_eq!(second.outcome.label(), "denied");
+        assert_eq!(
+            first.lane,
+            vouch_protocol::approval_log::ApprovalLane::SudoExact
+        );
+        // The digest is over the exact bytes the signature covers, and the
+        // device is the one that signed: enough to match a host's record.
+        assert_eq!(
+            first.request_sha256,
+            vouch_protocol::approval_log::hex_digest(&payload_hash(&approved.raw))
+        );
+        assert_eq!(first.device_id, identity.fingerprint());
+        assert_eq!(first.session.as_deref(), Some("shell"));
+        assert_eq!(first.reason.as_deref(), Some("restart hevd"));
+        assert_eq!(first.argv, approved.request.argv);
+        assert_eq!(first.run_as.as_deref(), Some("root (uid 0)"));
+        assert_eq!(first.env_names, ["PATH", "API_TOKEN"]);
+        assert!(first.shown_at.is_some() && !first.decided_at.is_empty());
+        let text = std::fs::read_to_string(log.path()).unwrap();
+        assert!(
+            !text.contains(&format!("secret-{LOG_PROBE}")) && !text.contains("/usr/bin:/bin"),
+            "environment values reached the approval log:\n{text}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn an_unanswered_prompt_logs_expired() {
+        let (dir, identity) = log_test_identity("approval-log-expired");
+        let log = std::sync::Arc::new(ApprovalLog::at(dir.join("approvals.jsonl")));
+        let opened = open_for_log(&identity, &request_with_secret_env("req-expire", 1));
+        let (_sender, receiver) = mpsc::channel(1);
+        let decider = Decider::Prompt(Prompter::new(receiver));
+        assert!(
+            resolve_logged(&log, &identity, &decider, &opened)
+                .await
+                .is_none()
+        );
+        let lines = log_lines(&log);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].outcome.label(), "expired");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn an_unwritable_log_withholds_the_signature() {
+        let (dir, identity) = log_test_identity("approval-log-fail-closed");
+        // The log's parent is a regular file, so the line cannot be written.
+        std::fs::write(dir.join("blocked"), "").unwrap();
+        let log = std::sync::Arc::new(ApprovalLog::at(dir.join("blocked/approvals.jsonl")));
+        let opened = open_for_log(&identity, &request_with_secret_env("req-blocked", 60));
+        let decision = resolve_logged(&log, &identity, &Decider::Auto(true), &opened).await;
+        assert!(
+            decision.is_none(),
+            "an approval whose line was not written must not be released"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A second transport waiting on the same request receives the answer
+    /// only after the line is on disk: the log is written before any
+    /// signature leaves the owning lane.
+    #[tokio::test]
+    async fn the_line_is_written_before_the_signature_is_released() {
+        let (dir, identity) = log_test_identity("approval-log-order");
+        let log = std::sync::Arc::new(ApprovalLog::at(dir.join("approvals.jsonl")));
+        let opened = open_for_log(&identity, &request_with_secret_env("req-order", 60));
+        let hash = payload_hash(&opened.raw);
+        let admission = RequestAdmission::new(std::sync::Arc::clone(&log));
+        let owner = admission.reserve().unwrap().claim("req-order", hash);
+        let Claim::Attach(mut waiter) = admission.reserve().unwrap().claim("req-order", hash)
+        else {
+            panic!("the second delivery should attach to the first");
+        };
+        let expires_at = opened.request.expires_at;
+        let watched = std::sync::Arc::clone(&log);
+        let relayed = tokio::spawn(async move {
+            let Relay::Answer(outcome) = waiter.wait(expires_at).await else {
+                panic!("the owner's answer should be relayed");
+            };
+            // Read at the moment the signature reaches the second transport.
+            let lines = log_lines(&watched);
+            (outcome, lines)
+        });
+        let decision =
+            super::resolve_command_claim(owner, &identity, &Decider::Auto(true), &opened, hash)
+                .await
+                .unwrap();
+        assert!(decision.is_some());
+        let (outcome, lines) = relayed.await.unwrap();
+        assert!(matches!(outcome.as_ref(), RequestOutcome::Command(_)));
+        assert_eq!(
+            lines.len(),
+            1,
+            "the line must be on disk before the answer is relayed"
+        );
+        assert_eq!(lines[0].request_id, "req-order");
+        assert_eq!(lines[0].outcome.label(), "approved");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn an_authentication_the_agent_will_not_answer_logs_canceled() {
+        let (dir, identity) = log_test_identity("approval-log-auth");
+        let log = std::sync::Arc::new(ApprovalLog::at(dir.join("approvals.jsonl")));
+        let request = auth_request_for_tests();
+        let opened = vouch_protocol::OpenedAuthRequestV1 {
+            raw: request.raw_json().unwrap(),
+            request,
+        };
+        let hash = payload_hash(&opened.raw);
+        let claim = RequestAdmission::new(std::sync::Arc::clone(&log))
+            .reserve()
+            .unwrap()
+            .claim("auth-1", hash);
+        let decision = super::resolve_authentication_claim(
+            claim,
+            &identity,
+            &Decider::Auto(true),
+            &opened,
+            hash,
+        )
+        .await
+        .unwrap();
+        assert!(decision.is_none());
+        let lines = log_lines(&log);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(
+            lines[0].lane,
+            vouch_protocol::approval_log::ApprovalLane::ContextualPam
+        );
+        assert_eq!(lines[0].outcome.label(), "canceled");
+        assert_eq!(lines[0].run_as.as_deref(), Some("root"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

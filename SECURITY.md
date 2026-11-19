@@ -36,9 +36,12 @@ investigating.
 
 ## Scope notes for reviewers
 
-- Plaintext sudo commands must never enter SQLite, logs, notifications, or
-  metrics. ntfy messages may carry host, user, request ID, and `/r/<id>` URL
-  only.
+- Plaintext sudo commands must never enter the server's SQLite, logs,
+  notifications, or metrics. ntfy messages may carry host, user, request ID,
+  and `/r/<id>` URL only. Two local records are the exception by design:
+  the approving Mac's private approval log (argv, never environment values)
+  and the host's authpriv syslog line per verdict (argv), which sits beside
+  sudo's own log of the same command.
 - The server stores routing data and opaque ciphertext; it must never be able
   to produce an approval the hook accepts.
 - The sudo lanes (`vouch check`, `vouch authenticate`) never consult the

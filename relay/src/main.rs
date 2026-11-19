@@ -916,10 +916,12 @@ mod native_approval {
     use anyhow::{Context as _, Result};
     use vouch_agent::{
         BrowserRelaySigner,
-        touchid::{AttemptError, Outcome, PromptCancel, ScreenLock, TouchIdPrompt},
+        approval_log::{self, ApprovalLog, Decided},
+        touchid::{AttemptError, PromptCancel, ScreenLock, TouchIdPrompt},
     };
     use vouch_browser_relay::{Message, approval_challenge};
     use vouch_enclave::SignError;
+    use vouch_protocol::approval_log::ApprovalOutcome;
 
     struct Screen;
 
@@ -952,6 +954,14 @@ mod native_approval {
         let prompt = TouchIdPrompt::new(Box::new(Screen), Arc::new(Canceller(Arc::clone(signer))));
         let challenge = approval_challenge(lane, &attempt.attempt, attempt.expires, nonce, account);
         let reason = format!("authorize gcloud for {account} via {destination}");
+        let log = ApprovalLog::from_env()?;
+        let record = approval_log::relay_record(
+            &attempt.attempt,
+            account,
+            destination,
+            &challenge,
+            &signer.key_id(),
+        );
         let signer = Arc::clone(signer);
         let sign = move || {
             signer
@@ -959,9 +969,28 @@ mod native_approval {
                 .map_err(classify)
         };
         let expires = i64::try_from(attempt.expires).context("ceremony expiry is too large")?;
-        match prompt.ask(&attempt.attempt, expires, sign).await? {
-            Outcome::Approved(signature) => Ok(Some(signature)),
-            Outcome::Denied | Outcome::Expired => Ok(None),
+        let asked = prompt.ask(&attempt.attempt, expires, sign).await;
+        // Same rule as the agent: the line is written before the signature
+        // leaves this function, and a line that cannot be written withholds
+        // it.
+        let (decided, failure) = match asked {
+            Ok(outcome) => (Decided::from_touch_id(Ok(outcome)), None),
+            Err(error) => (
+                Decided::unsigned(ApprovalOutcome::Failed, Some(format!("{error:#}"))),
+                Some(error),
+            ),
+        };
+        let (signature, log_error) = approval_log::record_then_release(&log, record, decided);
+        if let Some(error) = log_error {
+            eprintln!(
+                "vouch-browser-relay: {}: {}",
+                log.path().display(),
+                vouch_protocol::escape_for_terminal(&format!("{error:#}"))
+            );
+        }
+        match failure {
+            Some(error) => Err(error),
+            None => Ok(signature),
         }
     }
 

@@ -9,6 +9,7 @@
 
 use sha2::{Digest as _, Sha256};
 
+pub mod approval_log;
 pub mod auth_v1;
 pub mod enrollment_v1;
 pub mod error;

@@ -25,6 +25,7 @@ use url::{Host, Url};
 use uuid::Uuid;
 
 mod approvals;
+mod log_cmd;
 mod registry;
 mod sudo_lane;
 #[path = "../../cli/terminal_logo.rs"]
@@ -184,6 +185,9 @@ enum Verb {
     },
     /// Send a synthetic request through the approval flow.
     Test,
+    /// Show the approval log this Mac's agent keeps: one line per request it
+    /// decided, with who asked, why, what ran and how it ended.
+    Log(log_cmd::LogArgs),
     /// Private installer verb. `scripts/install-vouch-hook --contextual-pam`
     /// runs it after staging the PAM module and before any /etc/pam.d file
     /// references it: dlopen the file, dlsym the two auth entry points,
@@ -255,6 +259,7 @@ async fn run(cli: Cli, checking: bool, lane: Result<()>) -> Result<()> {
         Ok(Verb::Watch) => cmd_watch().await,
         Ok(Verb::Approvals { command }) => approvals::run(command).await,
         Ok(Verb::Test) => cmd_test().await,
+        Ok(Verb::Log(args)) => log_cmd::run(&args),
         Ok(Verb::PamSelftest { module }) => pam_selftest::run(&module),
     };
     if let Err(error) = result {
@@ -648,6 +653,50 @@ mod logging {
             });
             let seen = seen.lock().unwrap().clone();
             (terminal.text(), seen)
+        }
+
+        /// Each verdict leaves one authpriv line with the request id, the
+        /// user, the argv and the outcome; a rejection adds its reason.
+        #[test]
+        fn verdicts_reach_the_system_log_with_request_user_argv_and_outcome() {
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let sink = Arc::clone(&seen);
+            let subscriber = tracing_subscriber::registry().with(
+                SyslogLayer::new(move |severity, line| {
+                    sink.lock().unwrap().push((severity, line.to_string()));
+                })
+                .with_filter(syslog_filter()),
+            );
+            let argv = vec!["launchctl".to_owned(), "kickstart\nforged".to_owned()];
+            tracing::subscriber::with_default(subscriber, || {
+                crate::audit_verdict("r-ok", "adam", &argv, ("approved", None));
+                crate::audit_verdict(
+                    "r-bad",
+                    "adam",
+                    &argv,
+                    (
+                        "rejected",
+                        Some("native approval verification failed".to_owned()),
+                    ),
+                );
+            });
+            let seen = seen.lock().unwrap().clone();
+            assert_eq!(seen.len(), 2, "{seen:?}");
+            let (ok_severity, ok) = &seen[0];
+            assert_eq!(*ok_severity, severity(tracing::Level::INFO));
+            for needle in [
+                "vouch verdict",
+                "request_id=r-ok",
+                "user=adam",
+                "outcome=approved",
+            ] {
+                assert!(ok.contains(needle), "{needle} missing from {ok}");
+            }
+            assert!(ok.contains(r#"["launchctl","kickstart\nforged"]"#), "{ok}");
+            let (bad_severity, bad) = &seen[1];
+            assert_eq!(*bad_severity, severity(tracing::Level::WARN));
+            assert!(bad.contains("outcome=rejected"), "{bad}");
+            assert!(bad.contains("native approval verification failed"), "{bad}");
         }
 
         #[test]
@@ -1693,6 +1742,143 @@ async fn final_authorization(
     })
 }
 
+/// The error text of a verified, signed denial.
+const EXPLICIT_DENIAL: &str = "request explicitly denied";
+/// Longest argv rendering put on an audit line; the line itself is capped
+/// again by the syslog sink.
+const MAX_AUDIT_ARGV_CHARS: usize = 1024;
+
+/// Applies one command decision and writes the host's audit line for it:
+/// one per verdict accepted or rejected, carrying the request id, the user,
+/// the argv and the outcome. The line goes to authpriv with the rest of the
+/// audit trail (journald on Linux, the unified log on macOS) and never
+/// changes the result.
+async fn apply_decision(
+    decision: DecisionV1,
+    lane: DecisionLane,
+    request: &RequestV1,
+    raw_request: &[u8],
+    active: &[DevicePublicRecordV1],
+    snapshot_epoch: u64,
+    directory: &Path,
+) -> Result<()> {
+    let denial = matches!(decision, DecisionV1::Deny(_));
+    let result = apply_decision_unaudited(
+        decision,
+        lane,
+        request,
+        raw_request,
+        active,
+        snapshot_epoch,
+        directory,
+    )
+    .await;
+    audit_verdict(
+        &request.request_id,
+        &request.user,
+        &request.argv,
+        verdict_outcome(&result, denial, "approved"),
+    );
+    result
+}
+
+/// What one verdict came to on this host, and why when it was rejected.
+fn verdict_outcome(
+    result: &Result<()>,
+    denial: bool,
+    accepted: &'static str,
+) -> (&'static str, Option<String>) {
+    match result {
+        Ok(()) => (accepted, None),
+        Err(error) if denial && error.to_string() == EXPLICIT_DENIAL => ("denied", None),
+        Err(error) => ("rejected", Some(display_error(error))),
+    }
+}
+
+/// The argv as one bounded JSON array: unambiguous about spaces and quotes,
+/// and with control characters escaped before the syslog sink sees them.
+fn audit_argv(argv: &[String]) -> String {
+    let rendered = serde_json::to_string(argv).unwrap_or_else(|_| "[]".to_owned());
+    if rendered.chars().count() <= MAX_AUDIT_ARGV_CHARS {
+        return rendered;
+    }
+    let mut cut = rendered
+        .chars()
+        .take(MAX_AUDIT_ARGV_CHARS)
+        .collect::<String>();
+    cut.push_str("...");
+    cut
+}
+
+fn audit_verdict(
+    request_id: &str,
+    user: &str,
+    argv: &[String],
+    outcome: (&'static str, Option<String>),
+) {
+    let (outcome, error) = outcome;
+    let user = escape_for_terminal(user);
+    let argv = audit_argv(argv);
+    match error {
+        None => info!(
+            target: "audit",
+            request_id = %escape_for_terminal(request_id),
+            user = %user,
+            argv = %argv,
+            outcome,
+            "vouch verdict"
+        ),
+        Some(error) => warn!(
+            target: "audit",
+            request_id = %escape_for_terminal(request_id),
+            user = %user,
+            argv = %argv,
+            outcome,
+            error = %error,
+            "vouch verdict"
+        ),
+    }
+}
+
+/// [`apply_decision`]'s twin for contextual sudo authentication. The argv is
+/// the invocation the host submitted as display context.
+async fn apply_auth_decision(
+    decision: &AuthDecisionV1,
+    request: &AuthRequestV1,
+    raw_request: &[u8],
+    recipients: &[DevicePublicRecordV1],
+    snapshot_epoch: u64,
+    directory: &Path,
+) -> Result<()> {
+    let result = apply_auth_decision_unaudited(
+        decision,
+        request,
+        raw_request,
+        recipients,
+        snapshot_epoch,
+        directory,
+    )
+    .await;
+    let trusted = &request.trusted;
+    let user = trusted
+        .invoking_user
+        .clone()
+        .unwrap_or_else(|| format!("uid {}", trusted.invoking_uid));
+    let argv = match &request.submitted.invocation {
+        AuthInvocationV1::Available { argv, .. } | AuthInvocationV1::Truncated { argv, .. } => {
+            argv.as_slice()
+        }
+        AuthInvocationV1::Unavailable => &[],
+    };
+    audit_verdict(
+        &request.request_id,
+        &user,
+        argv,
+        verdict_outcome(&result, false, "authenticated"),
+    );
+    result
+}
+
 /// Applies one decision to a request.
 ///
 /// A decision that cannot be authenticated for this request returns
@@ -1701,7 +1887,7 @@ async fn final_authorization(
 /// verified denial, a late verdict, and a revocation found at final
 /// authorization are ordinary errors and deny. Host faults are unavailable.
 #[allow(clippy::too_many_lines)]
-async fn apply_decision(
+async fn apply_decision_unaudited(
     decision: DecisionV1,
     lane: DecisionLane,
     request: &RequestV1,
@@ -1760,7 +1946,7 @@ async fn apply_decision(
             if request.expires_at <= now() {
                 bail!("request expired before its verdict was applied");
             }
-            bail!("request explicitly denied");
+            bail!("{EXPLICIT_DENIAL}");
         }
         DecisionV1::Approve(approval) => {
             approval
@@ -2584,7 +2770,7 @@ async fn nats_auth_fallback(
 /// waiting (NATS) or reports unavailable (socket). Nothing here may widen into
 /// a success, and nothing a co-tenant publisher can send may become
 /// `PAM_AUTH_ERR`, which a Linux `default=die` stack turns into a lockout.
-async fn apply_auth_decision(
+async fn apply_auth_decision_unaudited(
     decision: &AuthDecisionV1,
     request: &AuthRequestV1,
     raw_request: &[u8],
@@ -4016,6 +4202,44 @@ fn pid_chain_darwin() -> Vec<String> {
         pid = parent;
     }
     chain
+}
+
+#[cfg(test)]
+mod verdict_audit_tests {
+    use super::{
+        EXPLICIT_DENIAL, MAX_AUDIT_ARGV_CHARS, audit_argv, invalid_decision, verdict_outcome,
+    };
+
+    #[test]
+    fn outcomes_name_what_the_host_did() {
+        assert_eq!(
+            verdict_outcome(&Ok(()), false, "approved"),
+            ("approved", None)
+        );
+        assert_eq!(
+            verdict_outcome(&Ok(()), false, "authenticated"),
+            ("authenticated", None)
+        );
+        let denied = Err(anyhow::anyhow!("{EXPLICIT_DENIAL}"));
+        assert_eq!(verdict_outcome(&denied, true, "approved"), ("denied", None));
+        // The same text from a decision that was not a denial is a rejection.
+        assert_eq!(verdict_outcome(&denied, false, "approved").0, "rejected");
+        let forged = Err(invalid_decision("native approval verification failed"));
+        let (outcome, error) = verdict_outcome(&forged, true, "approved");
+        assert_eq!(outcome, "rejected");
+        assert!(error.unwrap().contains("verification failed"));
+    }
+
+    #[test]
+    fn argv_is_one_bounded_json_array() {
+        assert_eq!(
+            audit_argv(&["rm".to_owned(), "a b".to_owned()]),
+            r#"["rm","a b"]"#
+        );
+        let long = audit_argv(&["x".repeat(4 * MAX_AUDIT_ARGV_CHARS)]);
+        assert_eq!(long.chars().count(), MAX_AUDIT_ARGV_CHARS + 3);
+        assert!(long.ends_with("..."));
+    }
 }
 
 #[cfg(test)]

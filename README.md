@@ -50,6 +50,12 @@ The panel has three sections:
 - **What will run:** the exact argv, user, host, cwd and environment from
   the signed request.
 
+Every request the Mac decides gets one line in an append-only approval log,
+written before the signature is released; if the line can't be written,
+the request is denied. `vouch log --since 2h` prints it as a table, and
+hosts write their own syslog line per verdict. See
+[the approval log](docs/mac-approvals.md#approval-log).
+
 The server only routes ciphertext. It cannot make an approval the host will
 accept. More detail is in [architecture](docs/architecture.md) and
 [Mac approvals](docs/mac-approvals.md#the-review-panel).

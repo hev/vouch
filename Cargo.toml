@@ -99,7 +99,7 @@ nix = { version = "0.29", features = ["process", "fs", "user"] }
 
 # Misc
 base64 = { version = "0.22" }
-time = { version = "0.3", features = ["serde", "std"] }
+time = { version = "0.3", features = ["serde", "std", "formatting", "parsing"] }
 tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
